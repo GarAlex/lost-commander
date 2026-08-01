@@ -298,6 +298,44 @@ impl Cursor {
 }
 
 /// A hex digit's value, or nothing if it is not one.
+/// Where a typed offset means, or `None` if it means nowhere.
+///
+/// Hex by default, because every offset the view shows is hex and retyping
+/// one you are looking at is the common case. `0x` is accepted for people
+/// with the habit, and `+` or a leading `0n` asks for decimal - without some
+/// way to say so, `100` could only ever mean 256 and somebody wanting byte
+/// one hundred has no way to ask.
+///
+/// Underscores and spaces are allowed as groupings, so an offset copied out
+/// of a dump or a spec still parses.
+///
+/// Past the end of the file lands on the last byte rather than refusing: the
+/// reader asked to go as far as possible in that direction, and an error
+/// message where the cursor should be is not an answer.
+pub fn parse_offset(text: &str, size: u64) -> Option<u64> {
+    let text = text.trim();
+    let (digits, radix) = if let Some(rest) = text.strip_prefix("0x").or(text.strip_prefix("0X")) {
+        (rest, 16)
+    } else if let Some(rest) = text.strip_prefix("0n").or(text.strip_prefix("0N")) {
+        (rest, 10)
+    } else if let Some(rest) = text.strip_prefix('+') {
+        (rest, 10)
+    } else {
+        (text, 16)
+    };
+
+    let cleaned: String = digits
+        .chars()
+        .filter(|c| *c != '_' && *c != ' ' && *c != ',')
+        .collect();
+    if cleaned.is_empty() {
+        return None;
+    }
+    let at = u64::from_str_radix(&cleaned, radix).ok()?;
+    // An empty file has no byte to land on.
+    Some(at.min(size.saturating_sub(1)))
+}
+
 pub fn hex_digit(character: char) -> Option<u8> {
     character.to_digit(16).map(|value| value as u8)
 }
@@ -780,5 +818,42 @@ mod tests {
         assert_eq!(edits.describe(), "1 byte changed: 0x2a 00 -> ff");
         edits.set(0x2b, 0x00, 0x01);
         assert_eq!(edits.describe(), "2 bytes changed");
+    }
+
+    #[test]
+    fn a_typed_offset_is_hex_because_every_offset_on_screen_is() {
+        assert_eq!(parse_offset("1f400", 0x20000), Some(0x1f400));
+        assert_eq!(parse_offset("1F400", 0x20000), Some(0x1f400));
+        assert_eq!(parse_offset("0x1f400", 0x20000), Some(0x1f400));
+        // Groupings, so an offset copied out of a dump or a spec parses.
+        assert_eq!(parse_offset("  1f_40 0 ", 0x20000), Some(0x1f400));
+    }
+
+    #[test]
+    fn there_is_a_way_to_ask_for_decimal() {
+        // Without one, `100` could only mean 256 and somebody wanting byte
+        // one hundred would have no way to say so.
+        assert_eq!(parse_offset("100", 1000), Some(0x100));
+        assert_eq!(parse_offset("0n100", 1000), Some(100));
+        assert_eq!(parse_offset("+100", 1000), Some(100));
+    }
+
+    #[test]
+    fn past_the_end_lands_on_the_last_byte() {
+        // The reader asked to go as far as possible that way. An error where
+        // the cursor should be is not an answer to that.
+        assert_eq!(parse_offset("ffffffff", 0x100), Some(0xff));
+        // And an empty file has nowhere to land at all.
+        assert_eq!(parse_offset("0", 0), Some(0));
+    }
+
+    #[test]
+    fn what_is_not_an_offset_is_refused_rather_than_guessed_at() {
+        assert_eq!(parse_offset("", 0x100), None);
+        assert_eq!(parse_offset("   ", 0x100), None);
+        assert_eq!(parse_offset("zz", 0x100), None);
+        assert_eq!(parse_offset("0x", 0x100), None);
+        // Decimal-only digits under a decimal prefix: `f` is not one.
+        assert_eq!(parse_offset("0nff", 0x100), None);
     }
 }

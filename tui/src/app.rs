@@ -237,6 +237,12 @@ pub enum Mode {
         editing: bool,
         cursor: hex::Cursor,
         edits: hex::Edits,
+        /// An offset being typed, or `None` when nobody is typing one.
+        ///
+        /// Kept as text: half an offset is not a number yet, and a field
+        /// that refused the keystroke which would finish it would be
+        /// unusable.
+        goto: Option<String>,
     },
     /// Two files, line by line.
     Difference {
@@ -1857,6 +1863,7 @@ impl App {
                         editing: false,
                         cursor: hex::Cursor::default(),
                         edits: hex::Edits::default(),
+                        goto: None,
                     };
                     return;
                 }
@@ -2628,6 +2635,7 @@ impl App {
             editing,
             cursor,
             edits,
+            goto,
             ..
         } = &mut self.mode
         else {
@@ -2636,6 +2644,30 @@ impl App {
         let last_row = dump.rows().saturating_sub(1);
         let size = dump.size;
         let per_row = hex::PER_ROW as i64;
+
+        // Typing an offset takes the keyboard while it is happening, in both
+        // reading and editing: `f` is a hex digit in one and a byte in the
+        // other, and it cannot be both at once.
+        if let Some(typed) = goto {
+            match key.code {
+                KeyCode::Esc => *goto = None,
+                KeyCode::Backspace => {
+                    typed.pop();
+                }
+                KeyCode::Enter => {
+                    if let Some(at) = hex::parse_offset(typed, size) {
+                        cursor.to(at, size);
+                        *scroll = (at / hex::PER_ROW as u64).min(last_row);
+                        *goto = None;
+                    }
+                    // A refused offset stays on screen to be corrected,
+                    // rather than being wiped so it can be retyped in full.
+                }
+                KeyCode::Char(character) => typed.push(character),
+                _ => {}
+            }
+            return;
+        }
 
         if !*editing {
             match key.code {
@@ -2648,6 +2680,10 @@ impl App {
                 KeyCode::PageUp => *scroll = scroll.saturating_sub(20),
                 KeyCode::Home => *scroll = 0,
                 KeyCode::End => *scroll = last_row,
+                // `g` for go-to while reading; Ctrl-G as well, since that is
+                // what it is called in the graphical view and in every
+                // debugger.
+                KeyCode::Char('g') | KeyCode::Char('G') => *goto = Some(String::new()),
                 // Into edit mode, with the cursor where the eye already is.
                 KeyCode::F(4) if size > 0 => {
                     *editing = true;

@@ -39,6 +39,14 @@ pub struct Session {
     confirming: bool,
     /// Set by a key, cleared once the list has been told to scroll there.
     pub follow: bool,
+    /// What has been typed into the offset box.
+    ///
+    /// Kept as text rather than a number: half an offset is not a number yet,
+    /// and refusing to accept the keystroke that would finish it is the sort
+    /// of helpfulness that makes a field unusable.
+    goto: String,
+    /// Set for one frame to put the keyboard in the offset box.
+    focus_goto: bool,
 }
 
 impl Session {
@@ -49,6 +57,8 @@ impl Session {
             edits: Edits::default(),
             confirming: false,
             follow: true,
+            goto: String::new(),
+            focus_goto: false,
         }
     }
 
@@ -132,6 +142,7 @@ pub fn draw(ctx: &egui::Context, session: &mut Session) -> Outcome {
                     .size(11.0)
                     .color(theme::text_faint()),
             );
+            goto_box(ui, session);
         });
         ui.add_space(6.0);
         grid(ui, session);
@@ -198,6 +209,11 @@ fn keys(ctx: &egui::Context, session: &mut Session, closed: &mut bool) {
                         session.confirming = !session.edits.is_empty();
                     }
                     egui::Key::F2 => session.confirming = !session.edits.is_empty(),
+                    // Ctrl-G for "go to", which is what a debugger and a hex
+                    // editor have both meant by it for thirty years.
+                    egui::Key::G if modifiers.ctrl || modifiers.command => {
+                        session.focus_goto = true;
+                    }
                     _ => {}
                 }
             }
@@ -393,6 +409,56 @@ fn buttons(ui: &mut egui::Ui, session: &mut Session, name: &str, closed: &mut bo
     );
 
     outcome
+}
+
+/// Type an offset and land on it.
+///
+/// Home and End reach the two ends, which is most of what anyone wants; this
+/// is for the rest. An offset is normally something the reader is already
+/// looking at - in a dump, in a spec, in a crash report - so what it takes is
+/// what they are looking at: hex, `0x` if they have the habit, `0n` or `+`
+/// for decimal. [`hex::parse_offset`] decides, in the engine, so the terminal
+/// view answers the same way.
+fn goto_box(ui: &mut egui::Ui, session: &mut Session) {
+    ui.add_space(12.0);
+    ui.label(
+        RichText::new("offset")
+            .size(11.0)
+            .color(theme::text_faint()),
+    );
+
+    let size = session.dump.size;
+    let understood = hex::parse_offset(&session.goto, size);
+    let typed_nonsense = !session.goto.trim().is_empty() && understood.is_none();
+
+    let field = egui::TextEdit::singleline(&mut session.goto)
+        .desired_width(96.0)
+        .font(egui::TextStyle::Monospace)
+        .hint_text("1f400")
+        // Said while it is being typed rather than after Enter: a field that
+        // waits until you commit to tell you it never understood you has let
+        // you finish typing something it was always going to refuse.
+        .text_color(if typed_nonsense {
+            theme::danger()
+        } else {
+            theme::text()
+        });
+    let response = ui.add(field);
+
+    if std::mem::take(&mut session.focus_goto) {
+        response.request_focus();
+    }
+
+    let entered = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+    if entered {
+        if let Some(at) = understood {
+            session.cursor.to(at, size);
+            session.follow = true;
+            // Cleared on success only. A refused offset stays put so it can
+            // be corrected rather than retyped from nothing.
+            session.goto.clear();
+        }
+    }
 }
 
 #[cfg(test)]

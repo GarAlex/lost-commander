@@ -73,7 +73,18 @@ pub fn draw(frame: &mut Frame, app: &App) {
             editing,
             cursor,
             edits,
-        } => draw_bytes(frame, area, name, dump, *scroll, *editing, *cursor, edits),
+            goto,
+        } => draw_bytes(
+            frame,
+            area,
+            name,
+            dump,
+            *scroll,
+            *editing,
+            *cursor,
+            edits,
+            goto.as_deref(),
+        ),
         Mode::Journal {
             shown,
             days,
@@ -412,6 +423,7 @@ fn draw_bytes(
     editing: bool,
     cursor: lost_commander_core::hex::Cursor,
     edits: &lost_commander_core::hex::Edits,
+    goto: Option<&str>,
 ) {
     use lost_commander_core::hex;
 
@@ -503,7 +515,20 @@ fn draw_bytes(
         split[0],
     );
 
-    let footer = if editing {
+    // While an offset is being typed it is the only thing the footer says.
+    // The hints below it are for keys that are not reaching the view anyway.
+    let footer = if let Some(typed) = goto {
+        let understood = hex::parse_offset(typed, dump.size).is_some();
+        format!(
+            " go to offset: {typed}{}   hex, or 0n for decimal   Enter jumps  Esc stops{}",
+            if typed.is_empty() { "_" } else { "" },
+            if understood || typed.is_empty() {
+                String::new()
+            } else {
+                "   not an offset".to_string()
+            }
+        )
+    } else if editing {
         let changed = edits.describe();
         format!(
             " {:#x}  {} column  0-9a-f types  Tab swaps  Backspace undoes  F2 writes  Esc stops{}",
@@ -518,7 +543,7 @@ fn draw_bytes(
     } else {
         let at = scroll * hex::PER_ROW as u64;
         format!(
-            " offset {at:#x} of {:#x}   Up/Down PgUp/PgDn Home/End move  F4 edits  Esc close",
+            " offset {at:#x} of {:#x}   Up/Down PgUp/PgDn Home/End move  g goes to  F4 edits  Esc close",
             dump.size
         )
     };
