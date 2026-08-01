@@ -1,12 +1,12 @@
 //! rcmd-gui - the graphical front-end.
 //!
 //! A thin shell: window setup, arguments, and handing control to
-//! [`rust_commander::gui::GuiApp`]. Everything it does to the filesystem comes
+//! [`rust_commander_egui::GuiApp`]. Everything it does to the filesystem comes
 //! from the same library the terminal front-end uses.
 
 use std::path::PathBuf;
 
-use rust_commander::gui::GuiApp;
+use rust_commander_egui::GuiApp;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -75,8 +75,8 @@ USAGE:
             let mut app = GuiApp::new(left, right);
             if grid {
                 // Both panes, since the view is now a per-pane choice.
-                app.left_view = rust_commander::gui::ViewMode::Grid;
-                app.right_view = rust_commander::gui::ViewMode::Grid;
+                app.left_view = rust_commander_egui::ViewMode::Grid;
+                app.right_view = rust_commander_egui::ViewMode::Grid;
             }
             app.screenshot_to = screenshot;
             Ok(Box::new(app))

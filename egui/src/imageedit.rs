@@ -1,6 +1,6 @@
 //! The picture editor: turn it, mirror it, crop it, resize it, write it back.
 //!
-//! The arithmetic is all in [`crate::imageops`] and tested without pixels.
+//! The arithmetic is all in [`rust_commander_core::imageops`] and tested without pixels.
 //! What is here is the three things that need real pixels: reading the file at
 //! its **own** size, applying the operations, and encoding the result.
 //!
@@ -22,7 +22,7 @@ use std::sync::{Arc, Mutex};
 use eframe::egui::{self, Color32, RichText};
 use image::DynamicImage;
 
-use crate::imageops::{self, Crop, Drawn, Edit, Turn};
+use rust_commander_core::imageops::{self, Crop, Drawn, Edit, Turn};
 
 use super::theme;
 

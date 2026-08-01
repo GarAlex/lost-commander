@@ -25,28 +25,28 @@ use eframe::egui::{
     self, Align, Color32, CornerRadius, FontId, Layout, Rect, RichText, Sense, Stroke, Vec2,
 };
 
-use crate::apps;
-use crate::compare;
-use crate::config::Settings;
-use crate::diff;
-use crate::dupes;
-use crate::elevate::{self, Elevation};
-use crate::entry::{human_size, size_in_words, Entry};
-use crate::find;
-use crate::fsops;
-use crate::journal;
-use crate::mount;
-use crate::netloc::{Bookmarks, Location};
-use crate::open;
-use crate::panel::Panel;
-use crate::perms::{self, Mode, What, Who};
-use crate::progress::{self, Answer, Job, Operation};
-use crate::pty::{self, Terminals};
-use crate::rename;
-use crate::tabs::{self, Tabs};
-use crate::textedit::Document;
+use rust_commander_core::apps;
+use rust_commander_core::compare;
+use rust_commander_core::config::Settings;
+use rust_commander_core::diff;
+use rust_commander_core::dupes;
+use rust_commander_core::elevate::{self, Elevation};
+use rust_commander_core::entry::{human_size, size_in_words, Entry};
+use rust_commander_core::find;
+use rust_commander_core::fsops;
+use rust_commander_core::journal;
+use rust_commander_core::mount;
+use rust_commander_core::netloc::{Bookmarks, Location};
+use rust_commander_core::open;
+use rust_commander_core::panel::Panel;
+use rust_commander_core::perms::{self, Mode, What, Who};
+use rust_commander_core::progress::{self, Answer, Job, Operation};
+use rust_commander_core::pty::{self, Terminals};
+use rust_commander_core::rename;
+use rust_commander_core::tabs::{self, Tabs};
+use rust_commander_core::textedit::Document;
 
-use crate::shell::{self, CommandOutput, ShellJob};
+use rust_commander_core::shell::{self, CommandOutput, ShellJob};
 
 const TILE: Vec2 = Vec2::new(104.0, 92.0);
 const ROW_HEIGHT: f32 = 26.0;
@@ -240,7 +240,7 @@ pub enum Dialog {
         /// The chooser's own filter, which is also the command box: type a
         /// name to narrow the list, or a command line to run that instead.
         typed: String,
-        /// Ask the system to authorise it first - see `crate::elevate`.
+        /// Ask the system to authorise it first - see `rust_commander_core::elevate`.
         as_admin: bool,
     },
 }
@@ -722,7 +722,7 @@ impl GuiApp {
     /// environment's, else the platform default.
     pub fn chosen_shell(&self) -> (String, String) {
         shell::resolve_shell(
-            crate::mount::Platform::current(),
+            rust_commander_core::mount::Platform::current(),
             self.settings.shell.as_deref(),
             shell::environment_shell().as_deref(),
         )
@@ -781,7 +781,7 @@ impl GuiApp {
         self.note(
             journal::Event::new(journal::Kind::Session, cwd)
                 .by(shell::program_name(program))
-                .note(crate::shellhook::why_not()),
+                .note(rust_commander_core::shellhook::why_not()),
         );
     }
 
@@ -1186,7 +1186,7 @@ impl GuiApp {
     /// The one-shot command line below is this program running a command and
     /// waiting for it; a terminal panel is a real shell that nothing here is
     /// in the middle of. What it ran arrives as marks in its own output - see
-    /// [`crate::shellhook`] - and this is where they are collected.
+    /// [`rust_commander_core::shellhook`] - and this is where they are collected.
     ///
     /// The directory recorded is the shell's, not the panel's: once someone
     /// has typed `cd`, those are two different places, and the one the
@@ -1195,7 +1195,11 @@ impl GuiApp {
         if self.journal.is_none() {
             return;
         }
-        let mut ran: Vec<(crate::shellhook::Ran, std::path::PathBuf, String)> = Vec::new();
+        let mut ran: Vec<(
+            rust_commander_core::shellhook::Ran,
+            std::path::PathBuf,
+            String,
+        )> = Vec::new();
         for session in &self.terminals.sessions {
             let shell = shell::program_name(&session.program);
             for one in session.take_commands() {
@@ -1754,7 +1758,7 @@ fn file_name(path: &Path) -> String {
 
 /// A file time as the panels write it, or a dash when it cannot be read.
 fn stamp(when: Option<std::time::SystemTime>) -> String {
-    crate::entry::format_time(when)
+    rust_commander_core::entry::format_time(when)
 }
 
 /// `DISPLAY` and `XAUTHORITY`, which `pkexec` would otherwise strip.
@@ -1786,7 +1790,7 @@ fn owned_choice(chosen: &apps::Chosen) -> OwnedChoice {
 }
 
 /// Returns true when Escape asked for it to go away.
-pub(super) fn modal(
+pub(crate) fn modal(
     ctx: &egui::Context,
     title: &str,
     contents: impl FnOnce(&mut egui::Ui),
@@ -2380,7 +2384,7 @@ impl GuiApp {
                         Align2_RIGHT_CENTER,
                         format!(
                             "{}{}",
-                            crate::perms::kind_char(entry.kind, entry.is_symlink),
+                            rust_commander_core::perms::kind_char(entry.kind, entry.is_symlink),
                             mode.symbolic()
                         ),
                         FontId::monospace(10.5),
@@ -2390,7 +2394,7 @@ impl GuiApp {
                 edge -= MODE_WIDTH;
             }
             if columns.date {
-                let date = crate::entry::format_time(entry.modified);
+                let date = rust_commander_core::entry::format_time(entry.modified);
                 painter.text(
                     egui::pos2(edge, rect.center().y),
                     Align2_RIGHT_CENTER,
@@ -2568,7 +2572,7 @@ impl GuiApp {
             // than `!is_dir` is what puts it on that side.
             if path.is_file() {
                 // An archive is a folder that happens to be one file.
-                if crate::archive::is_archive(&path) {
+                if rust_commander_core::archive::is_archive(&path) {
                     self.step_into_archive(side, path);
                     return;
                 }
@@ -2602,7 +2606,9 @@ impl GuiApp {
             }
             // Only the formats that encrypt their index land here; a zip is
             // always listable and asks later, when a file is read.
-            Err(e) if crate::archive::is_locked(&e) => self.ask_for_password(path, None),
+            Err(e) if rust_commander_core::archive::is_locked(&e) => {
+                self.ask_for_password(path, None)
+            }
             Err(e) => self.error(format!("Could not open {}: {e}", path.display())),
         }
     }
@@ -2632,7 +2638,7 @@ impl GuiApp {
     /// paths can read it.
     fn member_to_disk(&mut self, archive: &Path, member: &str) -> std::io::Result<PathBuf> {
         let password = self.archive_passwords.get(archive).cloned();
-        let bytes = crate::archive::read_with(archive, member, password.as_deref())?;
+        let bytes = rust_commander_core::archive::read_with(archive, member, password.as_deref())?;
         let cache = self.member_cache()?;
         // The member's own name, under a directory named for the archive, so
         // two archives holding a `readme.txt` do not collide and the file
@@ -2679,7 +2685,7 @@ impl GuiApp {
                     Err(e) => self.error(e),
                 }
             }
-            Err(e) if crate::archive::is_locked(&e) => {
+            Err(e) if rust_commander_core::archive::is_locked(&e) => {
                 self.ask_for_password(inside.archive.clone(), Some(member))
             }
             Err(e) => self.error(format!("Could not read {member}: {e}")),
@@ -2772,7 +2778,7 @@ impl GuiApp {
         }
         let mut members: Vec<String> = Vec::new();
         for one in &chosen {
-            for member in crate::archive::under(&inside.members, one) {
+            for member in rust_commander_core::archive::under(&inside.members, one) {
                 if !member.is_dir && !members.contains(&member.path) {
                     members.push(member.path.clone());
                 }
@@ -2972,7 +2978,7 @@ impl GuiApp {
                     None => {
                         // An archive is a folder that happens to be one file.
                         let file = self.panel(side).selected().map(|e| e.path.clone());
-                        match file.filter(|path| crate::archive::is_archive(path)) {
+                        match file.filter(|path| rust_commander_core::archive::is_archive(path)) {
                             Some(path) => self.step_into_archive(side, path),
                             // Anything else goes to the application the
                             // desktop registered for it. `F3` is still the
@@ -3285,7 +3291,9 @@ impl GuiApp {
 
     /// Open one named picture, whether the cursor or the quick view asked.
     fn open_image(&mut self, path: PathBuf) {
-        if crate::preview::classify(&path, false) != crate::preview::Kind::Image {
+        if rust_commander_core::preview::classify(&path, false)
+            != rust_commander_core::preview::Kind::Image
+        {
             self.error("Only the pictures this decodes itself can be edited here");
             return;
         }
@@ -3351,7 +3359,7 @@ impl GuiApp {
             mount::Platform::current(),
             &sources,
             &rules,
-            &crate::preview::on_disk,
+            &rust_commander_core::preview::on_disk,
         );
         self.dialog = Some(Dialog::MultiRename {
             computed: rules.clone(),
@@ -3468,7 +3476,7 @@ impl GuiApp {
                     display_pair()
                         .as_ref()
                         .map(|(d, x)| (d.as_str(), x.as_str())),
-                    &crate::preview::on_disk,
+                    &rust_commander_core::preview::on_disk,
                 ),
                 &said,
             );
@@ -3745,9 +3753,13 @@ impl GuiApp {
             let outcome = (self.opener)(path);
             // What the file was handed to, worked out the same way the
             // opener works it out, without running anything.
-            let by = open::open_command(mount::Platform::current(), path, &crate::preview::on_disk)
-                .map(|plan| plan.program)
-                .unwrap_or_else(|_| "the desktop".to_string());
+            let by = open::open_command(
+                mount::Platform::current(),
+                path,
+                &rust_commander_core::preview::on_disk,
+            )
+            .map(|plan| plan.program)
+            .unwrap_or_else(|_| "the desktop".to_string());
             self.note(
                 journal::Event::new(journal::Kind::Open, path)
                     .note(format!("{by} - whichever application it chose"))
@@ -3802,8 +3814,8 @@ impl GuiApp {
         // A binary poured into a text editor comes out as replacement
         // characters, and saving *that* would put them in the file. The right
         // editor for a binary is the one that works in bytes.
-        if crate::hex::is_binary(&path).unwrap_or(false) {
-            match crate::hex::Dump::open(&path) {
+        if rust_commander_core::hex::is_binary(&path).unwrap_or(false) {
+            match rust_commander_core::hex::Dump::open(&path) {
                 Ok(dump) => {
                     self.dialog = Some(Dialog::Bytes(Box::new(hexedit::Session::new(dump))))
                 }
@@ -4234,7 +4246,7 @@ impl GuiApp {
                 hexedit::Outcome::Write => {
                     still_open = true;
                     let count = session.edits.len();
-                    match crate::hex::write_back(session.path(), &session.edits) {
+                    match rust_commander_core::hex::write_back(session.path(), &session.edits) {
                         Ok(_) => {
                             self.note(
                                 journal::Event::new(journal::Kind::Edit, session.path())
@@ -5025,7 +5037,7 @@ impl GuiApp {
                         mount::Platform::current(),
                         sources,
                         rules,
-                        &crate::preview::on_disk,
+                        &rust_commander_core::preview::on_disk,
                     );
                     *computed = rules.clone();
                 }
@@ -5372,7 +5384,7 @@ impl GuiApp {
                         .show(ui, |ui| {
                             let kind = if now.is_symlink {
                                 "symbolic link"
-                            } else if now.kind == crate::entry::EntryKind::Dir {
+                            } else if now.kind == rust_commander_core::entry::EntryKind::Dir {
                                 "directory"
                             } else {
                                 "file"
@@ -5381,7 +5393,7 @@ impl GuiApp {
                             if let Some(target) = &now.link_target {
                                 fact(ui, "points at", target.display().to_string());
                             }
-                            if now.kind != crate::entry::EntryKind::Dir {
+                            if now.kind != rust_commander_core::entry::EntryKind::Dir {
                                 // Both, because "4.2K" is what you read and
                                 // the exact count is what you check.
                                 fact(
@@ -6686,14 +6698,14 @@ fn shell_choice(ui: &mut egui::Ui, program: &str, selected: bool) -> bool {
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| program.to_string());
-    let recorded = crate::shellhook::journals(program);
+    let recorded = rust_commander_core::shellhook::journals(program);
     let label = match recorded {
         true => name,
         false => format!("{name}  \u{00b7} not recorded"),
     };
     let hint = match recorded {
         true => format!("{program}\nCommands run here are kept in the account"),
-        false => format!("{program}\n{}", crate::shellhook::why_not()),
+        false => format!("{program}\n{}", rust_commander_core::shellhook::why_not()),
     };
     let text = match recorded {
         true => RichText::new(label),
@@ -8196,7 +8208,7 @@ mod tests {
             mount::Platform::current(),
             sources,
             rules,
-            &crate::preview::on_disk,
+            &rust_commander_core::preview::on_disk,
         );
         assert_eq!(plan[0].name, "note_01.txt");
         app.run_multi_rename(&plan);
@@ -8811,9 +8823,9 @@ mod tests {
     fn leaving_quick_view_lets_go_of_what_it_loaded() {
         let (_root, mut app) = fixture();
         app.set_view(Side::Right, ViewMode::Preview);
-        app.preview_ready = Some(crate::gui::preview::Ready::new(
+        app.preview_ready = Some(crate::preview::Ready::new(
             app.left.cwd().join("a.txt"),
-            crate::gui::preview::Loaded::Nothing("test"),
+            crate::preview::Loaded::Nothing("test"),
         ));
 
         app.set_view(Side::Right, ViewMode::Details);
@@ -9018,7 +9030,7 @@ mod tests {
         // instead as marks in the shell's own output.
         let (_root, mut app) = fixture();
         let _journal = with_a_journal(&mut app);
-        let Some(shell) = crate::pty::plain::hookable() else {
+        let Some(shell) = rust_commander_core::pty::plain::hookable() else {
             eprintln!("no shell with a seam to hook on this machine - skipped");
             return;
         };
@@ -9064,7 +9076,7 @@ mod tests {
     fn a_failed_command_carries_its_status() {
         let (_root, mut app) = fixture();
         let _journal = with_a_journal(&mut app);
-        let Some(shell) = crate::pty::plain::hookable() else {
+        let Some(shell) = rust_commander_core::pty::plain::hookable() else {
             eprintln!("no shell with a seam to hook on this machine - skipped");
             return;
         };
@@ -9120,7 +9132,7 @@ mod tests {
     fn a_hooked_shell_says_nothing_about_itself() {
         let (_root, mut app) = fixture();
         let _journal = with_a_journal(&mut app);
-        let Some(shell) = crate::pty::plain::hookable() else {
+        let Some(shell) = rust_commander_core::pty::plain::hookable() else {
             eprintln!("no shell with a seam to hook on this machine - skipped");
             return;
         };
@@ -9137,7 +9149,7 @@ mod tests {
     fn a_recording_is_noted_so_the_account_can_point_at_it() {
         let (_root, mut app) = fixture();
         let _journal = with_a_journal(&mut app);
-        let Some(shell) = crate::pty::plain::hookable() else {
+        let Some(shell) = rust_commander_core::pty::plain::hookable() else {
             eprintln!("no shell with a seam to hook on this machine - skipped");
             return;
         };
@@ -9273,7 +9285,7 @@ mod tests {
         let (_root, mut app) = fixture();
         assert!(app.terminals.is_empty());
 
-        app.open_terminal(Some(crate::pty::plain::program().to_string()));
+        app.open_terminal(Some(rust_commander_core::pty::plain::program().to_string()));
 
         assert_eq!(app.terminals.len(), 1);
         assert_eq!(app.terminals.active().unwrap().cwd, app.left.cwd());
@@ -9286,9 +9298,9 @@ mod tests {
         // The point of the + button: a long build keeps going in one tab while
         // another is used for something else.
         let (_root, mut app) = fixture();
-        app.open_terminal(Some(crate::pty::plain::program().to_string()));
-        app.open_terminal(Some(crate::pty::plain::program().to_string()));
-        app.open_terminal(Some(crate::pty::plain::program().to_string()));
+        app.open_terminal(Some(rust_commander_core::pty::plain::program().to_string()));
+        app.open_terminal(Some(rust_commander_core::pty::plain::program().to_string()));
+        app.open_terminal(Some(rust_commander_core::pty::plain::program().to_string()));
         assert_eq!(app.terminals.len(), 3);
         assert_eq!(app.terminals.active, 2);
 
@@ -9301,7 +9313,7 @@ mod tests {
     fn a_new_terminal_opens_where_the_active_panel_is() {
         let (_root, mut app) = fixture();
         app.active = Side::Right;
-        app.open_terminal(Some(crate::pty::plain::program().to_string()));
+        app.open_terminal(Some(rust_commander_core::pty::plain::program().to_string()));
         assert_eq!(app.terminals.active().unwrap().cwd, app.right.cwd());
     }
 
@@ -9316,7 +9328,7 @@ mod tests {
     #[test]
     fn ctrl_enter_types_the_selection_into_the_focused_terminal() {
         let (_root, mut app) = fixture();
-        app.open_terminal(Some(crate::pty::plain::program().to_string()));
+        app.open_terminal(Some(rust_commander_core::pty::plain::program().to_string()));
         let a = index_of(&app, Side::Left, "a.txt");
         app.apply_click(Side::Left, Some((a, Click::Plain)), None);
 

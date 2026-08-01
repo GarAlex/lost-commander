@@ -1,83 +1,43 @@
 [workspace]
-# The engine is the workspace root; `ffi` is the C ABI the native Windows
-# front-end talks to. It is a separate crate rather than another crate-type on
-# the library so that the boundary is something you can read in one file, and
-# so that nothing in the engine has to know it exists.
-members = ["ffi"]
+resolver = "2"
+# Four crates, one repository, one history.
+#
+#   core   the engine - filesystem and state, no user interface at all
+#   tui    rcmd      - ratatui + crossterm
+#   egui   rcmd-gui  - eframe/egui, the Linux one
+#   ffi    the C ABI, for front-ends that are not written in Rust
+#
+# They are separate crates rather than modules of one so the dependency
+# direction is a fact the compiler checks rather than a habit: `egui` depends
+# on `core`, and `core` cannot reach back because `egui` is not in its
+# dependency list. As one package that was only true while nobody typed
+# `crate::gui::` in the engine.
+#
+# The other half of the reason is build time. The graphical front-end used to
+# be a *default* feature of the engine, so a test about zip parsing compiled
+# eframe and an OpenGL stack first. `cargo test -p rust-commander-core` now
+# builds the engine and nothing else.
+#
+# They are one repository because they are one program: `cargo test
+# --workspace` runs all of it in one command, and the tests that check the two
+# front-ends still agree about a colour scheme only compile in one build.
+members = ["core", "tui", "egui", "ffi"]
 
-[package]
-name = "rust-commander"
+# Everything the crates share, so a version is stated once and cannot drift
+# between the front-ends.
+[workspace.package]
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.74"
-description = "A Norton Commander-style dual-pane terminal file manager, portable across Linux, macOS and Windows"
 license = "MIT"
 repository = "https://github.com/garalex/rust-commander"
-readme = "README.md"
 
-[lib]
-name = "rust_commander"
-path = "src/lib.rs"
-
-[[bin]]
-name = "rcmd"
-path = "src/main.rs"
-
-[dependencies]
-# TUI framework. crossterm backend is the portable one: it drives
-# Windows ConPTY/Console, macOS and Linux terminals from the same code.
-ratatui = "0.30"
-crossterm = "0.29"
-# Local-time formatting of file timestamps (cross-platform).
-chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+[workspace.dependencies]
+rust-commander-core = { path = "core" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0"
-toml = "0.9.6"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 dirs = "6.0.0"
-eframe = { version = "0.32", default-features = false, features = ["glow", "default_fonts", "x11"], optional = true }
-image = { version = "0.25.6", default-features = false, features = ["png", "jpeg", "gif", "bmp", "webp", "ico", "tiff"], optional = true }
-portable-pty = "0.9.0"
-vt100 = "0.16.2"
-
-# Archives, read-only for now. Every one of these is chosen for being pure
-# Rust: a file manager that will not build because a C compression library is
-# missing is worse than one that cannot read that format, and decompression is
-# not where the last few per cent of speed matters.
-#
-# zip's default features drag in encryption, zstd and zopfli - none of which a
-# reader needs - so only the decoders are asked for.
-zip = { version = "2.4", default-features = false, features = [
-    "deflate-flate2",
-    "flate2",
-    "deflate64",
-    "time",
-    # Both encryption schemes a zip can use: the old ZipCrypto, and the
-    # AES that every current tool writes. Reading a locked archive is
-    # useless without the second.
-    "aes-crypto",
-] }
-tar = "0.4"
-flate2 = "1.1"
-# Read-only decoders for the two stream formats a .tar usually arrives in.
-lzma-rs = "0.3"
-bzip2-rs = "0.1"
-sevenz-rust2 = "0.7"
-# LHA/LZH, which is on the list of old formats worth reading.
-delharc = "0.6"
-pulldown-cmark = { version = "0.13.4", default-features = false }
-
-[features]
-default = ["gui"]
-# The graphical front-end. Building without it keeps the terminal binary free
-# of every windowing and GPU dependency.
-gui = ["dep:eframe", "dep:image"]
-
-[[bin]]
-name = "rcmd-gui"
-path = "src/bin/rcmd-gui.rs"
-required-features = ["gui"]
-
-[dev-dependencies]
 tempfile = "3"
 
 [profile.release]

@@ -25,11 +25,18 @@ pub struct Settings {
 
     /// A palette that is nobody's preset, kept in full.
     ///
-    /// Only present with the graphical front-end built in; the terminal
-    /// binary reads the same file and ignores the key.
-    #[cfg(feature = "gui")]
+    /// Held as an unread table rather than a typed palette, because the roles
+    /// a palette has are the drawing front-end's business and this crate does
+    /// not draw. It used to be `gui::theme::Palette` behind a feature flag,
+    /// which is the same thing as the engine knowing what a sidebar is.
+    ///
+    /// The point of keeping it at all is that it must **survive** a front-end
+    /// that has no idea what it means: the terminal binary and the C ABI both
+    /// read and write this file, and a key they dropped on the way through
+    /// would silently destroy a reader's custom colours the first time they
+    /// changed any other setting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub palette: Option<crate::gui::theme::Palette>,
+    pub palette: Option<toml::Value>,
 
     /// Where the divider between the panes sits, as the left pane's share.
     ///

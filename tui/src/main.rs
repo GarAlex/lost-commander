@@ -9,7 +9,7 @@ mod app;
 mod theme;
 mod ui;
 
-use rust_commander::{entry, panel};
+use rust_commander_core::{entry, panel};
 
 use std::io;
 use std::path::{Path, PathBuf};

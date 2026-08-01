@@ -99,9 +99,15 @@ pub fn transcript_name(title: &str, stamp: &str) -> String {
 /// has, which is the whole point of driving a real one.
 ///
 /// Lives out here rather than inside `mod tests` because the graphical
-/// front-end's terminal tests need exactly the same answers.
-#[cfg(test)]
-pub(crate) mod plain {
+/// front-end's terminal tests need exactly the same answers - and now that
+/// they are a separate crate, "the same answers" has to be something this one
+/// can actually hand over. `#[cfg(test)]` code is not compiled into the
+/// library another crate links against, and `pub(crate)` would not be visible
+/// if it were, so the helpers are behind a feature that only a dev-dependency
+/// turns on. It stays out of any real build: nothing depends on
+/// `rust-commander-core` with `testing` except test targets.
+#[cfg(any(test, feature = "testing"))]
+pub mod plain {
     /// The shell to spawn.
     pub fn program() -> &'static str {
         if cfg!(windows) {
@@ -120,9 +126,7 @@ pub(crate) mod plain {
     /// were skipped when there is none, rather than asserting against a
     /// warning that is the right answer.
     ///
-    /// Only the graphical front-end's tests ask, and they are not built
-    /// without it.
-    #[cfg(feature = "gui")]
+    /// Only the graphical front-end's tests ask for one.
     pub fn hookable() -> Option<String> {
         // The three the hook knows how to write a startup file for.
         found(&["bash", "zsh", "fish"])

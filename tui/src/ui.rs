@@ -9,10 +9,10 @@ use ratatui::Frame;
 
 use crate::app::{App, ConnTab, FindField, Mode, RenameField, Side};
 use crate::theme;
-use rust_commander::entry::{fit, format_time, human_size, size_cell, size_in_words};
-use rust_commander::panel::Panel;
-use rust_commander::tabs::Tabs;
-use rust_commander::tree::Tree;
+use rust_commander_core::entry::{fit, format_time, human_size, size_cell, size_in_words};
+use rust_commander_core::panel::Panel;
+use rust_commander_core::tabs::Tabs;
+use rust_commander_core::tree::Tree;
 
 const SIZE_COL: usize = 9;
 const DATE_COL: usize = 14;
@@ -122,7 +122,7 @@ fn draw_find(
     frame: &mut Frame,
     area: Rect,
     app: &App,
-    query: &rust_commander::find::Query,
+    query: &rust_commander_core::find::Query,
     root: &std::path::Path,
     field: FindField,
     cursor: usize,
@@ -261,13 +261,13 @@ fn draw_duplicates(
     area: Rect,
     app: &App,
     root: &std::path::Path,
-    options: &rust_commander::dupes::Options,
-    groups: &[rust_commander::dupes::Group],
+    options: &rust_commander_core::dupes::Options,
+    groups: &[rust_commander_core::dupes::Group],
     cursor: usize,
 ) {
     // `Line` is ratatui's in this module, so the list's own row type keeps
     // its full name.
-    use rust_commander::dupes::{self, Line as Row};
+    use rust_commander_core::dupes::{self, Line as Row};
 
     let live = app.hunt.as_ref().map(|scan| scan.snapshot());
     let running = live.as_ref().map(|d| !d.finished).unwrap_or(false);
@@ -407,13 +407,13 @@ fn draw_bytes(
     frame: &mut Frame,
     area: Rect,
     name: &str,
-    dump: &rust_commander::hex::Dump,
+    dump: &rust_commander_core::hex::Dump,
     scroll: u64,
     editing: bool,
-    cursor: rust_commander::hex::Cursor,
-    edits: &rust_commander::hex::Edits,
+    cursor: rust_commander_core::hex::Cursor,
+    edits: &rust_commander_core::hex::Edits,
 ) {
-    use rust_commander::hex;
+    use rust_commander_core::hex;
 
     let rect = centered(area.width, area.height, area);
     frame.render_widget(Clear, rect);
@@ -535,10 +535,10 @@ fn draw_difference(
     area: Rect,
     left_path: &std::path::Path,
     right_path: &std::path::Path,
-    diff: &rust_commander::diff::Diff,
+    diff: &rust_commander_core::diff::Diff,
     scroll: usize,
 ) {
-    use rust_commander::diff::{gutter, gutter_width};
+    use rust_commander_core::diff::{gutter, gutter_width};
 
     // The whole window: two files side by side want every column there is.
     let rect = centered(area.width, area.height, area);
@@ -650,13 +650,13 @@ fn draw_sync(
     app: &App,
     left: &std::path::Path,
     right: &std::path::Path,
-    options: &rust_commander::compare::Options,
-    show: &rust_commander::compare::Show,
-    pairs: &[rust_commander::compare::Pair],
+    options: &rust_commander_core::compare::Options,
+    show: &rust_commander_core::compare::Show,
+    pairs: &[rust_commander_core::compare::Pair],
     cursor: usize,
     capped: bool,
 ) {
-    use rust_commander::compare;
+    use rust_commander_core::compare;
 
     let live = app.scan.as_ref().map(|scan| scan.snapshot());
     let running = live.as_ref().map(|c| !c.finished).unwrap_or(false);
@@ -807,15 +807,15 @@ fn draw_sync(
 fn draw_journal(
     frame: &mut Frame,
     area: Rect,
-    shown: rust_commander::journal::Shown,
-    days: &[rust_commander::journal::Day],
+    shown: rust_commander_core::journal::Shown,
+    days: &[rust_commander_core::journal::Day],
     at: usize,
-    rows: &[rust_commander::journal::Row],
-    filter: &rust_commander::journal::Filter,
+    rows: &[rust_commander_core::journal::Row],
+    filter: &rust_commander_core::journal::Filter,
     cursor: usize,
     searching: bool,
 ) {
-    use rust_commander::journal;
+    use rust_commander_core::journal;
 
     let rect = centered(
         area.width.saturating_sub(4),
@@ -1001,7 +1001,7 @@ fn draw_journal(
 ///
 /// Blank where that side has nothing, which is what says "only the other one
 /// has this" without a word of explanation.
-fn side_cell(facts: Option<&rust_commander::compare::Facts>) -> String {
+fn side_cell(facts: Option<&rust_commander_core::compare::Facts>) -> String {
     match facts {
         None => String::new(),
         Some(facts) if facts.is_dir => "<DIR>".to_string(),
@@ -1017,12 +1017,12 @@ fn side_cell(facts: Option<&rust_commander::compare::Facts>) -> String {
 fn draw_multi_rename(
     frame: &mut Frame,
     area: Rect,
-    rules: &rust_commander::rename::Rules,
-    changes: &[rust_commander::rename::Change],
+    rules: &rust_commander_core::rename::Rules,
+    changes: &[rust_commander_core::rename::Change],
     field: RenameField,
     scroll: usize,
 ) {
-    use rust_commander::rename;
+    use rust_commander_core::rename;
 
     let rows = changes.len().clamp(1, 12);
     let rect = centered(76, rows as u16 + 12, area);
@@ -1168,10 +1168,10 @@ fn draw_multi_rename(
 fn draw_properties(
     frame: &mut Frame,
     area: Rect,
-    now: &rust_commander::perms::Properties,
+    now: &rust_commander_core::perms::Properties,
     cursor: usize,
 ) {
-    use rust_commander::perms::{What, Who};
+    use rust_commander_core::perms::{What, Who};
 
     let rect = centered(66, 17, area);
     frame.render_widget(Clear, rect);
@@ -1192,7 +1192,7 @@ fn draw_properties(
 
     let kind = if now.is_symlink {
         "symbolic link"
-    } else if now.kind == rust_commander::entry::EntryKind::Dir {
+    } else if now.kind == rust_commander_core::entry::EntryKind::Dir {
         "directory"
     } else {
         "file"
@@ -1207,7 +1207,7 @@ fn draw_properties(
     if let Some(target) = &now.link_target {
         fact("points at", fit(&target.display().to_string(), 50));
     }
-    if now.kind != rust_commander::entry::EntryKind::Dir {
+    if now.kind != rust_commander_core::entry::EntryKind::Dir {
         // Both, because "4.2K" is what you read and the count is what you
         // check.
         fact(
@@ -1229,7 +1229,7 @@ fn draw_properties(
             body.push(Line::from(Span::styled(
                 format!(
                     " permissions   {}{}   {}",
-                    rust_commander::perms::kind_char(now.kind, now.is_symlink),
+                    rust_commander_core::perms::kind_char(now.kind, now.is_symlink),
                     mode.symbolic(),
                     mode.octal()
                 ),
@@ -1262,9 +1262,9 @@ fn draw_properties(
             body.push(Line::from(Span::styled(
                 format!(
                     " {}  {}  {}",
-                    special(mode.has(rust_commander::perms::SETUID), "u setuid"),
-                    special(mode.has(rust_commander::perms::SETGID), "g setgid"),
-                    special(mode.has(rust_commander::perms::STICKY), "t sticky"),
+                    special(mode.has(rust_commander_core::perms::SETUID), "u setuid"),
+                    special(mode.has(rust_commander_core::perms::SETGID), "g setgid"),
+                    special(mode.has(rust_commander_core::perms::STICKY), "t sticky"),
                 ),
                 plain,
             )));
@@ -1292,7 +1292,11 @@ fn draw_properties(
     );
 }
 
-fn draw_overwrite(frame: &mut Frame, area: Rect, conflict: &rust_commander::progress::Conflict) {
+fn draw_overwrite(
+    frame: &mut Frame,
+    area: Rect,
+    conflict: &rust_commander_core::progress::Conflict,
+) {
     let rect = centered(80, 9, area);
     frame.render_widget(Clear, rect);
 
@@ -1357,12 +1361,12 @@ fn draw_open_with(
     frame: &mut Frame,
     area: Rect,
     target: &std::path::Path,
-    applications: &[rust_commander::apps::Application],
+    applications: &[rust_commander_core::apps::Application],
     typed: &str,
     cursor: usize,
     as_admin: bool,
 ) {
-    let matches = rust_commander::apps::matching(applications, typed);
+    let matches = rust_commander_core::apps::matching(applications, typed);
     let rows = matches.len().clamp(1, 14);
     let rect = centered(70, rows as u16 + 6, area);
     frame.render_widget(Clear, rect);
@@ -1466,7 +1470,7 @@ fn draw_pane(frame: &mut Frame, area: Rect, tabs: &Tabs, active: bool) {
 
 fn draw_tab_strip(frame: &mut Frame, area: Rect, tabs: &Tabs, active: bool) {
     let paths: Vec<std::path::PathBuf> = tabs.all().iter().map(|p| p.cwd.clone()).collect();
-    let names = rust_commander::tabs::titles(&paths);
+    let names = rust_commander_core::tabs::titles(&paths);
     let width = area.width as usize;
 
     // As many as fit, and a count of what did not. Truncating the strip is
@@ -1765,8 +1769,8 @@ fn draw_viewer(
     title: &str,
     lines: &[String],
     scroll: usize,
-    forced: Option<rust_commander::encoding::Encoding>,
-    detected: rust_commander::encoding::Detected,
+    forced: Option<rust_commander_core::encoding::Encoding>,
+    detected: rust_commander_core::encoding::Detected,
 ) {
     frame.render_widget(Clear, area);
 
@@ -1877,7 +1881,7 @@ fn shorten_path(path: &str, width: usize) -> String {
 }
 
 fn draw_connections(frame: &mut Frame, area: Rect, app: &App, tab: ConnTab, cursor: usize) {
-    let entries: &[rust_commander::netloc::Location] = match tab {
+    let entries: &[rust_commander_core::netloc::Location] = match tab {
         ConnTab::Saved => &app.bookmarks.locations,
         ConnTab::Recent => &app.bookmarks.recent,
     };

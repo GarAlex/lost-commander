@@ -2,7 +2,7 @@
 //!
 //! All of the arithmetic - what a day file holds, which records belong to
 //! which run, what a filter keeps, when a day has aged out - is in
-//! [`crate::journal`] and tested without a window. What is here is the day
+//! [`rust_commander_core::journal`] and tested without a window. What is here is the day
 //! picker, the filter row, and the list.
 //!
 //! A day is read once, when the day or the stream changes, rather than every
@@ -12,9 +12,9 @@ use std::collections::HashSet;
 
 use eframe::egui::{self, RichText};
 
-use crate::journal::{self, Day, Filter, Journal, Row, Shown};
+use rust_commander_core::journal::{self, Day, Filter, Journal, Row, Shown};
 #[cfg(test)]
-use crate::journal::{Kind, Stream};
+use rust_commander_core::journal::{Kind, Stream};
 
 use super::theme;
 

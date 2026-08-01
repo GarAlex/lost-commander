@@ -22,8 +22,10 @@ calls in through `ffi/`. Nothing here knows it exists, which is the point:
 ~34,000 lines of engine and front-ends plus ~6,000 of C ABI; 966 tests on
 Windows (768 engine, 92 `rcmd`, 106 `ffi`), and a few more where zsh, fish and
 dash are installed, since those tests skip rather than fail without them.
-`cargo fmt --check` clean; `cargo clippy --all-targets` has four warnings left,
-listed under "Windows" below. Rust 2021 edition, `rust-version = "1.74"`.
+`cargo fmt --all --check` clean; `cargo clippy --workspace --all-targets` has
+21 warnings left, all pre-existing and none from this code being wrong — 13
+are one `f32`/`f64` inference lint in the graphical front-end. Rust 2021
+edition, `rust-version = "1.74"`.
 
 ## The rules the code is written to
 
@@ -57,15 +59,13 @@ They never reach the journal either.
 
 ## Layout
 
+Four crates in one workspace. The dependency direction is one way and the
+compiler is what keeps it that way: each front-end depends on `core`, and
+`core` depends on none of them.
+
 ```
-src/
+core/src/         the engine - no drawing, no eframe, no ratatui
   lib.rs          module list, no logic
-  main.rs         rcmd (terminal)
-  bin/rcmd-gui.rs rcmd-gui
-  app.rs          terminal front-end state + keys   (large)
-  ui.rs           ALL terminal drawing              (large)
-  gui/mod.rs      graphical front-end               (very large, ~9k lines)
-  gui/*.rs        theme, icons, keys, journalview, textedit, hexedit, imageedit
   panel.rs        a pane: cwd, entries, cursor, marks, sort — and `Inside`
   entry.rs        one row
   progress.rs     Operation/Job/Sink — every long-running file operation
@@ -73,10 +73,34 @@ src/
   archive/        reading archives (mod.rs + one file per format)
   shellhook.rs    OSC 133 shell integration
   pty.rs          real shells on real ptys
+  themes.rs       named colour schemes, in a shape any front-end can read
   ...             compare, dupes, find, perms, trash, encoding, hex, imageops…
+
+tui/src/          rcmd
+  main.rs         arguments and the event loop
+  app.rs          terminal front-end state + keys   (large)
+  ui.rs           ALL terminal drawing              (large)
+  theme.rs        the terminal palette
+
+egui/src/         rcmd-gui
+  lib.rs          the window                        (very large, ~9k lines)
+  main.rs         the thin shell that opens one
+  *.rs            theme, icons, keys, journalview, textedit, hexedit, imageedit
+
+ffi/src/lib.rs    the C ABI
 ```
 
-Anything with real logic lives in the engine and is unit-tested without a UI.
+Anything with real logic lives in `core` and is unit-tested without a UI. It
+used to be possible to break that rule quietly - the graphical front-end was a
+module of the engine behind a default feature, so `crate::gui::` compiled fine
+from anywhere in it. Now it does not compile at all, which is the point of the
+crates being crates.
+
+One consequence worth knowing before it surprises you: `core` cannot hang
+inherent methods on its own types *for* a front-end, and a front-end cannot
+hang them on `core`'s types either. `egui/src/icons.rs` used to add a
+`Kind::colour()`; it is a free `colour(kind)` now, because what colour
+something is drawn in was always that view's opinion rather than the engine's.
 `ui.rs` and `gui/` should hold layout only.
 
 ## What was built in the recent sessions

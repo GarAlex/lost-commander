@@ -512,9 +512,15 @@ colour!(
 ///
 /// A full palette wins over a preset name, and anything unreadable falls back
 /// to the default rather than refusing to start.
-pub fn from_settings(settings: &crate::config::Settings) -> Palette {
+pub fn from_settings(settings: &rust_commander_core::config::Settings) -> Palette {
     settings
         .palette
+        .clone()
+        // The engine keeps this as an unread table, so the reading happens
+        // here - and a table that does not parse is treated exactly like no
+        // table at all, which is what "anything unreadable falls back" has
+        // always meant.
+        .and_then(|table| table.try_into::<Palette>().ok())
         .or_else(|| settings.theme.as_deref().and_then(preset))
         .unwrap_or_default()
 }
@@ -523,7 +529,7 @@ pub fn from_settings(settings: &crate::config::Settings) -> Palette {
 ///
 /// A preset is stored by name so that a later version of that preset is
 /// picked up, rather than frozen as whatever it was the day it was chosen.
-pub fn into_settings(palette: Palette, settings: &mut crate::config::Settings) {
+pub fn into_settings(palette: Palette, settings: &mut rust_commander_core::config::Settings) {
     match preset_name(&palette) {
         Some(name) => {
             settings.theme = Some(name.to_string());
@@ -531,7 +537,11 @@ pub fn into_settings(palette: Palette, settings: &mut crate::config::Settings) {
         }
         None => {
             settings.theme = None;
-            settings.palette = Some(palette);
+            // If this somehow will not serialise, leave whatever was there
+            // rather than writing `None` over a palette the reader chose.
+            if let Ok(table) = toml::Value::try_from(palette) {
+                settings.palette = Some(table);
+            }
         }
     }
 }
@@ -714,7 +724,7 @@ mod tests {
 
     #[test]
     fn a_preset_is_remembered_by_name_and_a_custom_one_in_full() {
-        use crate::config::Settings;
+        use rust_commander_core::config::Settings;
 
         let mut settings = Settings::default();
         into_settings(Palette::commander(), &mut settings);
@@ -730,7 +740,14 @@ mod tests {
         custom.accent = Color32::from_rgb(0x11, 0x22, 0x33);
         into_settings(custom, &mut settings);
         assert!(settings.theme.is_none());
-        assert_eq!(settings.palette, Some(custom));
+        assert!(
+            settings.palette.is_some(),
+            "a palette that is nobody's preset has to be kept whole"
+        );
+        // Compared by reading it back rather than against a stored `Palette`:
+        // the engine holds this as a table it does not interpret, so what
+        // matters is that it survives the round trip, not what shape it takes
+        // on the way through.
         assert_eq!(from_settings(&settings), custom);
 
         // Through a real settings file, and back.
@@ -758,5 +775,42 @@ mod tests {
 
         set_palette(Palette::midnight());
         assert_eq!(accent(), Palette::midnight().accent);
+    }
+
+    /// The two front-ends must agree about what a named scheme looks like.
+    ///
+    /// There are two tables of colours - the engine's [`themes`], which
+    /// crosses the C ABI, and the [`Palette`] above, which this crate paints
+    /// from - because they name different sets of roles. Nothing in the type
+    /// system stops them drifting, so this is what stops them: a Norton
+    /// Commander that was one blue here and another there would be two
+    /// programs wearing one name.
+    ///
+    /// It lives on this side of the boundary because this is the side that
+    /// can see both. The engine has no idea this crate exists, which is the
+    /// arrangement that lets a third front-end be written at all - so the
+    /// crate that knows about two tables is the one that checks them.
+    #[test]
+    fn the_commander_agrees_with_the_engines_scheme() {
+        let theirs = rust_commander_core::themes::named("Norton Commander").expect("the scheme");
+        let mine = preset("Commander").expect("the preset");
+
+        let same = |colour: &str, other: Color32, role: &str| {
+            let (r, g, b) = (other.r(), other.g(), other.b());
+            assert_eq!(
+                colour,
+                format!("#{r:02x}{g:02x}{b:02x}"),
+                "the two front-ends disagree about the Commander's {role}"
+            );
+        };
+        same(&theirs.bg, mine.bg, "background");
+        same(&theirs.border, mine.border, "border");
+        same(&theirs.text, mine.text, "text");
+        same(&theirs.text_dim, mine.text_dim, "dim text");
+        same(&theirs.accent, mine.accent, "accent");
+        same(&theirs.cursor, mine.selected, "cursor bar");
+        same(&theirs.marked, mine.marked, "mark");
+        same(&theirs.marked_text, mine.marked_text, "marked text");
+        same(&theirs.danger, mine.danger, "danger");
     }
 }

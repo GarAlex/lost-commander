@@ -7,7 +7,7 @@
 
 use eframe::egui::{self, Color32, CornerRadius, FontId, Rect, Vec2};
 
-use crate::pty::PtySession;
+use rust_commander_core::pty::PtySession;
 
 /// A monospace cell. Chosen so a standard 80-column shell fits a sane panel.
 pub const CELL: Vec2 = Vec2::new(8.0, 16.0);
@@ -157,12 +157,12 @@ fn to_colour(colour: vt100::Color, fallback: Color32) -> Color32 {
 
 /// The xterm 256-colour palette, as this front-end's colour type.
 ///
-/// The values are [`crate::termview::xterm`]'s. They live there because the
+/// The values are [`rust_commander_core::termview::xterm`]'s. They live there because the
 /// other front-end needs them too, and an `ls` that came out green in one
 /// window and lime in the other would be two programs rather than one with
 /// two windows.
 fn palette(index: u8) -> Color32 {
-    let (r, g, b) = crate::termview::xterm(index);
+    let (r, g, b) = rust_commander_core::termview::xterm(index);
     Color32::from_rgb(r, g, b)
 }
 

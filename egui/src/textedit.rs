@@ -1,7 +1,7 @@
 //! The text editor window.
 //!
-//! Everything about what the bytes mean is in [`crate::textedit`] and
-//! [`crate::encoding`], tested without a window. What is here is the box you
+//! Everything about what the bytes mean is in [`rust_commander_core::textedit`] and
+//! [`rust_commander_core::encoding`], tested without a window. What is here is the box you
 //! type into and the two choosers either side of it.
 //!
 //! Two choosers, not one, because they answer different questions. **Read as**
@@ -15,8 +15,8 @@ use std::path::{Path, PathBuf};
 
 use eframe::egui::{self, RichText};
 
-use crate::encoding::{self, Encoding};
-use crate::textedit::Document;
+use rust_commander_core::encoding::{self, Encoding};
+use rust_commander_core::textedit::Document;
 
 use super::theme;
 
@@ -260,7 +260,7 @@ fn buttons(ui: &mut egui::Ui, session: &mut Session, name: &str, closed: &mut bo
             RichText::new(format!(
                 "{} lines, {}",
                 session.document.lines(),
-                crate::entry::size_in_words(session.document.size() as u64)
+                rust_commander_core::entry::size_in_words(session.document.size() as u64)
             ))
             .size(11.0)
             .color(theme::text_faint()),
@@ -335,7 +335,7 @@ fn file_name(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::textedit::Document;
+    use rust_commander_core::textedit::Document;
 
     #[test]
     fn a_session_starts_settled() {

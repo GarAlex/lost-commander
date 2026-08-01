@@ -64,14 +64,14 @@ use std::time::UNIX_EPOCH;
 
 use serde::{Deserialize, Serialize};
 
-use rust_commander::archive;
-use rust_commander::compare;
-use rust_commander::encoding;
-use rust_commander::entry::{Entry, EntryKind};
-use rust_commander::journal;
-use rust_commander::netloc;
-use rust_commander::panel::{read_entries, Order, SortBy};
-use rust_commander::progress::{Job, Operation};
+use rust_commander_core::archive;
+use rust_commander_core::compare;
+use rust_commander_core::encoding;
+use rust_commander_core::entry::{Entry, EntryKind};
+use rust_commander_core::journal;
+use rust_commander_core::netloc;
+use rust_commander_core::panel::{read_entries, Order, SortBy};
+use rust_commander_core::progress::{Job, Operation};
 
 // ---- what crosses -------------------------------------------------------
 
@@ -107,7 +107,7 @@ impl From<&Entry> for EntryDto {
                 EntryKind::Dir => "dir",
                 EntryKind::File => "file",
             },
-            filekind: rust_commander::filekind::classify(entry).label(),
+            filekind: rust_commander_core::filekind::classify(entry).label(),
             size: entry.size,
             modified: entry.modified.and_then(|time| {
                 time.duration_since(UNIX_EPOCH)
@@ -600,7 +600,7 @@ pub unsafe extern "C" fn rcmd_mkdir(parent: *const c_char, name: *const c_char) 
             (Ok(parent), Ok(name)) => (parent, name),
             (Err(e), _) | (_, Err(e)) => return failed(e),
         };
-        match rust_commander::fsops::create_dir(Path::new(&parent), &name) {
+        match rust_commander_core::fsops::create_dir(Path::new(&parent), &name) {
             Ok(path) => replied(&Made {
                 path: path.display().to_string(),
             }),
@@ -635,11 +635,11 @@ pub unsafe extern "C" fn rcmd_resolve_path(
         };
         let trimmed = typed.trim();
         let target = if trimmed.is_empty() || trimmed == "~" {
-            rust_commander::shell::Intercepted::ChangeToHome
+            rust_commander_core::shell::Intercepted::ChangeToHome
         } else {
-            rust_commander::shell::Intercepted::ChangeTo(trimmed.to_string())
+            rust_commander_core::shell::Intercepted::ChangeTo(trimmed.to_string())
         };
-        match rust_commander::shell::resolve_cd(&target, Path::new(&cwd)) {
+        match rust_commander_core::shell::resolve_cd(&target, Path::new(&cwd)) {
             Some(path) => replied(&Made {
                 path: tidied(&path).display().to_string(),
             }),
@@ -805,7 +805,7 @@ pub unsafe extern "C" fn rcmd_properties(path: *const c_char) -> *mut c_char {
             Ok(path) => path,
             Err(e) => return failed(e),
         };
-        let facts = match rust_commander::perms::read(Path::new(&path)) {
+        let facts = match rust_commander_core::perms::read(Path::new(&path)) {
             Ok(facts) => facts,
             Err(e) => return failed(e),
         };
@@ -870,9 +870,9 @@ pub extern "C" fn rcmd_hex_type(current: u8, character: u32, low: u8, pane: u8) 
                 "{{\"byte\":{byte},\"advance\":true,\"low\":false}}"
             ));
         }
-        match rust_commander::hex::hex_digit(character) {
+        match rust_commander_core::hex::hex_digit(character) {
             Some(digit) => {
-                let byte = rust_commander::hex::with_nibble(current, digit, low != 0);
+                let byte = rust_commander_core::hex::with_nibble(current, digit, low != 0);
                 let advance = low != 0;
                 let next_low = low == 0;
                 out(format!(
@@ -968,11 +968,11 @@ pub unsafe extern "C" fn rcmd_hex_write(
         }
         drop(reading);
 
-        let mut edits = rust_commander::hex::Edits::default();
+        let mut edits = rust_commander_core::hex::Edits::default();
         for edit in &asked {
             edits.set(edit.at, edit.was, edit.now);
         }
-        match rust_commander::hex::write_back(Path::new(&path), &edits) {
+        match rust_commander_core::hex::write_back(Path::new(&path), &edits) {
             Ok(written) => out(format!("{{\"written\":{written}}}")),
             Err(e) => failed(format!("{path}: {e}")),
         }
@@ -1001,16 +1001,16 @@ pub unsafe extern "C" fn rcmd_open_command(path: *const c_char) -> *mut c_char {
             Err(e) => return failed(e),
         };
         let target = Path::new(&path);
-        let platform = rust_commander::mount::Platform::current();
-        match rust_commander::open::open_command(platform, target, &|p| p.exists()) {
+        let platform = rust_commander_core::mount::Platform::current();
+        match rust_commander_core::open::open_command(platform, target, &|p| p.exists()) {
             Ok(launch) => out(format!(
                 "{{\"program\":{},\"args\":{},\"runs_code\":{}}}",
                 serde_json::to_string(&launch.program).unwrap_or_default(),
                 serde_json::to_string(&launch.args).unwrap_or_default(),
-                rust_commander::open::runs_code(
+                rust_commander_core::open::runs_code(
                     platform,
                     target,
-                    rust_commander::open::is_executable(target)
+                    rust_commander_core::open::is_executable(target)
                 )
             )),
             Err(e) => failed(e),
@@ -1029,7 +1029,7 @@ pub unsafe extern "C" fn rcmd_open_command(path: *const c_char) -> *mut c_char {
 fn settings_path() -> Option<PathBuf> {
     match std::env::var("RCMD_SETTINGS_PATH") {
         Ok(path) if !path.is_empty() => Some(PathBuf::from(path)),
-        _ => rust_commander::config::Settings::config_path(),
+        _ => rust_commander_core::config::Settings::config_path(),
     }
 }
 
@@ -1052,7 +1052,7 @@ struct SettingsDto {
 pub extern "C" fn rcmd_settings_read() -> *mut c_char {
     guarded(|| {
         let settings = settings_path()
-            .and_then(|path| rust_commander::config::Settings::load_from(&path).ok())
+            .and_then(|path| rust_commander_core::config::Settings::load_from(&path).ok())
             .unwrap_or_default();
         replied(&SettingsDto {
             theme: settings.theme,
@@ -1084,7 +1084,8 @@ pub unsafe extern "C" fn rcmd_settings_save(json: *const c_char) -> *mut c_char 
             return failed("nowhere to keep settings on this machine".to_string());
         };
 
-        let mut settings = rust_commander::config::Settings::load_from(&path).unwrap_or_default();
+        let mut settings =
+            rust_commander_core::config::Settings::load_from(&path).unwrap_or_default();
         if let Some(theme) = asked.theme {
             // Empty means "back to the default", which a front-end needs a
             // way to say; None means "not changing it".
@@ -1115,14 +1116,14 @@ pub unsafe extern "C" fn rcmd_settings_save(json: *const c_char) -> *mut c_char 
 /// other would be two programs wearing one name.
 #[no_mangle]
 pub extern "C" fn rcmd_themes() -> *mut c_char {
-    guarded(|| replied(&rust_commander::themes::all()))
+    guarded(|| replied(&rust_commander_core::themes::all()))
 }
 
 // ---- markdown -----------------------------------------------------------
 
 #[derive(Serialize)]
 struct MarkdownDoc {
-    blocks: Vec<rust_commander::markdown::Block>,
+    blocks: Vec<rust_commander_core::markdown::Block>,
     /// Whether the file was longer than `max_bytes` and was cut.
     ///
     /// Said rather than silently shown short, the same way reading text says
@@ -1139,7 +1140,7 @@ struct MarkdownDoc {
 ///
 /// What crosses is the parse and never the drawing - what counts as a heading
 /// is CommonMark's business and the engine's; what a heading looks like is the
-/// front-end's. See [`rust_commander::markdown`].
+/// front-end's. See [`rust_commander_core::markdown`].
 ///
 /// Nothing is fetched. An image that points at the network is marked `remote`
 /// and it is the front-end's job to draw a placeholder rather than load it: a
@@ -1186,7 +1187,7 @@ pub unsafe extern "C" fn rcmd_markdown_read(path: *const c_char, max_bytes: u64)
         };
 
         replied(&MarkdownDoc {
-            blocks: rust_commander::markdown::parse(&String::from_utf8_lossy(&text)),
+            blocks: rust_commander_core::markdown::parse(&String::from_utf8_lossy(&text)),
             truncated,
             size,
             error: None,
@@ -1207,7 +1208,7 @@ pub unsafe extern "C" fn rcmd_markdown_parse(text: *const c_char) -> *mut c_char
     guarded(|| {
         let text = borrowed(text).unwrap_or_default();
         replied(&MarkdownDoc {
-            blocks: rust_commander::markdown::parse(&text),
+            blocks: rust_commander_core::markdown::parse(&text),
             truncated: false,
             size: text.len() as u64,
             error: None,
@@ -1222,7 +1223,7 @@ pub unsafe extern "C" fn rcmd_markdown_parse(text: *const c_char) -> *mut c_char
 #[no_mangle]
 pub unsafe extern "C" fn rcmd_is_markdown(name: *const c_char) -> u8 {
     let looks = catch_unwind(AssertUnwindSafe(|| {
-        rust_commander::markdown::looks_like_markdown(&borrowed(name).unwrap_or_default())
+        rust_commander_core::markdown::looks_like_markdown(&borrowed(name).unwrap_or_default())
     }));
     u8::from(matches!(looks, Ok(true)))
 }
@@ -1231,7 +1232,7 @@ pub unsafe extern "C" fn rcmd_is_markdown(name: *const c_char) -> u8 {
 
 /// A running shell on a pty, and how much of it the front-end has seen.
 pub struct RcmdTerm {
-    session: rust_commander::pty::PtySession,
+    session: rust_commander_core::pty::PtySession,
     /// Bumped whenever the screen could have changed.
     ///
     /// The whole reason a terminal can be polled at all without burning a
@@ -1269,7 +1270,7 @@ struct TermScreen {
     busy: bool,
     /// Absent when nothing has changed since the sequence asked about.
     #[serde(skip_serializing_if = "Option::is_none")]
-    lines: Option<Vec<rust_commander::termview::Row>>,
+    lines: Option<Vec<rust_commander_core::termview::Row>>,
 }
 
 /// Start a shell on a pty.
@@ -1293,11 +1294,16 @@ pub unsafe extern "C" fn rcmd_term_open(
         let cwd = borrowed(cwd).ok()?;
         // current_shell hands back (path, name); the path is what to spawn.
         let program = match program.is_empty() {
-            true => rust_commander::shell::current_shell().0,
+            true => rust_commander_core::shell::current_shell().0,
             false => program,
         };
-        rust_commander::pty::PtySession::spawn(&program, Path::new(&cwd), rows.max(1), cols.max(1))
-            .ok()
+        rust_commander_core::pty::PtySession::spawn(
+            &program,
+            Path::new(&cwd),
+            rows.max(1),
+            cols.max(1),
+        )
+        .ok()
     }));
     match started {
         Ok(Some(session)) => Box::into_raw(Box::new(RcmdTerm {
@@ -1334,7 +1340,7 @@ pub unsafe extern "C" fn rcmd_term_poll(term: *mut RcmdTerm, since: u64) -> *mut
                 rows,
                 cols,
                 screen.cursor_position(),
-                rust_commander::termview::rows_of(screen),
+                rust_commander_core::termview::rows_of(screen),
             )
         });
         let text = String::from_utf8_lossy(&text).to_string();
@@ -1471,7 +1477,7 @@ pub unsafe extern "C" fn rcmd_term_transcript_name(
         let stamp = borrowed(stamp).unwrap_or_default();
         out(format!(
             "{{\"name\":{}}}",
-            json_string(&rust_commander::pty::transcript_name(&title, &stamp))
+            json_string(&rust_commander_core::pty::transcript_name(&title, &stamp))
         ))
     })
 }
@@ -1495,7 +1501,7 @@ pub unsafe extern "C" fn rcmd_shell_quote(names_json: *const c_char) -> *mut c_c
             .unwrap_or_default();
         let line = names
             .iter()
-            .map(|name| rust_commander::shell::quote_here(name))
+            .map(|name| rust_commander_core::shell::quote_here(name))
             .collect::<Vec<_>>()
             .join(" ");
         out(format!("{{\"line\":{}}}", json_string(&line)))
@@ -1626,12 +1632,12 @@ pub unsafe extern "C" fn rcmd_term_journal(
             return out("{\"ok\":false}".to_string());
         };
         let book = journal::Journal::at(dir, journal::Keep::default());
-        book.record(rust_commander::journal::Event {
+        book.record(rust_commander_core::journal::Event {
             at: std::time::SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map(|since| since.as_secs() as i64)
                 .unwrap_or_default(),
-            kind: rust_commander::journal::Kind::Command,
+            kind: rust_commander_core::journal::Kind::Command,
             // The command line is what was acted on, which is what the
             // account's first column shows for every other kind too.
             path: ran.line,
@@ -1652,7 +1658,9 @@ pub unsafe extern "C" fn rcmd_term_journal(
             // something that did not happen at all.
             failed: None,
             group: None,
-            shell: Some(rust_commander::shell::program_name(&term.session.program)),
+            shell: Some(rust_commander_core::shell::program_name(
+                &term.session.program,
+            )),
             ms: Some(ran.ms),
         });
         out("{\"ok\":true}".to_string())
@@ -1760,26 +1768,26 @@ struct RootShell {
 pub unsafe extern "C" fn rcmd_root_shell(cwd: *const c_char) -> *mut c_char {
     guarded(|| {
         let cwd = borrowed(cwd).unwrap_or_default();
-        let asked = rust_commander::elevate::root_shell(
-            rust_commander::mount::Platform::current(),
+        let asked = rust_commander_core::elevate::root_shell(
+            rust_commander_core::mount::Platform::current(),
             Path::new(&cwd),
         );
         replied(&match asked {
-            rust_commander::elevate::Elevation::Command(launch) => RootShell {
+            rust_commander_core::elevate::Elevation::Command(launch) => RootShell {
                 kind: "command",
                 program: Some(launch.program),
                 args: launch.args,
                 line: None,
                 why: None,
             },
-            rust_commander::elevate::Elevation::Shell(line) => RootShell {
+            rust_commander_core::elevate::Elevation::Shell(line) => RootShell {
                 kind: "shell",
                 program: None,
                 args: Vec::new(),
                 line: Some(line),
                 why: None,
             },
-            rust_commander::elevate::Elevation::Refused(why) => RootShell {
+            rust_commander_core::elevate::Elevation::Refused(why) => RootShell {
                 kind: "refused",
                 program: None,
                 args: Vec::new(),
@@ -1845,20 +1853,20 @@ pub unsafe extern "C" fn rcmd_image_plan(
         // simply stops being recognised as lossy.
         let extension = borrowed(extension).unwrap_or_default();
         let extension = extension.trim_start_matches('.');
-        let edit = rust_commander::imageops::Edit {
+        let edit = rust_commander_core::imageops::Edit {
             // A zero-sized crop means "no crop", the same convention as the
             // resize: a caller with nothing to cut does not invent a rectangle.
             crop: match (crop_width, crop_height) {
                 (0, _) | (_, 0) => None,
-                _ => Some(rust_commander::imageops::Crop {
+                _ => Some(rust_commander_core::imageops::Crop {
                     x: crop_x,
                     y: crop_y,
                     width: crop_width,
                     height: crop_height,
                 }),
             },
-            transform: rust_commander::imageops::Transform {
-                turn: rust_commander::imageops::Turn::from_quarters(quarters % 4),
+            transform: rust_commander_core::imageops::Transform {
+                turn: rust_commander_core::imageops::Turn::from_quarters(quarters % 4),
                 ..Default::default()
             },
             // Zero means "no resize", so that a caller with nothing to say
@@ -1873,15 +1881,15 @@ pub unsafe extern "C" fn rcmd_image_plan(
         replied(&ImagePlan {
             width: out_width,
             height: out_height,
-            refuses: rust_commander::imageops::refuses(extension, (out_width, out_height)),
-            losses: rust_commander::imageops::losses(
+            refuses: rust_commander_core::imageops::refuses(extension, (out_width, out_height)),
+            losses: rust_commander_core::imageops::losses(
                 extension,
-                rust_commander::imageops::Carries {
+                rust_commander_core::imageops::Carries {
                     animated: animated != 0,
                     metadata: metadata != 0,
                 },
             ),
-            lossy: rust_commander::imageops::is_lossy(extension),
+            lossy: rust_commander_core::imageops::is_lossy(extension),
         })
     })
 }
@@ -1927,16 +1935,16 @@ pub extern "C" fn rcmd_image_pick_crop(
     guarded(|| {
         let source = (source_width.max(1), source_height.max(1));
         let base = match (base_width, base_height) {
-            (0, _) | (_, 0) => rust_commander::imageops::Crop::whole(source),
-            _ => rust_commander::imageops::Crop {
+            (0, _) | (_, 0) => rust_commander_core::imageops::Crop::whole(source),
+            _ => rust_commander_core::imageops::Crop {
                 x: base_x,
                 y: base_y,
                 width: base_width,
                 height: base_height,
             },
         };
-        let transform = rust_commander::imageops::Transform {
-            turn: rust_commander::imageops::Turn::from_quarters(quarters % 4),
+        let transform = rust_commander_core::imageops::Transform {
+            turn: rust_commander_core::imageops::Turn::from_quarters(quarters % 4),
             flip_h: flip_h != 0,
             flip_v: flip_v != 0,
         };
@@ -1945,16 +1953,20 @@ pub extern "C" fn rcmd_image_pick_crop(
         // unprojected against that, then folded through the transform back
         // to the source.
         let shown = transform.size_of((base.width, base.height));
-        let drawn = rust_commander::imageops::Drawn {
+        let drawn = rust_commander_core::imageops::Drawn {
             x: drawn_x,
             y: drawn_y,
             width: drawn_width,
             height: drawn_height,
         };
-        let dragged =
-            rust_commander::imageops::crop_from_drag((from_x, from_y), (to_x, to_y), drawn, shown);
+        let dragged = rust_commander_core::imageops::crop_from_drag(
+            (from_x, from_y),
+            (to_x, to_y),
+            drawn,
+            shown,
+        );
         let folded = dragged.and_then(|dragged| {
-            rust_commander::imageops::fold_crop(dragged, base, transform, source)
+            rust_commander_core::imageops::fold_crop(dragged, base, transform, source)
         });
         match folded {
             Some(crop) => out(format!(
@@ -1980,7 +1992,7 @@ pub extern "C" fn rcmd_image_fit(
     changed_width: u8,
 ) -> *mut c_char {
     guarded(|| {
-        let (w, h) = rust_commander::imageops::keep_aspect(
+        let (w, h) = rust_commander_core::imageops::keep_aspect(
             (width.max(1), height.max(1)),
             (want_width, want_height),
             changed_width != 0,
@@ -2028,7 +2040,7 @@ pub unsafe extern "C" fn rcmd_is_binary(path: *const c_char) -> *mut c_char {
             Ok(path) => path,
             Err(e) => return failed(e),
         };
-        match rust_commander::hex::is_binary(Path::new(&path)) {
+        match rust_commander_core::hex::is_binary(Path::new(&path)) {
             Ok(binary) => out(format!("{{\"binary\":{binary}}}")),
             Err(e) => failed(e),
         }
@@ -2055,7 +2067,7 @@ pub unsafe extern "C" fn rcmd_hex_read(
             Ok(path) => path,
             Err(e) => return failed(e),
         };
-        let dump = match rust_commander::hex::Dump::open(Path::new(&path)) {
+        let dump = match rust_commander_core::hex::Dump::open(Path::new(&path)) {
             Ok(dump) => dump,
             Err(e) => return failed(e),
         };
@@ -2363,15 +2375,15 @@ struct FailureDto {
     message: String,
 }
 
-fn rules_from(dto: RulesDto) -> rust_commander::rename::Rules {
-    use rust_commander::rename::Case;
-    rust_commander::rename::Rules {
+fn rules_from(dto: RulesDto) -> rust_commander_core::rename::Rules {
+    use rust_commander_core::rename::Case;
+    rust_commander_core::rename::Rules {
         name: dto
             .name
-            .unwrap_or_else(|| rust_commander::rename::KEEP_NAME.to_string()),
+            .unwrap_or_else(|| rust_commander_core::rename::KEEP_NAME.to_string()),
         extension: dto
             .extension
-            .unwrap_or_else(|| rust_commander::rename::KEEP_EXTENSION.to_string()),
+            .unwrap_or_else(|| rust_commander_core::rename::KEEP_EXTENSION.to_string()),
         find: dto.find,
         replace: dto.replace,
         case_sensitive: dto.case_sensitive,
@@ -2386,7 +2398,7 @@ fn rules_from(dto: RulesDto) -> rust_commander::rename::Rules {
 }
 
 /// The files a rename is about, read from what the front-end selected.
-fn sources_from(raw: &str) -> Result<Vec<rust_commander::rename::Source>, serde_json::Error> {
+fn sources_from(raw: &str) -> Result<Vec<rust_commander_core::rename::Source>, serde_json::Error> {
     #[derive(Deserialize)]
     struct SourceDto {
         path: String,
@@ -2397,7 +2409,7 @@ fn sources_from(raw: &str) -> Result<Vec<rust_commander::rename::Source>, serde_
     let sources: Vec<SourceDto> = serde_json::from_str(raw)?;
     Ok(sources
         .into_iter()
-        .map(|source| rust_commander::rename::Source {
+        .map(|source| rust_commander_core::rename::Source {
             path: PathBuf::from(source.path),
             name: source.name,
             modified: source
@@ -2435,13 +2447,13 @@ pub unsafe extern "C" fn rcmd_rename_plan(
             Err(e) => return failed(e),
         };
 
-        let changes = rust_commander::rename::plan(
-            rust_commander::mount::Platform::current(),
+        let changes = rust_commander_core::rename::plan(
+            rust_commander_core::mount::Platform::current(),
             &sources,
             &rules_from(rules),
-            &rust_commander::preview::on_disk,
+            &rust_commander_core::preview::on_disk,
         );
-        let (moving, troubled) = rust_commander::rename::tally(&changes);
+        let (moving, troubled) = rust_commander_core::rename::tally(&changes);
         replied(&PlanDto {
             changes: changes
                 .iter()
@@ -2489,13 +2501,13 @@ pub unsafe extern "C" fn rcmd_rename_apply(
             Err(e) => return failed(e),
         };
 
-        let changes = rust_commander::rename::plan(
-            rust_commander::mount::Platform::current(),
+        let changes = rust_commander_core::rename::plan(
+            rust_commander_core::mount::Platform::current(),
             &sources,
             &rules_from(rules),
-            &rust_commander::preview::on_disk,
+            &rust_commander_core::preview::on_disk,
         );
-        let applied = rust_commander::rename::apply(&changes);
+        let applied = rust_commander_core::rename::apply(&changes);
         replied(&AppliedDto {
             renamed: applied.renamed,
             failures: applied
@@ -2581,9 +2593,9 @@ pub unsafe extern "C" fn rcmd_diff_choose(
             (Ok(left), Ok(right)) => (left, right),
             (Err(e), _) | (_, Err(e)) => return failed(e),
         };
-        let read = |raw: &str| -> Result<rust_commander::diff::Side, serde_json::Error> {
+        let read = |raw: &str| -> Result<rust_commander_core::diff::Side, serde_json::Error> {
             let offer: SideOffer = serde_json::from_str(raw)?;
-            Ok(rust_commander::diff::Side {
+            Ok(rust_commander_core::diff::Side {
                 marked: offer.marked.into_iter().map(PathBuf::from).collect(),
                 cursor: offer.cursor.map(PathBuf::from),
             })
@@ -2593,7 +2605,7 @@ pub unsafe extern "C" fn rcmd_diff_choose(
             (Err(e), _) | (_, Err(e)) => return failed(e),
         };
 
-        match rust_commander::diff::choose_from(&left, &right, active_is_left != 0) {
+        match rust_commander_core::diff::choose_from(&left, &right, active_is_left != 0) {
             Ok(chosen) => replied(&ChosenDto {
                 left: chosen.left.display().to_string(),
                 right: chosen.right.display().to_string(),
@@ -2621,20 +2633,27 @@ pub unsafe extern "C" fn rcmd_diff(left: *const c_char, right: *const c_char) ->
             (Ok(left), Ok(right)) => (left, right),
             (Err(e), _) | (_, Err(e)) => return failed(e),
         };
-        let diff = match rust_commander::diff::compare_files(Path::new(&left), Path::new(&right)) {
-            Ok(diff) => diff,
-            // The refusal's own words: it knows why, and it says where.
-            Err(refusal) => return failed(refusal.message()),
-        };
+        let diff =
+            match rust_commander_core::diff::compare_files(Path::new(&left), Path::new(&right)) {
+                Ok(diff) => diff,
+                // The refusal's own words: it knows why, and it says where.
+                Err(refusal) => return failed(refusal.message()),
+            };
         replied(&DiffDto {
             rows: diff
                 .rows
                 .iter()
                 .map(|row| {
                     let (kind, left, right) = match row {
-                        rust_commander::diff::Row::Same { .. } => ("same", row.left(), row.right()),
-                        rust_commander::diff::Row::OnlyLeft { .. } => ("left", row.left(), None),
-                        rust_commander::diff::Row::OnlyRight { .. } => ("right", None, row.right()),
+                        rust_commander_core::diff::Row::Same { .. } => {
+                            ("same", row.left(), row.right())
+                        }
+                        rust_commander_core::diff::Row::OnlyLeft { .. } => {
+                            ("left", row.left(), None)
+                        }
+                        rust_commander_core::diff::Row::OnlyRight { .. } => {
+                            ("right", None, row.right())
+                        }
                     };
                     DiffRow {
                         kind,
@@ -2731,7 +2750,7 @@ pub unsafe extern "C" fn rcmd_compare(
 
 /// A running duplicate hunt. The front-end only ever holds the pointer.
 pub struct RcmdDupes {
-    scan: rust_commander::dupes::Scan,
+    scan: rust_commander_core::dupes::Scan,
 }
 
 #[derive(Serialize)]
@@ -2770,9 +2789,9 @@ pub unsafe extern "C" fn rcmd_dupes_start(
 ) -> *mut RcmdDupes {
     let started = catch_unwind(AssertUnwindSafe(|| {
         let root = borrowed(root).ok()?;
-        Some(rust_commander::dupes::Scan::spawn(
+        Some(rust_commander_core::dupes::Scan::spawn(
             PathBuf::from(root),
-            rust_commander::dupes::Options {
+            rust_commander_core::dupes::Options {
                 include_hidden: include_hidden != 0,
                 smallest: smallest.max(1),
             },
@@ -2856,7 +2875,7 @@ pub unsafe extern "C" fn rcmd_dupes_free(scan: *mut RcmdDupes) {
 
 /// A running search. The front-end only ever holds the pointer.
 pub struct RcmdSearch {
-    search: rust_commander::find::Search,
+    search: rust_commander_core::find::Search,
 }
 
 #[derive(Deserialize)]
@@ -2916,7 +2935,7 @@ pub unsafe extern "C" fn rcmd_find_start(
         let root = borrowed(root).ok()?;
         let raw = borrowed(query_json).ok()?;
         let dto: QueryDto = serde_json::from_str(&raw).ok()?;
-        let query = rust_commander::find::Query {
+        let query = rust_commander_core::find::Query {
             pattern: dto.pattern,
             contains: dto.contains,
             case_sensitive: dto.case_sensitive,
@@ -2925,7 +2944,7 @@ pub unsafe extern "C" fn rcmd_find_start(
         if query.is_empty() {
             return None;
         }
-        Some(rust_commander::find::Search::spawn(
+        Some(rust_commander_core::find::Search::spawn(
             PathBuf::from(root),
             query,
         ))
@@ -3124,7 +3143,7 @@ pub unsafe extern "C" fn rcmd_archive_list(
                 filekind: if level.is_dir {
                     "folder"
                 } else {
-                    rust_commander::filekind::of_name(&level.name).label()
+                    rust_commander_core::filekind::of_name(&level.name).label()
                 },
                 name: level.name,
                 path: level.path,
@@ -3214,7 +3233,7 @@ pub unsafe extern "C" fn rcmd_tree(
         let wanted: std::collections::HashSet<String> =
             wanted.into_iter().map(|p| p.to_lowercase()).collect();
 
-        let mut tree = rust_commander::tree::Tree::revealing_showing(
+        let mut tree = rust_commander_core::tree::Tree::revealing_showing(
             Path::new(&target),
             show_hidden != 0,
             show_files != 0,
@@ -3261,9 +3280,9 @@ pub unsafe extern "C" fn rcmd_tree(
                         name: node.label.clone(),
                         kind: if node.is_dir { "dir" } else { "file" },
                         filekind: if node.is_dir {
-                            rust_commander::filekind::Kind::Folder.label()
+                            rust_commander_core::filekind::Kind::Folder.label()
                         } else {
-                            rust_commander::filekind::of_name(&node.label).label()
+                            rust_commander_core::filekind::of_name(&node.label).label()
                         },
                         // Zero for a directory, which is what a listing shows
                         // too - the size of a directory is the size of what is
@@ -3316,7 +3335,7 @@ pub unsafe extern "C" fn rcmd_tab_titles(paths_json: *const c_char) -> *mut c_ch
         };
         let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
         replied(&Titles {
-            titles: rust_commander::tabs::titles(&paths),
+            titles: rust_commander_core::tabs::titles(&paths),
         })
     })
 }
@@ -3462,7 +3481,7 @@ pub unsafe extern "C" fn rcmd_glob_match(
         replied(&Matched {
             matched: names
                 .iter()
-                .map(|name| rust_commander::panel::matches_glob(&pattern, name))
+                .map(|name| rust_commander_core::panel::matches_glob(&pattern, name))
                 .collect(),
         })
     })
@@ -3483,7 +3502,7 @@ pub unsafe extern "C" fn rcmd_rename(path: *const c_char, new_name: *const c_cha
             (Ok(path), Ok(name)) => (path, name),
             (Err(e), _) | (_, Err(e)) => return failed(e),
         };
-        match rust_commander::fsops::rename(Path::new(&path), &new_name) {
+        match rust_commander_core::fsops::rename(Path::new(&path), &new_name) {
             Ok(path) => replied(&Made {
                 path: path.display().to_string(),
             }),

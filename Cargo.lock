@@ -2968,21 +2968,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
 
 [[package]]
-name = "rust-commander"
+name = "rust-commander-core"
 version = "0.1.0"
 dependencies = [
  "bzip2-rs",
  "chrono",
- "crossterm",
  "delharc",
  "dirs",
- "eframe",
  "flate2",
- "image",
  "lzma-rs",
  "portable-pty",
  "pulldown-cmark",
- "ratatui",
  "serde",
  "serde_json",
  "sevenz-rust2",
@@ -2994,15 +2990,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "rust-commander-egui"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "eframe",
+ "image",
+ "rust-commander-core",
+ "serde",
+ "tempfile",
+ "toml",
+ "vt100",
+]
+
+[[package]]
 name = "rust-commander-ffi"
 version = "0.1.0"
 dependencies = [
  "dirs",
- "rust-commander",
+ "rust-commander-core",
  "serde",
  "serde_json",
  "tempfile",
  "zip",
+]
+
+[[package]]
+name = "rust-commander-tui"
+version = "0.1.0"
+dependencies = [
+ "crossterm",
+ "ratatui",
+ "rust-commander-core",
+ "tempfile",
 ]
 
 [[package]]

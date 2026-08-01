@@ -1,0 +1,67 @@
+[package]
+name = "rust-commander-core"
+description = "The engine behind rust-commander: filesystem and state, no user interface"
+readme = "../README.md"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "rust_commander_core"
+path = "src/lib.rs"
+
+[features]
+# Exposes `pty::plain`, the shell-locating helpers the front-ends' tests need.
+# Not a feature of the program: a feature of the crate, turned on only by
+# another crate's dev-dependencies. It exists because `#[cfg(test)]` code is
+# not compiled into the library a sibling crate links against, and those
+# helpers have to be shared or every front-end grows its own guess at where
+# bash lives.
+testing = []
+
+[dependencies]
+# Nothing here draws anything. No ratatui, no crossterm, no eframe, no image -
+# and that is checked by this list rather than asserted in a comment: a front-
+# end dependency that appeared here would be a front-end concern that had
+# found its way into the engine.
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+dirs.workspace = true
+toml = "0.9.6"
+# Real shells on real ptys, and the emulator that makes sense of what comes
+# back. Not drawing: what a terminal *is* rather than how it looks.
+portable-pty = "0.9.0"
+vt100 = "0.16.2"
+pulldown-cmark = { version = "0.13.4", default-features = false }
+
+# Archives, read-only for now. Every one of these is chosen for being pure
+# Rust: a file manager that will not build because a C compression library is
+# missing is worse than one that cannot read that format, and decompression is
+# not where the last few per cent of speed matters.
+#
+# zip's default features drag in encryption, zstd and zopfli - none of which a
+# reader needs - so only the decoders are asked for.
+zip = { version = "2.4", default-features = false, features = [
+    "deflate-flate2",
+    "flate2",
+    "deflate64",
+    "time",
+    # Both encryption schemes a zip can use: the old ZipCrypto, and the
+    # AES that every current tool writes. Reading a locked archive is
+    # useless without the second.
+    "aes-crypto",
+] }
+tar = "0.4"
+flate2 = "1.1"
+# Read-only decoders for the two stream formats a .tar usually arrives in.
+lzma-rs = "0.3"
+bzip2-rs = "0.1"
+sevenz-rust2 = "0.7"
+# LHA/LZH, which is on the list of old formats worth reading.
+delharc = "0.6"
+
+[dev-dependencies]
+tempfile.workspace = true

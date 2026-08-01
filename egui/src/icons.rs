@@ -13,26 +13,31 @@ use eframe::epaint::Shape;
 // the other front-end asks the same question and answers it with the shell's
 // own icons rather than with these shapes. What is left here is only the
 // painting, and the colour, which is the part that belongs to a theme.
-pub use crate::filekind::{classify, Kind};
+pub use rust_commander_core::filekind::{classify, Kind};
 
-impl Kind {
-    /// From the palette, so a theme carries the icons with it - the icons are
-    /// where this view puts its colour, and a theme that left them behind
-    /// would only be half a theme.
-    pub fn colour(self) -> Color32 {
-        let palette = super::theme::palette();
-        match self {
-            Kind::Parent => palette.icon_parent,
-            Kind::Folder => palette.icon_folder,
-            Kind::Image => palette.icon_image,
-            Kind::Code => palette.icon_code,
-            Kind::Archive => palette.icon_archive,
-            Kind::Audio => palette.icon_audio,
-            Kind::Video => palette.icon_video,
-            Kind::Document => palette.icon_document,
-            Kind::Binary => palette.icon_binary,
-            Kind::Plain => palette.icon_plain,
-        }
+/// What colour a kind is drawn in.
+///
+/// From the palette, so a theme carries the icons with it - the icons are
+/// where this view puts its colour, and a theme that left them behind would
+/// only be half a theme.
+///
+/// A free function and not a method on `Kind`, because `Kind` belongs to the
+/// engine and only its own crate may hang inherent methods on it. That is the
+/// rule working rather than getting in the way: what colour something is
+/// drawn in is this view's opinion, and it reads as one here.
+pub fn colour(kind: Kind) -> Color32 {
+    let palette = super::theme::palette();
+    match kind {
+        Kind::Parent => palette.icon_parent,
+        Kind::Folder => palette.icon_folder,
+        Kind::Image => palette.icon_image,
+        Kind::Code => palette.icon_code,
+        Kind::Archive => palette.icon_archive,
+        Kind::Audio => palette.icon_audio,
+        Kind::Video => palette.icon_video,
+        Kind::Document => palette.icon_document,
+        Kind::Binary => palette.icon_binary,
+        Kind::Plain => palette.icon_plain,
     }
 }
 
@@ -41,9 +46,9 @@ impl Kind {
 /// grid tiles.
 pub fn draw(painter: &Painter, rect: Rect, kind: Kind, dimmed: bool) {
     let colour = if dimmed {
-        kind.colour().gamma_multiply(0.55)
+        colour(kind).gamma_multiply(0.55)
     } else {
-        kind.colour()
+        colour(kind)
     };
     // Work in a centred square so non-square slots still look right.
     let side = rect.width().min(rect.height());
@@ -433,7 +438,7 @@ fn sheet(
 mod tests {
     use super::*;
 
-    // What `classify` answers is tested beside it, in `crate::filekind`. What
+    // What `classify` answers is tested beside it, in `rust_commander_core::filekind`. What
     // is left to check here is the part this module actually owns: that the
     // theme gives every kind its own colour, since colour is what carries the
     // type at a glance and two kinds sharing one would silently merge them.
@@ -453,7 +458,7 @@ mod tests {
         ];
         for (i, a) in kinds.iter().enumerate() {
             for b in &kinds[i + 1..] {
-                assert_ne!(a.colour(), b.colour(), "{a:?} and {b:?} share a colour");
+                assert_ne!(colour(*a), colour(*b), "{a:?} and {b:?} share a colour");
             }
         }
     }

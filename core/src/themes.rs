@@ -213,37 +213,11 @@ mod tests {
         assert!(all().iter().filter(|t| !t.dark).count() >= 1);
     }
 
-    /// The two front-ends must agree about what a named scheme looks like.
-    ///
-    /// There are two tables of colours - this one, which crosses the C ABI,
-    /// and `gui::theme`'s `Palette`, which egui paints from - because they
-    /// name different sets of roles. Nothing in the type system stops them
-    /// drifting, so this is what stops them: a Norton Commander that was one
-    /// blue here and another there would be two programs wearing one name.
-    #[cfg(feature = "gui")]
-    #[test]
-    fn the_commander_agrees_with_the_graphical_front_ends_preset() {
-        let mine = named("Norton Commander").expect("the scheme");
-        let theirs = crate::gui::theme::preset("Commander").expect("the preset");
-
-        let same = |colour: &str, other: eframe::egui::Color32, role: &str| {
-            let (r, g, b) = (other.r(), other.g(), other.b());
-            assert_eq!(
-                colour,
-                format!("#{r:02x}{g:02x}{b:02x}"),
-                "the two front-ends disagree about the Commander's {role}"
-            );
-        };
-        same(&mine.bg, theirs.bg, "background");
-        same(&mine.border, theirs.border, "border");
-        same(&mine.text, theirs.text, "text");
-        same(&mine.text_dim, theirs.text_dim, "dim text");
-        same(&mine.accent, theirs.accent, "accent");
-        same(&mine.cursor, theirs.selected, "cursor bar");
-        same(&mine.marked, theirs.marked, "mark");
-        same(&mine.marked_text, theirs.marked_text, "marked text");
-        same(&mine.danger, theirs.danger, "danger");
-    }
+    // The test that the graphical front-end's Commander preset matches the
+    // one above is not here. It cannot be: this crate does not depend on that
+    // one, on purpose, and a test is not an excuse to reach the other way.
+    // It lives in `egui/src/theme.rs`, which can see both - and still runs
+    // under `cargo test --workspace`, which is the only place it ever ran.
 
     #[test]
     fn every_colour_is_a_hex_triple() {

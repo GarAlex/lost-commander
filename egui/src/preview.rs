@@ -14,10 +14,10 @@ use std::sync::{Arc, Mutex};
 
 use eframe::egui::{self, Color32, FontId, Rect, RichText, Vec2};
 
-use crate::entry::human_size;
-use crate::mount::Platform;
-use crate::preview::{self, Kind, Thumbnailer};
-use crate::textindex::LineIndex;
+use rust_commander_core::entry::human_size;
+use rust_commander_core::mount::Platform;
+use rust_commander_core::preview::{self, Kind, Thumbnailer};
+use rust_commander_core::textindex::LineIndex;
 
 use super::theme;
 
@@ -49,7 +49,7 @@ pub enum Loaded {
     ///
     /// Carries where the file is and how big, not the file - the dump reads
     /// only the rows on screen, so a huge one costs no more than a small one.
-    Bytes(crate::hex::Dump),
+    Bytes(rust_commander_core::hex::Dump),
     /// Nothing to show. The panel falls back to the facts about the file.
     Nothing(&'static str),
     Error(String),
@@ -97,7 +97,7 @@ fn load(path: &Path, is_dir: bool) -> Loaded {
     // question a binary can actually answer. One place rather than at the end
     // of each branch, because every branch that gives up gives up the same way.
     match loaded {
-        Loaded::Nothing(_) if !is_dir => match crate::hex::Dump::open(path) {
+        Loaded::Nothing(_) if !is_dir => match rust_commander_core::hex::Dump::open(path) {
             Ok(dump) => Loaded::Bytes(dump),
             Err(e) => Loaded::Error(e.to_string()),
         },
@@ -427,7 +427,7 @@ pub fn draw(
     ui: &mut egui::Ui,
     ready: &mut Ready,
     view: &mut PreviewView,
-    entry: Option<&crate::entry::Entry>,
+    entry: Option<&rust_commander_core::entry::Entry>,
 ) -> Option<Request> {
     let mut asked = None;
     match &ready.loaded {
@@ -503,7 +503,7 @@ pub fn draw(
                     for row in &rows {
                         ui.add(
                             egui::Label::new(
-                                RichText::new(crate::hex::line(row, width))
+                                RichText::new(rust_commander_core::hex::line(row, width))
                                     .font(font.clone())
                                     .color(theme::text()),
                             )
@@ -627,7 +627,7 @@ pub fn draw(
 }
 
 /// The fallback: what we know about the file, centred, with its icon.
-fn facts(ui: &mut egui::Ui, entry: Option<&crate::entry::Entry>, note: &str) {
+fn facts(ui: &mut egui::Ui, entry: Option<&rust_commander_core::entry::Entry>, note: &str) {
     let Some(entry) = entry else { return };
     let area = ui.available_rect_before_wrap();
     let centre = area.center();

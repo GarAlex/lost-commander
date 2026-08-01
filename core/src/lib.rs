@@ -16,8 +16,6 @@ pub mod entry;
 pub mod filekind;
 pub mod find;
 pub mod fsops;
-#[cfg(feature = "gui")]
-pub mod gui;
 pub mod hex;
 pub mod imageops;
 pub mod journal;
