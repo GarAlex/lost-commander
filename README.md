@@ -1669,7 +1669,7 @@ also has it on `Ctrl-3`.)
 │      - rust-commander                          │
 │          src                                   │
 │        + target                                │
-│      + winamp                                  │
+│      + notes                                   │
 │  + opt                                         │
 └────────────────────────────────────────────────┘
 ```
