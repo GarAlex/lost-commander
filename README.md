@@ -77,6 +77,7 @@ it useful for a quick check that a build works, and for scripting.
 cargo run --bin rcmd-gui                        # current directory
 cargo run --bin rcmd-gui -- ~/src ~/documents   # explicit left and right
 cargo run --bin rcmd-gui -- --grid              # start both panes in the icon grid
+cargo run --bin rcmd-gui -- --preview           # right pane follows the left, as F3 does
 cargo run --bin rcmd-gui -- --help
 ```
 
@@ -121,7 +122,7 @@ Reading bytes as hex, the directory tree, tabs and the journal are in both.
 ## Testing
 
 ```sh
-cargo test                     # all 966, from the workspace root
+cargo test                     # all 986, from the workspace root
 ```
 
 From the root that is everything, because the root is a virtual manifest and
@@ -132,8 +133,8 @@ say `cargo test --workspace` there if you meant all of it.
 Per crate, when you want a fast loop:
 
 ```sh
-cargo test -p lost-commander-core    # 596 - the engine, seconds to build
-cargo test -p lost-commander-egui    # 172 - the graphical view
+cargo test -p lost-commander-core    # 607 - the engine, seconds to build
+cargo test -p lost-commander-egui    # 181 - the graphical view
 cargo test -p lost-commander-tui     #  92 - the terminal view
 cargo test -p lost-commander-ffi     # 106 - the C ABI
 ```
