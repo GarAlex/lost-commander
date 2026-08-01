@@ -112,12 +112,22 @@ terminal cannot, plus one thing not yet built:
 | File-type icons, grid of large icons | — | yes | there is no grid of icons in a terminal |
 | Image viewing, and crop/rotate/resize | — | yes | same |
 | Built-in text editor | — | yes | `rcmd` hands the file to `$EDITOR`, which already knows your settings |
-| A shell in a panel, with its commands recorded | — | yes | `rcmd` is already *in* a terminal; run the shell you are standing in |
-| Session recording (`rec`) | — | yes | it records that panel, so it needs one |
+| A shell, with its commands recorded | — | yes | not built for the terminal yet — see below |
+| Session recording (`rec`) | — | yes | it records that shell, so it needs one |
 | Named colour schemes | one | several | the terminal view uses the classic blue/cyan palette, and a terminal has its own colours anyway |
 | Markdown rendered rather than shown as markup | — | yes | not built for the terminal yet; the parse is in the engine, so it is drawing that is missing, not logic |
 
 Reading bytes as hex, the directory tree, tabs and the journal are in both.
+
+**On the shell**, one honest note. It is tempting to say a terminal file
+manager needs no shell of its own because it is already running in one. That
+is not what Norton Commander or Midnight Commander do: they put a command
+line along the bottom of the panels, keep a real shell running underneath,
+and toggle to its screen with `Ctrl-O` - with the current directory shared
+both ways, so `cd` on the command line moves the panel and moving the panel
+`cd`s the shell. That is a different integration from the graphical view's
+drawer, and a better one for a terminal. `rcmd` has neither, and that is a
+gap rather than a decision.
 
 ## Testing
 
