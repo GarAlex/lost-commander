@@ -76,12 +76,21 @@ fn starting_directories(args: &[String]) -> io::Result<(PathBuf, PathBuf)> {
         .first()
         .map(PathBuf::from)
         .unwrap_or_else(|| cwd.clone());
-    let right = args.get(1).map(PathBuf::from).unwrap_or(cwd);
-    Ok((canonical_or_as_is(left), canonical_or_as_is(right)))
+    let right = args
+        .get(1)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| cwd.clone());
+    Ok((settled(left, &cwd), settled(right, &cwd)))
 }
 
-fn canonical_or_as_is(path: PathBuf) -> PathBuf {
-    path.canonicalize().unwrap_or(path)
+/// Make a path absolute and fit to show in a pane header.
+///
+/// Not `canonicalize`, which is what this used to be: on Windows it hands
+/// back a verbatim path and the header read `\?\C:\src` instead of
+/// `C:\src`. It also resolves symbolic links, so a pane opened through one
+/// showed where the link pointed rather than where you asked to be.
+fn settled(path: PathBuf, here: &Path) -> PathBuf {
+    lost_commander_core::paths::resolved(&path, here)
 }
 
 fn list_directory(path: &Path) -> io::Result<()> {

@@ -359,35 +359,10 @@ struct Written {
 
 /// Fold away `.` and `..` so an address bar shows a path a person would write.
 ///
-/// Lexical, not [`std::fs::canonicalize`]: canonicalising needs the path to
-/// exist, which it may not yet, and on Windows it hands back a `\\?\` verbatim
-/// path that nobody wants to look at. Lexical folding is also what a file
-/// manager's address bar means by `..` - the directory above the one shown,
-/// not wherever a symbolic link happens to point.
-fn tidied(path: &Path) -> PathBuf {
-    use std::path::Component;
-
-    let mut out = PathBuf::new();
-    for part in path.components() {
-        match part {
-            Component::CurDir => {}
-            Component::ParentDir => match out.components().next_back() {
-                // Something to climb out of.
-                Some(Component::Normal(_)) => {
-                    out.pop();
-                }
-                // Above the root is the root; Windows says the same of `C:\..`.
-                Some(Component::RootDir | Component::Prefix(_)) => {}
-                // Nothing to fold into, so this is a relative path that really
-                // does start above where it stands. Dropping it would quietly
-                // change which directory was meant.
-                _ => out.push(part),
-            },
-            other => out.push(other),
-        }
-    }
-    out
-}
+/// The engine's, because both Rust front-ends need exactly the same answer
+/// and one of them was using `std::fs::canonicalize` instead - which on
+/// Windows shows `\?\C:\src` in the pane header.
+use lost_commander_core::paths::tidied;
 
 /// An encoding by its label, matched loosely enough to survive a round trip.
 fn encoding_named(name: &str) -> Option<encoding::Encoding> {

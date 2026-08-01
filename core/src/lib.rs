@@ -24,6 +24,7 @@ pub mod mount;
 pub mod netloc;
 pub mod open;
 pub mod panel;
+pub mod paths;
 pub mod perms;
 pub mod preview;
 pub mod progress;

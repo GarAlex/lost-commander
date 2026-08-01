@@ -60,11 +60,22 @@ USAGE:
     }
 
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let left = positional
-        .first()
-        .map(PathBuf::from)
-        .unwrap_or_else(|| cwd.clone());
-    let right = positional.get(1).map(PathBuf::from).unwrap_or(cwd);
+    // Resolved rather than canonicalised: on Windows `canonicalize` hands
+    // back `\?\C:\src`, which is the right thing to give the operating
+    // system and the wrong thing to put in a pane header.
+    let settle = |path: PathBuf| lost_commander_core::paths::resolved(&path, &cwd);
+    let left = settle(
+        positional
+            .first()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| cwd.clone()),
+    );
+    let right = settle(
+        positional
+            .get(1)
+            .map(PathBuf::from)
+            .unwrap_or_else(|| cwd.clone()),
+    );
 
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
