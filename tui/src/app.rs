@@ -7,24 +7,24 @@ use std::path::{Path, PathBuf};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use rust_commander_core::apps;
-use rust_commander_core::compare;
-use rust_commander_core::diff;
-use rust_commander_core::dupes;
-use rust_commander_core::elevate::{self, Elevation};
-use rust_commander_core::encoding;
-use rust_commander_core::find;
-use rust_commander_core::fsops;
-use rust_commander_core::hex;
-use rust_commander_core::journal;
-use rust_commander_core::mount;
-use rust_commander_core::netloc::{Bookmarks, Location};
-use rust_commander_core::open;
-use rust_commander_core::panel::{Panel, SortBy};
-use rust_commander_core::perms::{self, What, Who};
-use rust_commander_core::progress::{self, Answer, Job, Operation};
-use rust_commander_core::rename;
-use rust_commander_core::tabs::Tabs;
+use lost_commander_core::apps;
+use lost_commander_core::compare;
+use lost_commander_core::diff;
+use lost_commander_core::dupes;
+use lost_commander_core::elevate::{self, Elevation};
+use lost_commander_core::encoding;
+use lost_commander_core::find;
+use lost_commander_core::fsops;
+use lost_commander_core::hex;
+use lost_commander_core::journal;
+use lost_commander_core::mount;
+use lost_commander_core::netloc::{Bookmarks, Location};
+use lost_commander_core::open;
+use lost_commander_core::panel::{Panel, SortBy};
+use lost_commander_core::perms::{self, What, Who};
+use lost_commander_core::progress::{self, Answer, Job, Operation};
+use lost_commander_core::rename;
+use lost_commander_core::tabs::Tabs;
 
 pub const PREVIEW_LIMIT: usize = 2 * 1024 * 1024;
 
@@ -372,7 +372,7 @@ impl App {
         // The account, and a sweep of what has aged out of it. Once at
         // startup: it is the only moment the program is certainly not in the
         // middle of writing to it.
-        let settings = rust_commander_core::config::Settings::load();
+        let settings = lost_commander_core::config::Settings::load();
         app.journal = settings.journal();
         if let Some(journal) = &app.journal {
             journal.sweep(journal::Day::today());
@@ -815,7 +815,7 @@ impl App {
                     && self
                         .active_panel()
                         .selected()
-                        .is_some_and(|e| rust_commander_core::archive::is_archive(&e.path)) =>
+                        .is_some_and(|e| lost_commander_core::archive::is_archive(&e.path)) =>
             {
                 let path = self.active_panel().selected().unwrap().path.clone();
                 match self.active_panel_mut().open_archive(&path, None) {
@@ -945,7 +945,7 @@ impl App {
                 mount::Platform::current(),
                 &command,
                 display.as_ref().map(|(d, x)| (d.as_str(), x.as_str())),
-                &rust_commander_core::preview::on_disk,
+                &lost_commander_core::preview::on_disk,
             );
             self.run_elevated(elevation, &format!("{name} with {label}"));
             return;
@@ -1497,7 +1497,7 @@ impl App {
             mount::Platform::current(),
             &sources,
             &rules,
-            &rust_commander_core::preview::on_disk,
+            &lost_commander_core::preview::on_disk,
         );
         self.mode = Mode::MultiRename {
             rules,
@@ -1578,7 +1578,7 @@ impl App {
                     mount::Platform::current(),
                     sources,
                     rules,
-                    &rust_commander_core::preview::on_disk,
+                    &lost_commander_core::preview::on_disk,
                 );
                 *scroll = 0;
             }
@@ -2969,7 +2969,7 @@ fn describe(targets: &[PathBuf]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rust_commander_core::netloc::Protocol;
+    use lost_commander_core::netloc::Protocol;
     use std::fs;
     use std::sync::{Arc, Mutex};
 
@@ -2988,7 +2988,7 @@ mod tests {
     /// Two directories with a little content in each.
     ///
     /// `App::detached` is used so tests never read or write the real
-    /// `~/.config/rust-commander/bookmarks.toml`.
+    /// `~/.config/lost-commander/bookmarks.toml`.
     fn app_fixture() -> (tempfile::TempDir, App) {
         let root = tempfile::tempdir().unwrap();
         let left = root.path().join("left");
@@ -3072,10 +3072,10 @@ mod tests {
     /// Only the chooser tests want this, and Windows has a chooser of its own
     /// so those do not run there.
     #[cfg(not(windows))]
-    fn watch_launcher(app: &mut App) -> Arc<Mutex<Vec<rust_commander_core::open::Launch>>> {
+    fn watch_launcher(app: &mut App) -> Arc<Mutex<Vec<lost_commander_core::open::Launch>>> {
         let log = Arc::new(Mutex::new(Vec::new()));
         let recorder = Arc::clone(&log);
-        app.launcher = Box::new(move |command: &rust_commander_core::open::Launch| {
+        app.launcher = Box::new(move |command: &lost_commander_core::open::Launch| {
             recorder.lock().unwrap().push(command.clone());
             Ok(())
         });
@@ -3852,7 +3852,7 @@ mod tests {
 
         app.on_key(alt('c'));
 
-        let marked = |panel: &rust_commander_core::panel::Panel| -> Vec<String> {
+        let marked = |panel: &lost_commander_core::panel::Panel| -> Vec<String> {
             let mut names: Vec<String> = panel
                 .entries
                 .iter()
@@ -4991,7 +4991,7 @@ mod tests {
         assert_eq!(tree.selected_path().unwrap(), cwd);
         assert_eq!(
             tree.nodes[0].path,
-            rust_commander_core::tree::filesystem_root(&cwd)
+            lost_commander_core::tree::filesystem_root(&cwd)
         );
     }
 

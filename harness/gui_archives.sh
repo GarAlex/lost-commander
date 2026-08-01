@@ -25,7 +25,7 @@ Xvfb :99 -screen 0 1400x860x24 >/dev/null 2>&1 &
 sleep 2
 "$BIN" /tmp/awork/here /tmp/awork/there >/dev/null 2>&1 &
 sleep 8
-xdotool windowfocus "$(xdotool search --name 'rust-commander' | head -1)"; sleep 1
+xdotool windowfocus "$(xdotool search --name 'lost-commander' | head -1)"; sleep 1
 
 echo "== walk into the zip =="
 xdotool key --clearmodifiers Home; sleep 0.4

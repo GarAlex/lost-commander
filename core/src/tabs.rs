@@ -177,7 +177,7 @@ pub fn title(path: &Path) -> String {
 /// The titles of a pane's tabs, made distinguishable where they collide.
 ///
 /// Two tabs called `src` say nothing about which is which, so when a title is
-/// not unique it takes its parent with it: `rust-commander/src`. Titles that
+/// not unique it takes its parent with it: `lost-commander/src`. Titles that
 /// are already unique are left short - and so are two tabs on the *same*
 /// directory, because no amount of path tells those apart and the long form
 /// would only be noise.

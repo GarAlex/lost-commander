@@ -1,6 +1,6 @@
 [package]
-name = "rust-commander-core"
-description = "The engine behind rust-commander: filesystem and state, no user interface"
+name = "lost-commander-core"
+description = "The engine behind lost-commander: filesystem and state, no user interface"
 readme = "../README.md"
 version.workspace = true
 edition.workspace = true
@@ -9,7 +9,7 @@ license.workspace = true
 repository.workspace = true
 
 [lib]
-name = "rust_commander_core"
+name = "lost_commander_core"
 path = "src/lib.rs"
 
 [features]

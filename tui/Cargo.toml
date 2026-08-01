@@ -1,6 +1,6 @@
 [package]
-name = "rust-commander-tui"
-description = "rcmd - the terminal front-end for rust-commander"
+name = "lost-commander-tui"
+description = "rcmd - the terminal front-end for lost-commander"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,7 +12,7 @@ name = "rcmd"
 path = "src/main.rs"
 
 [dependencies]
-rust-commander-core.workspace = true
+lost-commander-core.workspace = true
 # The crossterm backend is the portable one: it drives the Windows console
 # (ConPTY), macOS and Linux from the same code.
 ratatui = "0.30"

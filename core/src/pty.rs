@@ -105,7 +105,7 @@ pub fn transcript_name(title: &str, stamp: &str) -> String {
 /// library another crate links against, and `pub(crate)` would not be visible
 /// if it were, so the helpers are behind a feature that only a dev-dependency
 /// turns on. It stays out of any real build: nothing depends on
-/// `rust-commander-core` with `testing` except test targets.
+/// `lost-commander-core` with `testing` except test targets.
 #[cfg(any(test, feature = "testing"))]
 pub mod plain {
     /// The shell to spawn.

@@ -1,4 +1,4 @@
-//! The engine behind rust-commander, with no user interface attached.
+//! The engine behind lost-commander, with no user interface attached.
 //!
 //! Everything here is pure filesystem and state logic, which is what makes a
 //! second front-end possible: the terminal UI (`rcmd`) and the graphical one

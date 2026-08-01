@@ -1,12 +1,12 @@
 //! rcmd-gui - the graphical front-end.
 //!
 //! A thin shell: window setup, arguments, and handing control to
-//! [`rust_commander_egui::GuiApp`]. Everything it does to the filesystem comes
+//! [`lost_commander_egui::GuiApp`]. Everything it does to the filesystem comes
 //! from the same library the terminal front-end uses.
 
 use std::path::PathBuf;
 
-use rust_commander_egui::GuiApp;
+use lost_commander_egui::GuiApp;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -64,19 +64,19 @@ USAGE:
         viewport: eframe::egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 780.0])
             .with_min_inner_size([720.0, 460.0])
-            .with_title("rust-commander"),
+            .with_title("lost-commander"),
         ..Default::default()
     };
 
     eframe::run_native(
-        "rust-commander",
+        "lost-commander",
         options,
         Box::new(move |_cc| {
             let mut app = GuiApp::new(left, right);
             if grid {
                 // Both panes, since the view is now a per-pane choice.
-                app.left_view = rust_commander_egui::ViewMode::Grid;
-                app.right_view = rust_commander_egui::ViewMode::Grid;
+                app.left_view = lost_commander_egui::ViewMode::Grid;
+                app.right_view = lost_commander_egui::ViewMode::Grid;
             }
             app.screenshot_to = screenshot;
             Ok(Box::new(app))

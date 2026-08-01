@@ -246,9 +246,9 @@ pub struct Bookmarks {
 }
 
 impl Bookmarks {
-    /// `~/.config/rust-commander/bookmarks.toml` and the platform equivalents.
+    /// `~/.config/lost-commander/bookmarks.toml` and the platform equivalents.
     pub fn config_path() -> Option<PathBuf> {
-        dirs::config_dir().map(|d| d.join("rust-commander").join("bookmarks.toml"))
+        dirs::config_dir().map(|d| d.join("lost-commander").join("bookmarks.toml"))
     }
 
     /// Never fails: a missing or unreadable file simply means "no bookmarks".

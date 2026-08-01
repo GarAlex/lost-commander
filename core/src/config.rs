@@ -130,7 +130,7 @@ impl Settings {
 
 impl Settings {
     pub fn config_path() -> Option<PathBuf> {
-        dirs::config_dir().map(|d| d.join("rust-commander").join("settings.toml"))
+        dirs::config_dir().map(|d| d.join("lost-commander").join("settings.toml"))
     }
 
     /// Never fails: a missing or unreadable file just means "defaults".

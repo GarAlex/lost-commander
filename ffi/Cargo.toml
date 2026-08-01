@@ -1,5 +1,5 @@
 [package]
-name = "rust-commander-ffi"
+name = "lost-commander-ffi"
 description = "The C ABI front-ends that are not written in Rust call into"
 version.workspace = true
 edition.workspace = true
@@ -8,7 +8,7 @@ license.workspace = true
 repository.workspace = true
 
 [lib]
-name = "rust_commander_ffi"
+name = "lost_commander_ffi"
 # cdylib for the DLL a native front-end loads; rlib so the tests below can call
 # the same functions that front-end will.
 crate-type = ["cdylib", "rlib"]
@@ -19,7 +19,7 @@ crate-type = ["cdylib", "rlib"]
 # library loaded by a front-end that draws its own windows. There is no such
 # feature to turn off any more: the graphical front-end is a separate crate
 # that this one simply does not depend on.
-rust-commander-core.workspace = true
+lost-commander-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 

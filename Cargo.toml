@@ -15,7 +15,7 @@ resolver = "2"
 #
 # The other half of the reason is build time. The graphical front-end used to
 # be a *default* feature of the engine, so a test about zip parsing compiled
-# eframe and an OpenGL stack first. `cargo test -p rust-commander-core` now
+# eframe and an OpenGL stack first. `cargo test -p lost-commander-core` now
 # builds the engine and nothing else.
 #
 # They are one repository because they are one program: `cargo test
@@ -30,10 +30,10 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.74"
 license = "MIT"
-repository = "https://github.com/garalex/rust-commander"
+repository = "https://github.com/garalex/lost-commander"
 
 [workspace.dependencies]
-rust-commander-core = { path = "core" }
+lost-commander-core = { path = "core" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }

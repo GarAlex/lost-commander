@@ -13,7 +13,7 @@ use eframe::epaint::Shape;
 // the other front-end asks the same question and answers it with the shell's
 // own icons rather than with these shapes. What is left here is only the
 // painting, and the colour, which is the part that belongs to a theme.
-pub use rust_commander_core::filekind::{classify, Kind};
+pub use lost_commander_core::filekind::{classify, Kind};
 
 /// What colour a kind is drawn in.
 ///
@@ -438,7 +438,7 @@ fn sheet(
 mod tests {
     use super::*;
 
-    // What `classify` answers is tested beside it, in `rust_commander_core::filekind`. What
+    // What `classify` answers is tested beside it, in `lost_commander_core::filekind`. What
     // is left to check here is the part this module actually owns: that the
     // theme gives every kind its own colour, since colour is what carries the
     // type at a glance and two kinds sharing one would silently merge them.

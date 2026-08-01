@@ -5,15 +5,15 @@ done, and where the edges are.
 
 ## What this is
 
-**rust-commander** — a dual-pane file manager in the Norton/Total Commander
+**lost-commander** — a dual-pane file manager in the Norton/Total Commander
 tradition, with two front-ends over one engine:
 
 | | |
 |---|---|
 | `rcmd` | terminal UI, ratatui 0.30 + crossterm 0.29 |
-| `rcmd-gui` | graphical, eframe/egui 0.32 (`--features gui`) — the Linux one |
+| `rcmd-gui` | graphical, eframe/egui 0.32 — the Linux one |
 | `ffi/` | the C ABI, for front-ends that are not written in Rust |
-| `src/lib.rs` | the engine they all use — no UI code at all |
+| `core/` | the engine they all use — no UI code at all |
 
 A native Windows front-end (WinUI 3, in C#) lives in its own repository and
 calls in through `ffi/`. Nothing here knows it exists, which is the point:
@@ -54,7 +54,8 @@ by the system's own `zip`/`tar`, real shells on real ptys — because code that
 only agrees with itself proves nothing.
 
 **Passwords are never written anywhere.** In memory, for the session. Stated in
-`netloc.rs` for network credentials and followed in `gui/mod.rs` for archives.
+`core/src/netloc.rs` for network credentials and followed in the graphical
+front-end for archives.
 They never reach the journal either.
 
 ## Layout
@@ -101,7 +102,8 @@ inherent methods on its own types *for* a front-end, and a front-end cannot
 hang them on `core`'s types either. `egui/src/icons.rs` used to add a
 `Kind::colour()`; it is a free `colour(kind)` now, because what colour
 something is drawn in was always that view's opinion rather than the engine's.
-`ui.rs` and `gui/` should hold layout only.
+
+`tui/src/ui.rs` and `egui/src/` should hold layout only.
 
 ## What was built in the recent sessions
 
@@ -114,7 +116,7 @@ bug that forced the design.
 `Enter` on a `.zip`/`.tar.gz`/`.7z`/`.lzh` walks into it as a folder, in both
 front-ends. `F5` copies out. Everything that would write refuses.
 
-- `src/archive/mod.rs` — `Member`, `Reader` trait, `FORMATS` table, sniffing,
+- `core/src/archive/mod.rs` — `Member`, `Reader` trait, `FORMATS` table, sniffing,
   and the level-walking (`at`, `under`, `holds`) that turns a flat member list
   into browsable directories.
 - One file per format: `zip.rs`, `tarball.rs` (tar/gz/xz/bz2), `sevenz.rs`,
@@ -155,7 +157,7 @@ shell's own startup (`shellhook.rs`).
 ### The account / journal (`1096374`, `479ca52`, `029cc3d`)
 
 `Ctrl-J`. Three tabs — All / Files / Commands — over two append-only JSONL
-files a day in `~/.config/rust-commander/journal/`.
+files a day in `~/.config/lost-commander/journal/`.
 
 - Runs are groups with a heading written *before* the work, so a killed run
   still has one; a separate `Done` record carries the total time, and its
@@ -229,7 +231,7 @@ look like a bug. It is not one.
 - No `.arc`, `.rar`, `.cab`, `.zst`. The user intends to add formats — the
   registry exists for exactly this.
 - Nothing previews an archive member *in-place*: `Enter` extracts a copy to
-  `/tmp/rust-commander-<pid>/` and hands it to the desktop. F3 quick-view of a
+  `/tmp/lost-commander-<pid>/` and hands it to the desktop. F3 quick-view of a
   member is not wired.
 - `PtySession::shell_cwd()` is plumbed and tested but **nothing acts on it**.
   Making a pane follow an interactive `cd` is a small follow-on and was

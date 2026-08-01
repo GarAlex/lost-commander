@@ -10,8 +10,8 @@
 //! One file per day, one record per line, appended and never rewritten:
 //!
 //! ```text
-//! ~/.config/rust-commander/journal/files-2026-07-28.jsonl
-//! ~/.config/rust-commander/journal/shell-2026-07-28.jsonl
+//! ~/.config/lost-commander/journal/files-2026-07-28.jsonl
+//! ~/.config/lost-commander/journal/shell-2026-07-28.jsonl
 //! ```
 //!
 //! That shape falls out of what it has to do. Browsing by date is opening one
@@ -561,7 +561,7 @@ impl Journal {
     /// Beside the settings file, which is the one directory this program
     /// already owns on every platform.
     pub fn default_dir() -> Option<PathBuf> {
-        dirs::config_dir().map(|dir| dir.join("rust-commander").join("journal"))
+        dirs::config_dir().map(|dir| dir.join("lost-commander").join("journal"))
     }
 
     pub fn at(dir: impl Into<PathBuf>, keep: Keep) -> Journal {
@@ -1295,7 +1295,7 @@ mod tests {
         // path used on Windows would not do - `/proc/nowhere` there is just
         // `C:\proc\nowhere`, which is created happily and tests nothing.
         #[cfg(windows)]
-        let nowhere = r"C:\rust-commander-nowhere?\at\all";
+        let nowhere = r"C:\lost-commander-nowhere?\at\all";
         #[cfg(not(windows))]
         let nowhere = "/proc/nowhere/at/all";
 

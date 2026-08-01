@@ -1,6 +1,6 @@
 [package]
-name = "rust-commander-egui"
-description = "rcmd-gui - the graphical front-end for rust-commander"
+name = "lost-commander-egui"
+description = "rcmd-gui - the graphical front-end for lost-commander"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,7 +11,7 @@ repository.workspace = true
 # tests can drive them without opening one, and `main.rs` is the thin shell
 # that reads arguments and hands over.
 [lib]
-name = "rust_commander_egui"
+name = "lost_commander_egui"
 path = "src/lib.rs"
 
 [[bin]]
@@ -19,7 +19,7 @@ name = "rcmd-gui"
 path = "src/main.rs"
 
 [dependencies]
-rust-commander-core.workspace = true
+lost-commander-core.workspace = true
 serde.workspace = true
 # glow rather than wgpu, and x11 for the Linux desktops this actually runs on.
 eframe = { version = "0.32", default-features = false, features = ["glow", "default_fonts", "x11"] }
@@ -38,4 +38,4 @@ chrono.workspace = true
 tempfile.workspace = true
 # The same crate again, with the shell-locating test helpers switched on. A
 # dev-dependency, so nothing in a real build turns it on.
-rust-commander-core = { workspace = true, features = ["testing"] }
+lost-commander-core = { workspace = true, features = ["testing"] }

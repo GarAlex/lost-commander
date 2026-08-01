@@ -20,11 +20,11 @@ for n in ("alpha", "beta"):
 
 # A command in the shell stream, written directly - the terminal front-end has
 # no pty panel, so this stands in for one having been recorded.
-os.makedirs(f"{CONF}/rust-commander/journal", exist_ok=True)
+os.makedirs(f"{CONF}/lost-commander/journal", exist_ok=True)
 import json, datetime
 now = int(time.time())
 day = datetime.date.today().isoformat()
-with open(f"{CONF}/rust-commander/journal/shell-{day}.jsonl", "w") as f:
+with open(f"{CONF}/lost-commander/journal/shell-{day}.jsonl", "w") as f:
     f.write(json.dumps({"record": "event", "at": now - 60, "kind": "command",
                         "path": "/tmp/tmwork", "note": "cargo build"}) + "\n")
     f.write(json.dumps({"record": "event", "at": now - 30, "kind": "session",

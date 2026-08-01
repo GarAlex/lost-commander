@@ -1,4 +1,4 @@
-# rust-commander
+# lost-commander
 
 A dual-pane file manager in Rust, in two front-ends over one engine, built to
 run unchanged on **Linux, macOS and Windows**:
@@ -8,10 +8,10 @@ run unchanged on **Linux, macOS and Windows**:
 
 Everything underneath - listing, sorting, marking, copy/move/delete with
 progress, bookmarks, network locations, the directory tree - lives in a shared
-library (`src/lib.rs`) that neither front-end owns.
+library (the `core` crate) that neither front-end owns.
 
 ```
-┌───────── /home/user/rust-commander/src ──────────┐┌─────────── /home/user/rust-commander ────────────┐
+┌───────── /home/user/lost-commander/src ──────────┐┌─────────── /home/user/lost-commander ────────────┐
 │Name                           Size Modified      ││Name                           Size Modified      │
 │ ..                            <UP>               ││ ..                            <UP>               │
 │ app.rs                       28.8K 25.07.26 04:42││ src                          <DIR> 25.07.26 04:43│
@@ -436,8 +436,8 @@ anybody looking back is drawing.
 One file per day, one JSON record per line, appended and never rewritten:
 
 ```text
-~/.config/rust-commander/journal/files-2026-07-28.jsonl
-~/.config/rust-commander/journal/shell-2026-07-28.jsonl
+~/.config/lost-commander/journal/files-2026-07-28.jsonl
+~/.config/lost-commander/journal/shell-2026-07-28.jsonl
 ```
 
 That falls out of what it has to do. Browsing by date is opening one file.
@@ -660,7 +660,7 @@ That is deliberate: a file manager that will not build because a system
 compression library is missing is worse than one that cannot read that format,
 and decompression is not where the last few per cent of speed matters.
 
-Adding a format is one module and one line in a table - `src/archive/lha.rs` is
+Adding a format is one module and one line in a table - `core/src/archive/lha.rs` is
 seventy lines and touches nothing else.
 
 Two things the formats themselves decide:
@@ -709,7 +709,7 @@ those words, because the copy is where any edit will go and read-only mode
 means nothing comes back:
 
 ```text
-Opened  /tmp/rust-commander-4213/papers.zip/docs/notes.txt
+Opened  /tmp/lost-commander-4213/papers.zip/docs/notes.txt
         docs/notes.txt from /tmp/awork/here/papers.zip - a copy, changes to it
         do not go back
 ```
@@ -941,7 +941,7 @@ already knows:
 ```
 00000000  7f 45 4c 46 02 01 01 00  00 00 00 00 00 00 00 00  |.ELF............|
 00000010  02 00 3e 00 01 00 00 00  40 10 40 00 00 00 00 00  |..>.....@.@.....|
-00000020  72 75 73 74 2d 63 6f 6d  6d 61 6e 64 65 72 00 00  |rust-commander..|
+00000020  72 75 73 74 2d 63 6f 6d  6d 61 6e 64 65 72 00 00  |lost-commander..|
 ```
 
 An offset, sixteen bytes in two groups of eight so the eye can count to eight
@@ -1257,7 +1257,7 @@ nothing to lose on the way in.
 delete for good. They did neither at first, which for a recursive delete of
 everything marked was not a risk worth taking on one keystroke.
 
-The map itself is a pure function from key to intent, in `src/gui/keys.rs`, and
+The map itself is a pure function from key to intent, in `egui/src/keys.rs`, and
 a test walks every key and modifier pair to check that every action the
 application has is reachable without a mouse.
 
@@ -1295,7 +1295,7 @@ Text lines run rather than wrap, because wrapping folds a log or a table back
 on itself and loses the shape that made it worth looking at.
 
 **Size is not a limit.** There is no cap on how big a text file can be looked
-at, because the file is never held: `src/textindex.rs` walks it once, notes
+at, because the file is never held: `core/src/textindex.rs` walks it once, notes
 where every 256th line starts, and the view reads only the window it is
 showing. A 65 MB, million-line log opens and scrolls to its last line, and the
 index costs about 32 KB. Recording every line instead would have cost 8 MB, and
@@ -1334,7 +1334,7 @@ honoured before anything is run. The container this was built in is exactly
 that case: it declares librsvg's thumbnailer and does not have
 `gdk-pixbuf-thumbnailer`, so SVGs there fall back to the icon-and-facts card.
 
-Adding a format is a line in one of two tables in `src/preview.rs`: an
+Adding a format is a line in one of two tables in `core/src/preview.rs`: an
 extension in `DECODABLE` or `TEXTUAL` to handle it here, or a MIME type in
 `mime_for` so the system gets asked.
 
@@ -1577,7 +1577,7 @@ styling is not a fourth choice to get wrong but is derived from the background
 you picked, so a light window gets light scrollbars and shadows without being
 told.
 
-There is one colour table and one type - `Palette` in `src/gui/theme.rs` - and
+There is one colour table and one type - `Palette` in `egui/src/theme.rs` - and
 no colour anywhere else in the source. That is what makes "the form reaches
 every colour" a test rather than a promise: it sets every field the form lists
 to one distinctive value, saves, and counts it in the file.
@@ -1661,12 +1661,12 @@ arrived and wanted the key every program with tabs uses; the graphical view
 also has it on `Ctrl-3`.)
 
 ```
-┌───── Tree: /home/user/rust-commander/src ──────┐
+┌───── Tree: /home/user/lost-commander/src ──────┐
 │- /                                             │
 │  + etc                                         │
 │  - home                                        │
 │    - user                                      │
-│      - rust-commander                          │
+│      - lost-commander                          │
 │          src                                   │
 │        + target                                │
 │      + notes                                   │
@@ -1732,7 +1732,7 @@ directories you visited, newest first).
 │ Saved (3)    Recent (12)    Tab switches                                   │
 │ nas.local/media    SMB    smb://alex@nas.local/media                       │
 │ ftp.example.org/p~ FTP    ftp://ftp.example.org/pub                        │
-│ src                local  /home/user/rust-commander/src                    │
+│ src                local  /home/user/lost-commander/src                    │
 │Enter go  a add  c add cwd  u unmount  d delete  Esc close                  │
 └────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -1762,7 +1762,7 @@ sftp://build@ci.internal/srv
 ```
 
 Saved locations and history persist to `bookmarks.toml` in the platform config directory
-(`~/.config/rust-commander/` on Linux, `~/Library/Application Support/` on
+(`~/.config/lost-commander/` on Linux, `~/Library/Application Support/` on
 macOS, `%APPDATA%` on Windows). The file is plain TOML and safe to hand-edit.
 
 ### How mapping works, and why
@@ -1840,43 +1840,43 @@ cargo build --release --target x86_64-pc-windows-msvc # on Windows
 
 | File | Responsibility |
 | --- | --- |
-| `src/lib.rs` | the shared engine, with no user interface attached |
-| `src/main.rs` | terminal front-end: setup/teardown, event loop, `$EDITOR` |
-| `src/bin/rcmd-gui.rs` | graphical front-end: window setup and arguments |
-| `src/app.rs` | application state, dialogs, key dispatch (pure, unit-tested) |
-| `src/entry.rs` | directory-entry model and display formatting |
-| `src/fsops.rs` | instant operations: rename / mkdir / file preview |
-| `src/progress.rs` | copy / move / delete on a worker thread, with cancel |
-| `src/config.rs` | persisted preferences, such as the chosen shell |
-| `src/netloc.rs` | location URLs and the persisted bookmark store |
-| `src/mount.rs` | per-platform mapping of network locations onto paths |
-| `src/open.rs` | handing a file to the desktop, and what not to hand it |
-| `src/apps.rs` | which applications could open a file, for "Open with..." |
-| `src/find.rs` | searching a tree by name and by contents, off the UI thread |
-| `src/perms.rs` | permissions, ownership and dates, and what each platform has |
-| `src/rename.rs` | new names for a whole selection, and the order to write them in |
-| `src/tabs.rs` | the directories one pane holds open, and which is on show |
-| `src/compare.rs` | what differs between two trees, and which way it would go |
-| `src/diff.rs` | two files line by line, and which two the panes mean |
-| `src/hex.rs` | the files that are not text, shown as bytes |
-| `src/dupes.rs` | files that are the same file twice, found without guessing |
-| `src/panel.rs` | one pane: listing, cursor, sorting, marks, and noticing outside changes |
-| `src/elevate.rs` | asking the system to authorise, and what not to ask it for |
-| `src/trash.rs` | deleting to the system's trash, so it can be got back |
-| `src/ui.rs` | all ratatui drawing |
-| `src/tree.rs` | the directory tree: a flattened, lazily expanded node list |
-| `src/preview.rs` | quick view decisions, and the system thumbnailer seam |
-| `src/textindex.rs` | where a file's lines are, so its size stops mattering |
-| `src/pty.rs` | interactive shells on pseudo-terminals, and their scrollback |
-| `src/record.rs` | recording a session: pty stream to plain text on disk |
-| `src/theme.rs` | the terminal view's classic blue/cyan palette |
-| `src/gui/mod.rs` | the graphical view: sidebar, breadcrumbs, panes, status |
-| `src/gui/preview.rs` | quick view: loading off-thread, decoding and drawing |
-| `src/gui/icons.rs` | file-type and toolbar icons, drawn as vector shapes |
-| `src/gui/theme.rs` | every colour, the presets, and the egui styling built from them |
+| `core/` | the shared engine, with no user interface attached |
+| `tui/src/main.rs` | terminal front-end: setup/teardown, event loop, `$EDITOR` |
+| `egui/src/main.rs` | graphical front-end: window setup and arguments |
+| `tui/src/app.rs` | application state, dialogs, key dispatch (pure, unit-tested) |
+| `core/src/entry.rs` | directory-entry model and display formatting |
+| `core/src/fsops.rs` | instant operations: rename / mkdir / file preview |
+| `core/src/progress.rs` | copy / move / delete on a worker thread, with cancel |
+| `core/src/config.rs` | persisted preferences, such as the chosen shell |
+| `core/src/netloc.rs` | location URLs and the persisted bookmark store |
+| `core/src/mount.rs` | per-platform mapping of network locations onto paths |
+| `core/src/open.rs` | handing a file to the desktop, and what not to hand it |
+| `core/src/apps.rs` | which applications could open a file, for "Open with..." |
+| `core/src/find.rs` | searching a tree by name and by contents, off the UI thread |
+| `core/src/perms.rs` | permissions, ownership and dates, and what each platform has |
+| `core/src/rename.rs` | new names for a whole selection, and the order to write them in |
+| `core/src/tabs.rs` | the directories one pane holds open, and which is on show |
+| `core/src/compare.rs` | what differs between two trees, and which way it would go |
+| `core/src/diff.rs` | two files line by line, and which two the panes mean |
+| `core/src/hex.rs` | the files that are not text, shown as bytes |
+| `core/src/dupes.rs` | files that are the same file twice, found without guessing |
+| `core/src/panel.rs` | one pane: listing, cursor, sorting, marks, and noticing outside changes |
+| `core/src/elevate.rs` | asking the system to authorise, and what not to ask it for |
+| `core/src/trash.rs` | deleting to the system's trash, so it can be got back |
+| `tui/src/ui.rs` | all ratatui drawing |
+| `core/src/tree.rs` | the directory tree: a flattened, lazily expanded node list |
+| `core/src/preview.rs` | quick view decisions, and the system thumbnailer seam |
+| `core/src/textindex.rs` | where a file's lines are, so its size stops mattering |
+| `core/src/pty.rs` | interactive shells on pseudo-terminals, and their scrollback |
+| `core/src/record.rs` | recording a session: pty stream to plain text on disk |
+| `tui/src/theme.rs` | the terminal view's classic blue/cyan palette |
+| `egui/src/lib.rs` | the graphical view: sidebar, breadcrumbs, panes, status |
+| `egui/src/preview.rs` | quick view: loading off-thread, decoding and drawing |
+| `egui/src/icons.rs` | file-type and toolbar icons, drawn as vector shapes |
+| `egui/src/theme.rs` | every colour, the presets, and the egui styling built from them |
 
 Key handling is a pure state transition (`App::on_key`), so the whole
-interaction model is tested without a terminal — see the tests in `src/app.rs`.
+interaction model is tested without a terminal — see the tests in `tui/src/app.rs`.
 
 ## Status
 

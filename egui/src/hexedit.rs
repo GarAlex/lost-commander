@@ -1,7 +1,7 @@
 //! The byte editor window.
 //!
 //! Everything about *what* an edit is - a nibble typed over a byte, an undo, a
-//! run written back in place - lives in [`rust_commander_core::hex`] and is tested without a
+//! run written back in place - lives in [`lost_commander_core::hex`] and is tested without a
 //! window. What is here is the grid, the cursor, and the keys.
 //!
 //! The rule this inherits and must not break: a hex editor **overwrites**. It
@@ -18,7 +18,7 @@ use std::path::PathBuf;
 
 use eframe::egui::{self, RichText};
 
-use rust_commander_core::hex::{self, Cursor, Dump, Edits, Pane};
+use lost_commander_core::hex::{self, Cursor, Dump, Edits, Pane};
 
 use super::theme;
 
@@ -128,7 +128,7 @@ pub fn draw(ctx: &egui::Context, session: &mut Session) -> Outcome {
                     .color(theme::text_dim()),
             );
             ui.label(
-                RichText::new(rust_commander_core::entry::size_in_words(session.dump.size))
+                RichText::new(lost_commander_core::entry::size_in_words(session.dump.size))
                     .size(11.0)
                     .color(theme::text_faint()),
             );

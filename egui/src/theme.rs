@@ -512,7 +512,7 @@ colour!(
 ///
 /// A full palette wins over a preset name, and anything unreadable falls back
 /// to the default rather than refusing to start.
-pub fn from_settings(settings: &rust_commander_core::config::Settings) -> Palette {
+pub fn from_settings(settings: &lost_commander_core::config::Settings) -> Palette {
     settings
         .palette
         .clone()
@@ -529,7 +529,7 @@ pub fn from_settings(settings: &rust_commander_core::config::Settings) -> Palett
 ///
 /// A preset is stored by name so that a later version of that preset is
 /// picked up, rather than frozen as whatever it was the day it was chosen.
-pub fn into_settings(palette: Palette, settings: &mut rust_commander_core::config::Settings) {
+pub fn into_settings(palette: Palette, settings: &mut lost_commander_core::config::Settings) {
     match preset_name(&palette) {
         Some(name) => {
             settings.theme = Some(name.to_string());
@@ -724,7 +724,7 @@ mod tests {
 
     #[test]
     fn a_preset_is_remembered_by_name_and_a_custom_one_in_full() {
-        use rust_commander_core::config::Settings;
+        use lost_commander_core::config::Settings;
 
         let mut settings = Settings::default();
         into_settings(Palette::commander(), &mut settings);
@@ -792,7 +792,7 @@ mod tests {
     /// crate that knows about two tables is the one that checks them.
     #[test]
     fn the_commander_agrees_with_the_engines_scheme() {
-        let theirs = rust_commander_core::themes::named("Norton Commander").expect("the scheme");
+        let theirs = lost_commander_core::themes::named("Norton Commander").expect("the scheme");
         let mine = preset("Commander").expect("the preset");
 
         let same = |colour: &str, other: Color32, role: &str| {

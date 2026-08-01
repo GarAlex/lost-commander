@@ -594,7 +594,7 @@ pub fn install(program: &str, login: bool) -> std::io::Result<Option<Installed>>
         return Ok(None);
     }
     let nonce = nonce();
-    let dir = std::env::temp_dir().join(format!("rust-commander-{nonce}"));
+    let dir = std::env::temp_dir().join(format!("lost-commander-{nonce}"));
     std::fs::create_dir_all(&dir)?;
 
     let installed = match family {
@@ -628,7 +628,7 @@ fn install_bash(dir: PathBuf, nonce: &str, login: bool) -> std::io::Result<Insta
 
 fn bash_script(nonce: &str) -> String {
     format!(
-        r##"# Startup for a shell run inside rust-commander. Everything the shell would
+        r##"# Startup for a shell run inside lost-commander. Everything the shell would
 # have read on its own is read first, unchanged; the rest only adds the marks
 # that say what was run.
 
@@ -777,7 +777,7 @@ fn install_fish(dir: PathBuf, nonce: &str) -> std::io::Result<Installed> {
     // the one way in that does not touch the user's own config directory.
     let conf = dir.join("fish").join("vendor_conf.d");
     std::fs::create_dir_all(&conf)?;
-    std::fs::write(conf.join("rust-commander.fish"), fish_script(nonce))?;
+    std::fs::write(conf.join("lost-commander.fish"), fish_script(nonce))?;
 
     let existing = std::env::var("XDG_DATA_DIRS")
         .ok()
@@ -832,7 +832,7 @@ fn install_powershell(dir: PathBuf, nonce: &str) -> std::io::Result<Installed> {
 /// `PS>` would be a hook nobody would leave switched on.
 fn powershell_script(nonce: &str) -> String {
     format!(
-        r##"# Startup for a shell run inside rust-commander. The user's own profile is
+        r##"# Startup for a shell run inside lost-commander. The user's own profile is
 # read first and unchanged; the rest only adds the marks that say what ran.
 
 foreach ($__rcmd_p in @(
@@ -902,7 +902,7 @@ function global:prompt {{
 
 fn fish_script(nonce: &str) -> String {
     format!(
-        r##"# Startup for a shell run inside rust-commander.
+        r##"# Startup for a shell run inside lost-commander.
 set -g __rcmd_nonce {nonce}
 
 function __rcmd_started --on-event fish_preexec
@@ -1323,7 +1323,7 @@ mod tests {
         let installed = install("/usr/bin/fish", false).unwrap().expect("hooked");
         assert!(installed
             .dir()
-            .join("fish/vendor_conf.d/rust-commander.fish")
+            .join("fish/vendor_conf.d/lost-commander.fish")
             .exists());
         let (name, value) = &installed.env[0];
         assert_eq!(name, "XDG_DATA_DIRS");
