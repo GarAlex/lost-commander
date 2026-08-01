@@ -690,6 +690,15 @@ impl GuiApp {
     /// The tree is built on the panel itself, so it always reflects that
     /// pane's directory rather than some separate idea of where you are.
     pub fn set_view(&mut self, side: Side, mode: ViewMode) {
+        // Asking for the tree puts the keyboard in it. You turned it on to
+        // walk it, and having to press Tab first to reach the thing you just
+        // asked for reads as the key not having worked.
+        let index = match side {
+            Side::Left => 0,
+            Side::Right => 1,
+        };
+        self.on_tree[index] = mode == ViewMode::Tree;
+
         // Asked here rather than in each of the keys that can close a quick
         // view - F3 again, Ctrl-Q, Escape, or picking another view from the
         // pane's own header. They all arrive through this one function, and a
@@ -2233,15 +2242,24 @@ impl GuiApp {
             Side::Left => 0,
             Side::Right => 1,
         };
-        if self.panel(side).in_tree_mode() && self.on_tree[index] {
-            // Down through this pane first: its tree is behind us now.
-            self.on_tree[index] = false;
+        if self.panel(side).in_tree_mode() && !self.on_tree[index] {
+            // Up into this pane's tree before leaving the pane. This way
+            // round because the keyboard starts in the files: the other way
+            // made the tree reachable only if you were already in it, which
+            // is to say never - and with the arrows following the focused
+            // half, the tree could not be moved at all.
+            self.on_tree[index] = true;
             self.say_which_half(side);
             return;
         }
         // Never onto a pane that is not there, or the cursor would vanish
         // along with it. With nowhere to go, Tab wraps onto this pane's tree.
+        // Leaving the pane, so the keyboard goes back to its files - which is
+        // where it will be when this pane comes round again.
+        self.on_tree[index] = false;
         if !self.show_right {
+            // Nowhere to go sideways: Tab wraps onto this pane's own halves
+            // rather than doing nothing.
             if self.panel(side).in_tree_mode() {
                 self.on_tree[index] = true;
                 self.say_which_half(side);
@@ -10036,16 +10054,22 @@ mod tests {
         use keys::Action as A;
         let (_root, mut app) = fixture();
         app.set_view(Side::Left, ViewMode::Tree);
-        app.on_tree[0] = true;
+        // Turning the tree on lands the keyboard in it.
+        assert!(app.on_tree[0], "the tree you just asked for has the keyboard");
 
-        // Tree, then files, then the other pane. The tree is behind you once
-        // you have passed it, which is what makes Tab a walk and not a toggle.
+        // Tree, then this pane's files, then the other pane. Reachable in
+        // that order from wherever the keyboard starts, which is the whole
+        // point - the first version walked the other way and left the tree
+        // unreachable, and with it the arrow keys that move it.
         app.run_action(A::SwitchPane);
-        assert_eq!(app.active, Side::Left);
-        assert!(!app.on_tree[0], "down to this pane's files");
+        assert_eq!(app.active, Side::Right, "on past this pane");
 
-        app.run_action(A::SwitchPane);
-        assert_eq!(app.active, Side::Right, "and only then to the other pane");
+        let (_root2, mut app2) = fixture();
+        app2.set_view(Side::Left, ViewMode::Tree);
+        app2.on_tree[0] = false;
+        app2.run_action(A::SwitchPane);
+        assert_eq!(app2.active, Side::Left);
+        assert!(app2.on_tree[0], "up into the tree before leaving the pane");
     }
 
     #[test]
@@ -10053,7 +10077,6 @@ mod tests {
         use keys::Action as A;
         let (_root, mut app) = fixture();
         app.set_view(Side::Right, ViewMode::Tree);
-        app.on_tree[1] = true;
         app.active = Side::Left;
 
         app.run_action(A::SwitchPane);
@@ -10068,10 +10091,10 @@ mod tests {
         let (_root, mut app) = fixture();
         app.show_right = false;
         app.set_view(Side::Left, ViewMode::Tree);
-        app.on_tree[0] = false;
+        app.on_tree[0] = true;
 
-        // Nowhere to go sideways, so it goes up. The alternative - doing
-        // nothing - leaves the tree unreachable from the keyboard entirely.
+        // Nowhere to go sideways, so Tab comes back round to this pane's own
+        // halves rather than doing nothing.
         app.run_action(A::SwitchPane);
         assert_eq!(app.active, Side::Left);
         assert!(app.on_tree[0]);
