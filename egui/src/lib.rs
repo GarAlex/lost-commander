@@ -277,6 +277,30 @@ impl Side {
     }
 }
 
+/// What a pane's header says about what is selected.
+///
+/// With a tree up the count has to come from the tagged set rather than from
+/// the rows: tagging across directories is the point of walking a tree, and
+/// most of what is tagged is not on screen. "3 of 12 selected" would be
+/// counting the wrong thing and reassuring the reader with it.
+fn selection_summary(
+    panel: &lost_commander_core::panel::Panel,
+    count: usize,
+    view: ViewMode,
+) -> String {
+    let tagged = panel.tagged_count();
+    if panel.in_tree_mode() && tagged > 0 {
+        return format!("{tagged} tagged across the tree");
+    }
+    if panel.marked_count() > 0 {
+        return format!("{} of {count} selected", panel.marked_count());
+    }
+    if matches!(view, ViewMode::Tree | ViewMode::Preview) {
+        return String::new();
+    }
+    format!("{count} items")
+}
+
 pub struct GuiApp {
     pub left: Tabs,
     pub right: Tabs,
@@ -2051,6 +2075,7 @@ impl GuiApp {
         self.tab_strip(&mut inner, side);
 
         // Pane header: where you are, and how much is here.
+        let current = self.view(side);
         let panel = self.panel(side);
         let name = panel
             .cwd
@@ -2058,7 +2083,9 @@ impl GuiApp {
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| panel.cwd.display().to_string());
         let count = panel.entries.len().saturating_sub(1);
-        let marked = panel.marked_count();
+        // Worked out here rather than in the closure below, which needs
+        // unique access to `self` and so cannot hold a borrow of the panel.
+        let summary = selection_summary(panel, count, current);
 
         inner.horizontal(|ui| {
             ui.label(
@@ -2074,7 +2101,6 @@ impl GuiApp {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 // The view switch lives here rather than on the toolbar,
                 // because it belongs to this pane and not to the window.
-                let current = self.view(side);
                 for (mode, tool, hint) in [
                     (
                         ViewMode::Preview,
@@ -2096,13 +2122,7 @@ impl GuiApp {
                 }
 
                 ui.add_space(6.0);
-                let summary = if marked > 0 {
-                    format!("{marked} of {count} selected")
-                } else if matches!(current, ViewMode::Tree | ViewMode::Preview) {
-                    String::new()
-                } else {
-                    format!("{count} items")
-                };
+                let summary = summary.clone();
                 ui.label(RichText::new(summary).color(theme::text_faint()).size(11.0));
             });
         });
@@ -9723,6 +9743,43 @@ mod tests {
         assert!(
             !app.show_right,
             "the toggle folded it away, and the viewer did not put it back"
+        );
+    }
+
+    #[test]
+    fn a_pane_with_a_tree_counts_what_is_tagged_and_not_what_is_on_screen() {
+        let (root, mut app) = fixture();
+        let panel = app.left.current_mut();
+        panel.enter_tree_mode();
+        panel.cursor_to(1);
+        panel.toggle_mark();
+
+        // Tag something in a directory that is not the one being shown, the
+        // way walking a tree does.
+        let elsewhere = root.path().join("sub");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::write(elsewhere.join("far.txt"), b"x").unwrap();
+        panel.tagged.insert(elsewhere.join("far.txt"));
+
+        let panel = app.left.current();
+        let summary = selection_summary(panel, panel.entries.len() - 1, ViewMode::Tree);
+        assert_eq!(summary, "2 tagged across the tree");
+        // The row count would have said one, because that is all that is on
+        // screen - reassuring, and about the wrong thing.
+        assert_eq!(panel.marked_count(), 1);
+    }
+
+    #[test]
+    fn without_a_tree_the_header_says_what_it_always_said() {
+        let (_root, mut app) = fixture();
+        let panel = app.left.current_mut();
+        panel.cursor_to(1);
+        panel.toggle_mark();
+        let panel = app.left.current();
+        let count = panel.entries.len() - 1;
+        assert_eq!(
+            selection_summary(panel, count, ViewMode::Details),
+            format!("1 of {count} selected")
         );
     }
 }
