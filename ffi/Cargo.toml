@@ -4,6 +4,10 @@ description = "The C ABI front-ends that are not written in Rust call into"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+# The licence files are copied into each crate rather than referenced at the
+# workspace root: cargo packages only what is inside the crate directory, so a
+# crate published without them ships under a licence whose text is not in the
+# tarball. They are duplicates on purpose - do not tidy them away.
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
