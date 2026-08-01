@@ -135,6 +135,24 @@ impl Block {
     pub fn text(&self) -> String {
         self.runs.iter().map(|run| run.text.as_str()).collect()
     }
+
+    /// What goes in front of a list item, or nothing for anything else.
+    ///
+    /// Here rather than in each front-end because two front-ends that chose
+    /// their own bullet would be two programs rendering one document - and
+    /// the numbering is not a counter the drawing code should be keeping
+    /// either: CommonMark lets a list start at seven, and the number that
+    /// arrives is the one that was written.
+    pub fn marker(&self) -> String {
+        match self.kind {
+            Kind::ListItem {
+                number: Some(number),
+                ..
+            } => format!("{number}."),
+            Kind::ListItem { .. } => "\u{2022}".to_string(),
+            _ => String::new(),
+        }
+    }
 }
 
 /// Parse a document into blocks.

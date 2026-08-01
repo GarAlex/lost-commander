@@ -21,12 +21,16 @@ fn main() -> eframe::Result<()> {
             "rcmd-gui {VERSION} - graphical dual-pane file manager
 
 USAGE:
-    rcmd-gui [--grid] [LEFT_DIR] [RIGHT_DIR]
+    rcmd-gui [--grid] [--preview] [LEFT_DIR] [RIGHT_DIR]
     rcmd-gui --screenshot FILE.png [LEFT_DIR] [RIGHT_DIR]
     rcmd-gui --help | --version
 
     --grid starts both panes in the icon grid instead of the detail list.
     Each pane also has its own list / grid / tree switch in its header.
+
+    --preview starts the right pane showing what the left one is pointing at,
+    which is what F3 does. It pairs with --screenshot: a quick view cannot be
+    checked from a picture of the window it is not open in.
 
     --screenshot renders a few frames, saves a PNG and exits. It is how the
     view is checked without a human at the screen."
@@ -43,12 +47,14 @@ USAGE:
 
     let mut screenshot = None;
     let mut grid = false;
+    let mut preview = false;
     let mut positional: Vec<String> = Vec::new();
     let mut rest = args.into_iter();
     while let Some(arg) = rest.next() {
         match arg.as_str() {
             "--screenshot" => screenshot = rest.next().map(PathBuf::from),
             "--grid" => grid = true,
+            "--preview" => preview = true,
             _ => positional.push(arg),
         }
     }
@@ -73,6 +79,17 @@ USAGE:
         options,
         Box::new(move |_cc| {
             let mut app = GuiApp::new(left, right);
+            if preview {
+                app.right_view = lost_commander_egui::ViewMode::Preview;
+                // The cursor starts on `..`, and a quick view of the parent
+                // directory is a count of what is in it - true, and not what
+                // anyone runs this to look at. Land on the first real entry
+                // so there is a file being previewed.
+                let panel = app.left.current_mut();
+                if let Some(first) = panel.entries.iter().position(|e| !e.is_parent()) {
+                    panel.cursor_to(first);
+                }
+            }
             if grid {
                 // Both panes, since the view is now a per-pane choice.
                 app.left_view = lost_commander_egui::ViewMode::Grid;

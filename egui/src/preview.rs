@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 use eframe::egui::{self, Color32, FontId, Rect, RichText, Vec2};
 
 use lost_commander_core::entry::human_size;
+use lost_commander_core::markdown;
 use lost_commander_core::mount::Platform;
 use lost_commander_core::preview::{self, Kind, Thumbnailer};
 use lost_commander_core::textindex::LineIndex;
@@ -45,6 +46,14 @@ pub enum Loaded {
     Directory {
         entries: usize,
     },
+    /// A document, parsed but not drawn.
+    ///
+    /// The parse is the engine's - what counts as a heading, where a lazy
+    /// continuation joins a quote, what a reference link resolves to is
+    /// CommonMark and has a thousand edge cases. What a heading *looks* like
+    /// is this crate's, and it looks different here than it does in the
+    /// native Windows window on purpose.
+    Markdown(Vec<markdown::Block>),
     /// Not text and not a picture: shown as bytes.
     ///
     /// Carries where the file is and how big, not the file - the dump reads
@@ -113,7 +122,25 @@ fn classified(path: &Path, is_dir: bool) -> Loaded {
             },
             Err(e) => Loaded::Error(e.to_string()),
         },
-        Kind::Text => load_text(path),
+        Kind::Text => {
+            // Asked by name, which is how a document announces itself. The
+            // bytes cannot tell you: markdown is text, and text that happens
+            // to contain a `#` is not a heading unless the file claims to be
+            // markdown in the first place.
+            let named = path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            if markdown::looks_like_markdown(&named) {
+                match std::fs::read_to_string(path) {
+                    Ok(source) => return Loaded::Markdown(markdown::parse(&source)),
+                    // Unreadable as text - fall through and let the text path
+                    // decide what it is instead of refusing outright.
+                    Err(_) => return load_text(path),
+                }
+            }
+            load_text(path)
+        }
         Kind::Image => match std::fs::read(path) {
             // A decode failure is not an error worth shouting about - the
             // system may still know how to draw it.
@@ -475,6 +502,24 @@ pub fn draw(
                     }
                 });
             ready.window = fetched.or(cache);
+        }
+        Loaded::Markdown(blocks) => {
+            // Ctrl-wheel resizes, as in the text view - the same gesture for
+            // the same thing, since a reader does not care which of the two
+            // they happen to be looking at.
+            let (hovered, pinch) = ui.input(|i| {
+                (
+                    ui.max_rect()
+                        .contains(i.pointer.hover_pos().unwrap_or_default()),
+                    i.zoom_delta(),
+                )
+            });
+            if hovered && (pinch - 1.0).abs() > 0.0001 {
+                view.font = (view.font * pinch).clamp(MIN_FONT, MAX_FONT);
+            }
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| draw_markdown(ui, blocks, view.font));
         }
         Loaded::Bytes(dump) => {
             let dump = dump.clone();
@@ -1021,5 +1066,412 @@ mod tests {
                 panic!("a usable thumbnailer produced nothing: {what}");
             }
         }
+    }
+}
+
+// ---- drawing a document --------------------------------------------------
+
+/// How much wider than the body text a heading of this level is drawn.
+///
+/// Six levels compressed into four sizes: past the third, a heading is doing
+/// structural work the eye no longer needs a size for, and a document that
+/// used all six would otherwise end with headings smaller than its own text.
+fn heading_scale(level: u8) -> f32 {
+    match level {
+        1 => 1.9,
+        2 => 1.5,
+        3 => 1.25,
+        _ => 1.1,
+    }
+}
+
+/// One indent step, in points, for a nested list or a quote.
+const INDENT: f32 = 18.0;
+
+/// Draw a parsed document.
+///
+/// Nothing here decides what the markup *means* - that arrived already
+/// decided. What it decides is what a heading looks like, and that is on
+/// purpose: this window and the native Windows one draw the same document
+/// differently because they are different windows.
+fn draw_markdown(ui: &mut egui::Ui, blocks: &[markdown::Block], base: f32) {
+    use markdown::Kind;
+
+    ui.spacing_mut().item_spacing.y = base * 0.35;
+    for block in blocks {
+        let indent = INDENT * block.depth as f32;
+        match &block.kind {
+            Kind::Heading { level } => {
+                // Air above a heading and not below it, so a heading sits
+                // with the text it introduces rather than floating between.
+                ui.add_space(base * if *level <= 2 { 0.9 } else { 0.5 });
+                ui.horizontal_wrapped(|ui| {
+                    ui.add_space(indent);
+                    draw_runs(ui, block, base * heading_scale(*level), true);
+                });
+                if *level <= 2 {
+                    // A rule under the top two levels, as the rendered
+                    // markdown everyone has read does it.
+                    ui.add_space(base * 0.15);
+                    rule(ui);
+                }
+            }
+            Kind::Paragraph => {
+                ui.horizontal_wrapped(|ui| {
+                    ui.add_space(indent);
+                    draw_runs(ui, block, base, false);
+                });
+            }
+            Kind::ListItem { .. } => {
+                ui.horizontal_wrapped(|ui| {
+                    ui.add_space(indent);
+                    // The marker comes from the engine: a front-end that
+                    // chose its own bullet, or counted the numbers itself,
+                    // would render the same document differently from the
+                    // other one - and CommonMark lets a list start at seven.
+                    ui.label(
+                        RichText::new(format!("{}  ", block.marker()))
+                            .size(base)
+                            .color(theme::text_dim()),
+                    );
+                    draw_runs(ui, block, base, false);
+                });
+            }
+            Kind::Code { language } => {
+                let frame = egui::Frame::new()
+                    .fill(theme::surface_hi())
+                    .inner_margin(egui::Margin::same((base * 0.5) as i8))
+                    .corner_radius(egui::CornerRadius::same(3));
+                ui.horizontal(|ui| {
+                    ui.add_space(indent);
+                    frame.show(ui, |ui| {
+                        ui.vertical(|ui| {
+                            if let Some(language) = language {
+                                ui.label(
+                                    RichText::new(language)
+                                        .size(base * 0.8)
+                                        .color(theme::text_faint()),
+                                );
+                            }
+                            // Kept exactly as written, and not wrapped: code
+                            // folded back on itself stops being readable as
+                            // code, which is the only reason to show it.
+                            for line in block.text().lines() {
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new(line)
+                                            .monospace()
+                                            .size(base)
+                                            .color(theme::text()),
+                                    )
+                                    .wrap_mode(egui::TextWrapMode::Extend),
+                                );
+                            }
+                        });
+                    });
+                });
+            }
+            Kind::Quote => {
+                ui.horizontal_wrapped(|ui| {
+                    ui.add_space(indent);
+                    let (bar, _) =
+                        ui.allocate_exact_size(Vec2::new(3.0, base * 1.2), egui::Sense::hover());
+                    ui.painter().rect_filled(bar, 1.0, theme::accent_dim());
+                    ui.add_space(base * 0.4);
+                    draw_runs(ui, block, base, false);
+                });
+            }
+            Kind::Rule => {
+                ui.add_space(base * 0.4);
+                rule(ui);
+                ui.add_space(base * 0.4);
+            }
+            Kind::TableRow { header } => {
+                // The engine says where each cell starts; how wide they are
+                // is this view's problem, and equal shares is the honest
+                // answer without measuring the whole table first.
+                let cells = cells_of(block);
+                let count = cells.len().max(1);
+                let width = ((ui.available_width() - indent) / count as f32).max(24.0);
+                ui.horizontal_top(|ui| {
+                    ui.add_space(indent);
+                    for cell in cells {
+                        // Padded out to the column width rather than merely
+                        // offered it: a cell shrinks to its content, so
+                        // without this every row starts its columns wherever
+                        // the row above happened to end and nothing lines up.
+                        let from = ui.cursor().min.x;
+                        ui.horizontal_wrapped(|ui| {
+                            draw_range(ui, block, cell, base, *header);
+                        });
+                        let used = ui.cursor().min.x - from;
+                        if used < width {
+                            ui.add_space(width - used);
+                        }
+                    }
+                });
+                if *header {
+                    rule(ui);
+                }
+            }
+            Kind::Html => {
+                // Said rather than silently dropped. Rendering it would make
+                // this a browser, but a reader who cannot see that something
+                // was skipped has been told the document is shorter than it
+                // is - which is the failure this program does not commit.
+                ui.horizontal_wrapped(|ui| {
+                    ui.add_space(indent);
+                    ui.label(
+                        RichText::new("[HTML, not rendered]")
+                            .size(base * 0.85)
+                            .italics()
+                            .color(theme::text_faint()),
+                    )
+                    .on_hover_text(block.text());
+                });
+            }
+        }
+    }
+}
+
+/// The same colour, pushed away from the background.
+///
+/// Emphasis without a bold face has to come from contrast, and which
+/// direction is "more" depends on the scheme: on a dark ground bold text is
+/// lighter, on Paper it is darker. Halfway to the limit is enough to read as
+/// emphasis without looking like a different colour.
+fn stronger(base: Color32) -> Color32 {
+    let toward_white = theme::is_dark(&theme::palette());
+    let push = |c: u8| {
+        if toward_white {
+            c.saturating_add((255 - c) / 2)
+        } else {
+            c / 2
+        }
+    };
+    Color32::from_rgb(push(base.r()), push(base.g()), push(base.b()))
+}
+
+/// A hairline across the available width.
+fn rule(ui: &mut egui::Ui) {
+    let (rect, _) =
+        ui.allocate_exact_size(Vec2::new(ui.available_width(), 1.0), egui::Sense::hover());
+    ui.painter().rect_filled(rect, 0.0, theme::border());
+}
+
+/// Where each cell of a table row starts and ends, as ranges into `runs`.
+///
+/// A row with no offsets at all is one cell: that is what an empty `cells`
+/// means, and treating it as no cells would drop the row.
+fn cells_of(block: &markdown::Block) -> Vec<std::ops::Range<usize>> {
+    if block.cells.is_empty() {
+        // Built from an iterator rather than written as `vec![0..n]`, which
+        // reads to clippy as a botched `vec![0; n]` - a fair thing to ask
+        // about, since the two differ by one character and mean quite
+        // different things.
+        return std::iter::once(0..block.runs.len()).collect();
+    }
+    let mut ranges = Vec::with_capacity(block.cells.len());
+    for (i, start) in block.cells.iter().enumerate() {
+        let end = block.cells.get(i + 1).copied().unwrap_or(block.runs.len());
+        let start = (*start).min(block.runs.len());
+        ranges.push(start..end.min(block.runs.len()).max(start));
+    }
+    ranges
+}
+
+fn draw_runs(ui: &mut egui::Ui, block: &markdown::Block, size: f32, heading: bool) {
+    draw_range(ui, block, 0..block.runs.len(), size, heading);
+}
+
+fn draw_range(
+    ui: &mut egui::Ui,
+    block: &markdown::Block,
+    range: std::ops::Range<usize>,
+    size: f32,
+    heading: bool,
+) {
+    use markdown::Style;
+
+    // Runs butt against each other - the parser already put the spaces where
+    // they belong, and egui's own spacing between widgets would insert more.
+    ui.spacing_mut().item_spacing.x = 0.0;
+    for run in &block.runs[range] {
+        if let Some(image) = &run.image {
+            draw_image_placeholder(ui, run, image, size);
+            continue;
+        }
+        // Bold is a colour here, not a weight, and it has to be said
+        // explicitly. egui's own `strong()` defers to the palette, and this
+        // theme sets `override_text_color` - which wins - so `**bold**` came
+        // out looking exactly like the text around it. The default fonts
+        // carry no bold face to fall back on either, so contrast is the
+        // emphasis: away from the background, whichever way that is.
+        let bold = run.style == Style::Strong || run.style == Style::StrongEmphasis;
+        // A heading and a link are both the accent: one is the structure of
+        // the document and the other is a way out of it, and in a panel this
+        // size two accents would be noise rather than information.
+        let colour = if heading || run.href.is_some() {
+            theme::accent()
+        } else if bold {
+            stronger(theme::text())
+        } else {
+            theme::text()
+        };
+
+        let mut text = RichText::new(&run.text).size(size).color(colour);
+        text = match run.style {
+            Style::Plain | Style::Strong => text,
+            Style::Emphasis | Style::StrongEmphasis => text.italics(),
+            Style::Code => text.monospace().background_color(theme::surface_hi()),
+            Style::Strike => text.strikethrough(),
+        };
+        if run.href.is_some() {
+            text = text.underline();
+        }
+
+        let label = ui.label(text);
+        if let Some(href) = run.href.as_deref() {
+            // Shown, not followed. A quick view that opened a browser because
+            // the cursor moved onto a file would be a file manager taking an
+            // action nobody asked for; the target is on hover instead.
+            label.on_hover_text(href);
+        }
+    }
+}
+
+/// An image is named, not fetched.
+fn draw_image_placeholder(
+    ui: &mut egui::Ui,
+    run: &markdown::Run,
+    image: &markdown::Image,
+    size: f32,
+) {
+    let alt = if run.text.is_empty() {
+        "image"
+    } else {
+        run.text.as_str()
+    };
+    let label = ui.label(RichText::new(format!("\u{1F5BC} {alt}")).size(size).color(
+        if image.remote {
+            theme::text_faint()
+        } else {
+            theme::text_dim()
+        },
+    ));
+    if image.remote {
+        // Not squeamishness: a preview that loaded this would tell whoever
+        // hosts it the moment the cursor landed on the file, which is what a
+        // tracking pixel in an email is.
+        label.on_hover_text(format!(
+            "{}\n\nNot loaded - it is somewhere else, and fetching it would say you opened this file.",
+            image.src
+        ));
+    } else {
+        label.on_hover_text(&image.src);
+    }
+}
+
+#[cfg(test)]
+mod document_tests {
+    use super::*;
+
+    fn written(dir: &std::path::Path, name: &str, text: &str) -> PathBuf {
+        let path = dir.join(name);
+        std::fs::write(&path, text).unwrap();
+        path
+    }
+
+    #[test]
+    fn a_markdown_file_arrives_parsed_and_a_text_file_does_not() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let doc = written(dir.path(), "README.md", "# Title\n\nA paragraph.\n");
+        match load(&doc, false) {
+            Loaded::Markdown(blocks) => {
+                assert_eq!(blocks.len(), 2, "a heading and a paragraph");
+                assert_eq!(blocks[0].text(), "Title");
+            }
+            _ => panic!("a .md file should arrive as a parsed document"),
+        }
+
+        // The same bytes under another name are text, and stay text. What
+        // makes a document is the name claiming it - a `#` in a source file
+        // is a comment or a preprocessor line, not a heading.
+        let plain = written(dir.path(), "notes.txt", "# Title\n\nA paragraph.\n");
+        assert!(
+            matches!(load(&plain, false), Loaded::Text(_)),
+            "only files that say they are markdown are parsed as markdown"
+        );
+    }
+
+    #[test]
+    fn a_document_that_cannot_be_read_as_text_still_shows_as_something() {
+        // Invalid UTF-8 under a .md name. The parse needs a `String`, so this
+        // is the branch that falls back rather than giving up - a file that
+        // showed nothing at all would be the viewer refusing to answer a
+        // question it can answer.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("broken.md");
+        std::fs::write(&path, [0xff, 0xfe, 0x00, 0x01, 0x02]).unwrap();
+        assert!(
+            !matches!(load(&path, false), Loaded::Nothing(_)),
+            "something is always shown, even when it is only bytes"
+        );
+    }
+
+    #[test]
+    fn table_cells_are_the_ranges_the_engine_marked() {
+        let blocks = markdown::parse("| a | b |\n| --- | --- |\n| c | d |\n");
+        let row = blocks
+            .iter()
+            .find(|b| matches!(b.kind, markdown::Kind::TableRow { header: true }))
+            .expect("a header row");
+
+        let cells = cells_of(row);
+        assert_eq!(cells.len(), 2, "two columns");
+        // Every run is accounted for exactly once: a cell range that
+        // overlapped or skipped would draw a word twice or lose it.
+        assert_eq!(cells[0].start, 0);
+        assert_eq!(cells[1].end, row.runs.len());
+        assert_eq!(cells[0].end, cells[1].start);
+    }
+
+    #[test]
+    fn a_row_with_no_marked_cells_is_still_one_cell() {
+        // Not a hypothetical: `cells` is skipped when empty, so anything that
+        // is not a table arrives this way, and a `Vec` of no ranges would
+        // draw none of the runs.
+        let block = markdown::Block {
+            kind: markdown::Kind::Paragraph,
+            depth: 0,
+            runs: vec![markdown::Run {
+                text: "alone".into(),
+                style: markdown::Style::Plain,
+                href: None,
+                image: None,
+            }],
+            cells: Vec::new(),
+        };
+        assert_eq!(cells_of(&block), vec![0..1]);
+    }
+
+    #[test]
+    fn emphasis_moves_away_from_the_background_whichever_way_that_is() {
+        let sum = |c: Color32| c.r() as u32 + c.g() as u32 + c.b() as u32;
+
+        theme::set_palette(theme::Palette::midnight());
+        let dim = Color32::from_rgb(0x80, 0x80, 0x80);
+        assert!(
+            sum(stronger(dim)) > sum(dim),
+            "on a dark ground, bold is lighter"
+        );
+
+        theme::set_palette(theme::Palette::paper());
+        assert!(
+            sum(stronger(dim)) < sum(dim),
+            "on a light ground, bold is darker - the same rule, not the same direction"
+        );
+        theme::set_palette(theme::Palette::midnight());
     }
 }
