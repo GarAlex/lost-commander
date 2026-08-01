@@ -1,0 +1,16 @@
+# The engine is developed on both Linux and Windows, so line endings are
+# settled here rather than per-machine. Everything text is stored with LF;
+# what lands in a working copy is core.autocrlf's business, not the repo's.
+* text=auto eol=lf
+
+# Shell scripts must be LF even in a Windows working copy: a CRLF `#!` line
+# makes the kernel look for an interpreter whose name ends in a carriage
+# return, and the error says the file does not exist.
+*.sh text eol=lf
+*.py text eol=lf
+
+# Not text. Named so a diff does not try, and so nothing rewrites bytes.
+*.png binary
+*.zip binary
+*.7z binary
+*.gz binary

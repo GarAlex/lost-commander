@@ -1,0 +1,28 @@
+[package]
+name = "rust-commander-ffi"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+description = "The C ABI the native Windows front-end calls into"
+license = "MIT"
+
+[lib]
+name = "rust_commander_ffi"
+# cdylib for the DLL the C# front-end loads; rlib so the tests below can call
+# the same functions the front-end will.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Without the gui feature: this is loaded by a front-end that draws its own
+# windows, and dragging eframe and an OpenGL stack into it would be absurd.
+rust-commander = { path = "..", default-features = false }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0"
+
+[dev-dependencies]
+tempfile = "3"
+# Only to *write* the fixtures the archive tests read back. The engine reads
+# them with its own reader, so a test that made its own bytes by hand would
+# only be checking that this file agrees with itself about the zip format.
+zip = { version = "2.4", default-features = false, features = ["deflate-flate2", "flate2"] }
+dirs = "6.0.0"
