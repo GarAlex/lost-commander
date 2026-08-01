@@ -161,4 +161,24 @@ Settings, saved locations and the journal live in one directory per platform:
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+Licensed under either of
+
+- MIT ([LICENSE-MIT](LICENSE-MIT))
+- Apache License 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+
+at your option. This is the usual arrangement for Rust projects, and the
+choice is the user's rather than mine: MIT is the shorter one most people
+already know, and Apache-2.0 carries an explicit patent grant that some
+organisations' policies look for.
+
+### Contribution
+
+Unless you state otherwise, any contribution you intentionally submit for
+inclusion in this work, as defined in the Apache-2.0 license, shall be dual
+licensed as above, without any additional terms or conditions.
+
+That sentence is the point of offering both. Under Apache-2.0 a contributor
+licenses the patent claims their contribution reads on — including any their
+employer holds — to everyone downstream. MIT says nothing about patents, so
+without this a contribution could be accepted in good faith and still leave a
+problem for the people using it.
