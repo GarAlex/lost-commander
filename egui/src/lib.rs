@@ -337,6 +337,8 @@ pub struct GuiApp {
     /// Scrolling to it every frame would make the wheel useless - the view
     /// would snap back before the hand left it.
     tree_at: [usize; 2],
+    /// Where each pane's file cursor was last frame, for the same reason.
+    listing_at: [usize; 2],
     /// How much of the width the left pane gets. Dragged on the divider.
     pub split: f32,
     pub bookmarks: Bookmarks,
@@ -504,6 +506,7 @@ impl GuiApp {
             tree_split: 0.45,
             on_tree: [false, false],
             tree_at: [0, 0],
+            listing_at: [0, 0],
             split: 0.5,
             bookmarks,
             bookmarks_path: None,
@@ -2485,6 +2488,10 @@ impl GuiApp {
 
         let mut interacted = false;
         let mut scrolled = false;
+        // Read before it is overwritten, which is the whole point of keeping
+        // it. Setting it first made "has the cursor moved" always false, so
+        // the view never followed the cursor at all.
+        let moved = at != self.tree_at[Self::side_index(side)];
         self.tree_at[Self::side_index(side)] = at;
         let mut toggle: Option<usize> = None;
         let mut navigate_to: Option<PathBuf> = None;
@@ -2507,7 +2514,7 @@ impl GuiApp {
                 // the one moment centring is what you want.
                 ui.scroll_to_rect(rect, Some(Align::Center));
                 scrolled = true;
-            } else if is_cursor && at != self.tree_at[index_of_side] {
+            } else if is_cursor && moved {
                 // Only when the cursor has moved, and only as far as it must:
                 // `None` brings the row into view without re-centring, so the
                 // cursor travels down the screen the way it does in an editor
@@ -2612,6 +2619,13 @@ impl GuiApp {
         let mut open: Option<PathBuf> = None;
         let mut select: Option<(usize, Click)> = None;
 
+        // The listing never followed its cursor: arrow past the bottom row and
+        // the cursor simply left the screen. Unnoticed while a pane was one
+        // long list and the window was usually tall enough; obvious the
+        // moment a tree took half the height.
+        let moved = cursor != self.listing_at[Self::side_index(side)];
+        self.listing_at[Self::side_index(side)] = cursor;
+
         // With a tree up, the directories are the half above this one, and
         // repeating them here would be the same list twice with the cursor
         // ambiguous between them. `..` goes too - climbing is what the tree
@@ -2624,6 +2638,13 @@ impl GuiApp {
             }
             let (rect, response) =
                 ui.allocate_exact_size(Vec2::new(ui.available_width(), ROW_HEIGHT), Sense::click());
+            // Before the visibility check, not after: the row that needs
+            // scrolling to is precisely the one that is not visible.
+            if index == cursor && moved {
+                // Into view rather than centred, so the cursor walks down the
+                // screen and the view only follows when it runs out of room.
+                ui.scroll_to_rect(rect, None);
+            }
             if !ui.is_rect_visible(rect) {
                 continue;
             }

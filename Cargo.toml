@@ -30,7 +30,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.74"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/garalex/lost-commander"
+repository = "https://github.com/GarAlex/lost-commander"
 
 [workspace.dependencies]
 lost-commander-core = { path = "core" }
