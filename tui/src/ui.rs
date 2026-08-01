@@ -32,8 +32,20 @@ pub fn draw(frame: &mut Frame, app: &App) {
     let panes =
         Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(rows[0]);
 
-    draw_pane(frame, panes[0], &app.left, app.active == Side::Left);
-    draw_pane(frame, panes[1], &app.right, app.active == Side::Right);
+    draw_pane(
+        frame,
+        panes[0],
+        &app.left,
+        app.active == Side::Left,
+        app.on_tree[0],
+    );
+    draw_pane(
+        frame,
+        panes[1],
+        &app.right,
+        app.active == Side::Right,
+        app.on_tree[1],
+    );
     draw_status(frame, rows[1], app);
     draw_command_line(frame, rows[2], app);
     draw_keybar(frame, rows[3]);
@@ -1483,16 +1495,16 @@ fn draw_open_with(
 }
 
 /// One pane: its tabs, if it has more than one, and the tab on show.
-fn draw_pane(frame: &mut Frame, area: Rect, tabs: &Tabs, active: bool) {
+fn draw_pane(frame: &mut Frame, area: Rect, tabs: &Tabs, active: bool, on_tree: bool) {
     if tabs.len() < 2 {
         // One tab is not a row of tabs, it is a pane - and drawing a strip
         // over it would cost a line of listing to say nothing.
-        draw_panel(frame, area, tabs.current(), active);
+        draw_panel(frame, area, tabs.current(), active, on_tree);
         return;
     }
     let split = Layout::vertical([Constraint::Length(1), Constraint::Min(3)]).split(area);
     draw_tab_strip(frame, split[0], tabs, active);
-    draw_panel(frame, split[1], tabs.current(), active);
+    draw_panel(frame, split[1], tabs.current(), active, on_tree);
 }
 
 fn draw_tab_strip(frame: &mut Frame, area: Rect, tabs: &Tabs, active: bool) {
@@ -1527,7 +1539,7 @@ fn draw_tab_strip(frame: &mut Frame, area: Rect, tabs: &Tabs, active: bool) {
     frame.render_widget(Paragraph::new(Line::from(spans)).style(theme::base()), area);
 }
 
-fn draw_panel(frame: &mut Frame, area: Rect, panel: &Panel, active: bool) {
+fn draw_panel(frame: &mut Frame, area: Rect, panel: &Panel, active: bool, on_tree: bool) {
     let heading = if panel.in_tree_mode() {
         format!("Tree: {}", panel.cwd.display())
     } else {
@@ -1548,11 +1560,26 @@ fn draw_panel(frame: &mut Frame, area: Rect, panel: &Panel, active: bool) {
         return;
     }
 
+    // With a tree, the pane is two halves: directories above, the files of
+    // wherever you are below. XTree's arrangement, and it was a program for
+    // this screen - a tree that closed itself the moment you chose a
+    // directory is a chooser, not a tree you can work in.
     if let Some(tree) = &panel.tree {
-        draw_tree(frame, inner, tree, active);
+        let halves =
+            Layout::vertical([Constraint::Percentage(45), Constraint::Min(3)]).split(inner);
+        draw_tree(frame, halves[0], tree, active && on_tree);
+        draw_listing(frame, halves[1], panel, active && !on_tree, true);
         return;
     }
+    draw_listing(frame, inner, panel, active, false);
+}
 
+/// The file listing: header row, then the rows themselves.
+///
+/// `files_only` leaves out the directories and `..`, which is what the half
+/// under a tree wants - they are the half above it, and drawing them twice
+/// would be one list repeated with the cursor ambiguous between them.
+fn draw_listing(frame: &mut Frame, inner: Rect, panel: &Panel, active: bool, files_only: bool) {
     // Header row, then the listing below it.
     let split = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(inner);
     let width = inner.width as usize;
@@ -1585,10 +1612,22 @@ fn draw_panel(frame: &mut Frame, area: Rect, panel: &Panel, active: bool) {
         return;
     }
 
-    let items: Vec<ListItem> = panel
+    // The rows this half is showing, and where the cursor sits among them.
+    // Kept as a list of indices rather than filtering in place, because the
+    // cursor is an index into `entries` and the widget wants an index into
+    // what it is drawing - and getting that wrong highlights the wrong file.
+    let shown: Vec<usize> = panel
         .entries
         .iter()
         .enumerate()
+        .filter(|(_, entry)| !files_only || (!entry.is_dir() && !entry.is_parent()))
+        .map(|(index, _)| index)
+        .collect();
+    let selected = shown.iter().position(|index| *index == panel.cursor);
+
+    let items: Vec<ListItem> = shown
+        .iter()
+        .map(|index| (*index, &panel.entries[*index]))
         .map(|(index, entry)| {
             let marker = if entry.marked { '*' } else { ' ' };
             // Symlinks get an ls -F style suffix so they are distinguishable.
@@ -1613,7 +1652,7 @@ fn draw_panel(frame: &mut Frame, area: Rect, panel: &Panel, active: bool) {
         .collect();
 
     let mut state = ListState::default();
-    state.select(Some(panel.cursor));
+    state.select(selected);
     frame.render_stateful_widget(List::new(items).style(theme::base()), split[1], &mut state);
 }
 

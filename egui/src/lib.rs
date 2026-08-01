@@ -2242,6 +2242,17 @@ impl GuiApp {
             Side::Left => 0,
             Side::Right => 1,
         };
+        // One pane: there is nowhere sideways to go, so Tab moves between
+        // this pane's halves. It used to fall through to the code below,
+        // which cleared the flag and then set it straight back - so Tab did
+        // nothing at all, and a key that does nothing reads as broken.
+        if !self.show_right {
+            if self.panel(side).in_tree_mode() {
+                self.on_tree[index] = !self.on_tree[index];
+                self.say_which_half(side);
+            }
+            return;
+        }
         if self.panel(side).in_tree_mode() && !self.on_tree[index] {
             // Up into this pane's tree before leaving the pane. This way
             // round because the keyboard starts in the files: the other way
@@ -2257,15 +2268,6 @@ impl GuiApp {
         // Leaving the pane, so the keyboard goes back to its files - which is
         // where it will be when this pane comes round again.
         self.on_tree[index] = false;
-        if !self.show_right {
-            // Nowhere to go sideways: Tab wraps onto this pane's own halves
-            // rather than doing nothing.
-            if self.panel(side).in_tree_mode() {
-                self.on_tree[index] = true;
-                self.say_which_half(side);
-            }
-            return;
-        }
         self.active = side.other();
         let other = match side.other() {
             Side::Left => 0,
@@ -10055,7 +10057,10 @@ mod tests {
         let (_root, mut app) = fixture();
         app.set_view(Side::Left, ViewMode::Tree);
         // Turning the tree on lands the keyboard in it.
-        assert!(app.on_tree[0], "the tree you just asked for has the keyboard");
+        assert!(
+            app.on_tree[0],
+            "the tree you just asked for has the keyboard"
+        );
 
         // Tree, then this pane's files, then the other pane. Reachable in
         // that order from wherever the keyboard starts, which is the whole
@@ -10091,10 +10096,9 @@ mod tests {
         let (_root, mut app) = fixture();
         app.show_right = false;
         app.set_view(Side::Left, ViewMode::Tree);
-        app.on_tree[0] = true;
+        app.on_tree[0] = false;
 
-        // Nowhere to go sideways, so Tab comes back round to this pane's own
-        // halves rather than doing nothing.
+        // Nowhere to go sideways, so Tab moves between this pane's halves.
         app.run_action(A::SwitchPane);
         assert_eq!(app.active, Side::Left);
         assert!(app.on_tree[0]);
@@ -10180,5 +10184,44 @@ mod tests {
         app.layout_into_settings();
         assert_eq!(app.settings.pane_split, Some(0.7));
         assert_eq!(app.settings.tree_split, Some(0.3));
+    }
+
+    #[test]
+    fn the_tree_moves_with_the_arrows_the_way_a_reader_gets_to_it() {
+        use keys::Action as A;
+        let (_root, mut app) = fixture();
+
+        // Through the key, not through `set_view`. Every test of this walked
+        // in by calling the method or setting the flag, which is why a tree
+        // nobody could reach still passed all of them.
+        app.run_action(A::ViewTree);
+        assert_eq!(app.view(Side::Left), ViewMode::Tree);
+        assert!(app.on_tree[0], "the tree has the keyboard once asked for");
+
+        let before = app.left.current().tree.as_ref().unwrap().cursor;
+        app.run_action(A::CursorDown);
+        assert_ne!(
+            app.left.current().tree.as_ref().unwrap().cursor,
+            before,
+            "Down moves the tree"
+        );
+    }
+
+    #[test]
+    fn tab_walks_the_halves_when_there_is_only_one_pane() {
+        use keys::Action as A;
+        let (_root, mut app) = fixture();
+        app.show_right = false;
+        app.run_action(A::ViewTree);
+        assert!(app.on_tree[0]);
+
+        // With nowhere sideways to go, Tab has to move between the halves or
+        // it does nothing at all - and a key that does nothing reads as
+        // broken.
+        app.run_action(A::SwitchPane);
+        assert!(!app.on_tree[0], "down to the files");
+        app.run_action(A::SwitchPane);
+        assert!(app.on_tree[0], "and back up to the tree");
+        assert_eq!(app.active, Side::Left);
     }
 }

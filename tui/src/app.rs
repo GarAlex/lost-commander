@@ -337,6 +337,11 @@ pub struct App {
     /// Set when a privileged command needs to be run with the TUI suspended,
     /// so its password prompt has the terminal to itself.
     pub pending_shell: Option<String>,
+    /// Whether the keyboard is in a pane's tree half rather than its files.
+    ///
+    /// One flag per side. Two lists in one pane is two cursors, and a reader
+    /// who cannot tell which one an arrow key moves will not trust either.
+    pub on_tree: [bool; 2],
     /// The command being typed, along the bottom of the panels.
     ///
     /// Norton Commander's arrangement, and Midnight Commander's after it: the
@@ -422,6 +427,7 @@ impl App {
             status: String::from("F1 help  Tab switches panels  F10 quits"),
             status_is_error: false,
             should_quit: false,
+            on_tree: [false, false],
             command: String::new(),
             pending_edit: None,
             pending_shell: None,
@@ -2205,6 +2211,11 @@ impl App {
             self.right.cwd().to_path_buf(),
         );
         self.dispatch_key(key);
+        // Whatever that did, the cursor has to end on a row the file half is
+        // drawing. Under a tree it draws files only, so a cursor left on a
+        // directory would be a selection nobody can see - and F5 would copy
+        // something the reader never pointed at.
+        self.snap_to_a_visible_row();
         self.record_visits(before);
     }
 
@@ -2252,17 +2263,83 @@ impl App {
     // ---- tree mode ---------------------------------------------------------
 
     pub fn toggle_tree(&mut self) {
+        let index = self.side_index();
         if self.active_panel().in_tree_mode() {
             self.active_panel_mut().leave_tree_mode();
+            self.on_tree[index] = false;
             self.info("Tree closed");
         } else {
             self.active_panel_mut().enter_tree_mode();
-            self.info("Tree: Enter opens, Right/Left expand/collapse, Ctrl-T closes");
+            // Asking for the tree puts the keyboard in it. Having to press
+            // Tab to reach the thing you just asked for reads as the key not
+            // having worked.
+            self.on_tree[index] = true;
+            self.info("Tree above, files below. Tab moves between them, Alt-T closes");
         }
     }
 
     /// Tree-specific keys. Returns true when the key was consumed, so keys the
     /// tree does not care about (Tab, F10, ...) still reach the normal handler.
+    /// Put the cursor on a row the file half is actually showing.
+    fn snap_to_a_visible_row(&mut self) {
+        for side in [Side::Left, Side::Right] {
+            let panel = match side {
+                Side::Left => self.left.current(),
+                Side::Right => self.right.current(),
+            };
+            if !panel.in_tree_mode() {
+                continue;
+            }
+            let visible =
+                |entry: &lost_commander_core::entry::Entry| !entry.is_dir() && !entry.is_parent();
+            if panel.entries.get(panel.cursor).is_some_and(visible) {
+                continue;
+            }
+            let cursor = panel.cursor;
+            // Nearest first, downwards on a tie: jumping to the top of the
+            // listing every time would throw away where the reader was.
+            let next = panel
+                .entries
+                .iter()
+                .enumerate()
+                .filter(|(_, entry)| visible(entry))
+                .min_by_key(|(index, _)| (index.abs_diff(cursor), usize::from(*index < cursor)))
+                .map(|(index, _)| index);
+            if let Some(index) = next {
+                match side {
+                    Side::Left => self.left.current_mut().cursor_to(index),
+                    Side::Right => self.right.current_mut().cursor_to(index),
+                }
+            }
+        }
+    }
+
+    fn side_index(&self) -> usize {
+        match self.active {
+            Side::Left => 0,
+            Side::Right => 1,
+        }
+    }
+
+    /// Tab: the next thing that takes the keyboard.
+    ///
+    /// With a tree up a pane has two halves and Tab walks them - this pane's
+    /// files, this pane's tree, then the other pane. That order because the
+    /// keyboard starts in the files: the other way round leaves the tree
+    /// reachable only if you are already in it, which is to say never.
+    fn next_half(&mut self) {
+        let index = self.side_index();
+        if self.active_panel().in_tree_mode() && !self.on_tree[index] {
+            self.on_tree[index] = true;
+            self.info("The tree. Tab moves on.");
+            return;
+        }
+        // Leaving the pane, so the keyboard goes back to its files - which is
+        // where it will be when this pane comes round again.
+        self.on_tree[index] = false;
+        self.switch_panel();
+    }
+
     fn handle_tree_key(&mut self, key: KeyEvent) -> bool {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         if ctrl && key.code == KeyCode::Char('t') {
@@ -2294,9 +2371,12 @@ impl App {
                 }
             }
             KeyCode::Enter => {
-                // Jump the panel to the highlighted directory and close the tree.
+                // Move the panel to the highlighted directory and *keep* the
+                // tree. Closing it made this a directory chooser rather than
+                // a tree you work in - and walking from one directory to the
+                // next tagging files as you go is the whole reason to have
+                // one.
                 if let Some(path) = tree.selected_path() {
-                    self.active_panel_mut().leave_tree_mode();
                     self.active_panel_mut().chdir(path.clone());
                     if let Some(error) = self.active_panel().error.clone() {
                         self.error(format!("{}: {error}", path.display()));
@@ -2381,7 +2461,13 @@ impl App {
     fn on_key_normal(&mut self, key: KeyEvent) {
         // The tree takes navigation keys first; anything it ignores falls
         // through to the usual bindings.
-        if self.active_panel().in_tree_mode() && self.handle_tree_key(key) {
+        // Only while the tree half has the keyboard: the files below it are
+        // an ordinary listing, and an arrow key there means what it means
+        // everywhere else.
+        if self.active_panel().in_tree_mode()
+            && self.on_tree[self.side_index()]
+            && self.handle_tree_key(key)
+        {
             return;
         }
 
@@ -2397,7 +2483,7 @@ impl App {
         }
 
         match key.code {
-            KeyCode::Tab => self.switch_panel(),
+            KeyCode::Tab => self.next_half(),
             KeyCode::Up => self.active_panel_mut().move_cursor(-1),
             KeyCode::Down => self.active_panel_mut().move_cursor(1),
             // Before the unguarded pair: match arms are tried in order.
@@ -5172,7 +5258,7 @@ mod tests {
     }
 
     #[test]
-    fn enter_in_the_tree_navigates_and_closes_it() {
+    fn enter_in_the_tree_moves_the_panel_and_keeps_the_tree() {
         let (_root, mut app) = app_fixture();
         let cwd = app.active_panel().cwd.clone();
         app.on_key(alt('t'));
@@ -5191,8 +5277,12 @@ mod tests {
 
         app.on_key(key(KeyCode::Enter));
 
-        assert!(!app.active_panel().in_tree_mode());
         assert_eq!(app.active_panel().cwd, target);
+        // The tree stays. Closing it made this a directory chooser rather
+        // than a tree you can work in, and walking from one directory to the
+        // next tagging files as you go is the whole reason to have one.
+        assert!(app.active_panel().in_tree_mode());
+        assert!(app.on_tree[0], "and the keyboard is still in it");
         assert!(!app.status_is_error, "{}", app.status);
     }
 
