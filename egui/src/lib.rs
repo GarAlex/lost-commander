@@ -450,6 +450,16 @@ impl GuiApp {
         app.bookmarks = Bookmarks::load();
         app.bookmarks_path = Bookmarks::config_path();
         app.settings = Settings::load();
+        // How the reader left the window arranged. Clamped rather than
+        // trusted: a settings file is a text file somebody can edit, and a
+        // split of 40 would put a pane off the edge of the screen with no way
+        // to drag it back.
+        if let Some(split) = app.settings.pane_split {
+            app.split = split.clamp(0.15, 0.85);
+        }
+        if let Some(split) = app.settings.tree_split {
+            app.tree_split = split.clamp(0.15, 0.85);
+        }
         // The account, and a sweep of whatever has aged out of it. Once at
         // startup is the right moment: it is the only time the program is
         // certainly not in the middle of writing to it.
@@ -784,6 +794,28 @@ impl GuiApp {
             self.settings.shell.as_deref(),
             shell::environment_shell().as_deref(),
         )
+    }
+
+    /// Write down how the window is arranged.
+    ///
+    /// Quietly: a divider that could not be saved is not worth interrupting
+    /// anybody over, and the message would land in the status line at the
+    /// exact moment they were looking somewhere else. It will be retried the
+    /// next time anything is dragged.
+    fn remember_layout(&mut self) {
+        self.layout_into_settings();
+        let _ = self.settings.save();
+    }
+
+    /// Copy the arrangement into the settings without writing them.
+    ///
+    /// Split out so it can be tested. A test that called the saving version
+    /// would write the *real* settings file of whoever ran the suite - which
+    /// is not hypothetical: it happened, and it took somebody's chosen theme
+    /// with it.
+    fn layout_into_settings(&mut self) {
+        self.settings.pane_split = Some(self.split);
+        self.settings.tree_split = Some(self.tree_split);
     }
 
     /// Remember a different shell for future commands.
@@ -1543,6 +1575,11 @@ impl eframe::App for GuiApp {
                 if response.double_clicked() {
                     self.split = 0.5;
                 }
+                // Written when the drag ends rather than while it runs: the
+                // other way is a file write every frame the pointer moves.
+                if response.drag_stopped() || response.double_clicked() {
+                    self.remember_layout();
+                }
                 if response.hovered() || response.dragged() {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
                 }
@@ -2298,6 +2335,9 @@ impl GuiApp {
         }
         if response.dragged() && total > 0.0 {
             self.tree_split = (self.tree_split + response.drag_delta().y / total).clamp(0.15, 0.85);
+        }
+        if response.drag_stopped() {
+            self.remember_layout();
         }
 
         let files_id = match side {
@@ -10084,5 +10124,38 @@ mod tests {
                 "a cursor on a directory is a selection nobody can see"
             );
         }
+    }
+
+    #[test]
+    fn a_settings_file_cannot_push_a_pane_off_the_screen() {
+        // Clamped rather than trusted. A settings file is a text file
+        // somebody can edit, and a split of 40 would leave one pane with the
+        // whole window and the divider somewhere off the right-hand edge -
+        // with no way to drag it back, because there is nothing to grab.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.toml");
+        let settings = lost_commander_core::config::Settings {
+            pane_split: Some(40.0),
+            tree_split: Some(-3.0),
+            ..Default::default()
+        };
+        settings.save_to(&path).unwrap();
+
+        let read = lost_commander_core::config::Settings::load_from(&path).unwrap();
+        let split = read.pane_split.unwrap().clamp(0.15, 0.85);
+        let tree = read.tree_split.unwrap().clamp(0.15, 0.85);
+        assert!((0.15..=0.85).contains(&split));
+        assert!((0.15..=0.85).contains(&tree));
+    }
+
+    #[test]
+    fn the_layout_that_is_written_down_is_the_one_on_screen() {
+        let (_root, mut app) = fixture();
+        app.split = 0.7;
+        app.tree_split = 0.3;
+        // Not `remember_layout`, which saves: see the note on it.
+        app.layout_into_settings();
+        assert_eq!(app.settings.pane_split, Some(0.7));
+        assert_eq!(app.settings.tree_split, Some(0.3));
     }
 }

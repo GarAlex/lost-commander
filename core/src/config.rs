@@ -47,6 +47,13 @@ pub struct Settings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pane_split: Option<f32>,
 
+    /// How much of a pane's height the tree half gets, when it has one.
+    ///
+    /// A fraction for the same reason as [`Settings::pane_split`]: it means
+    /// the same thing on a resized window and on a different monitor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tree_split: Option<f32>,
+
     /// How tall the shell drawer is, in the front-end's own units.
     ///
     /// Points here, because a drawer's useful height is "eight lines of
@@ -154,6 +161,13 @@ impl Settings {
         std::fs::write(path, text)
     }
 
+    /// Write these settings to the user's own configuration file.
+    ///
+    /// **Never call this from a test.** It writes the real file belonging to
+    /// whoever ran the suite, and a test that did so once took somebody's
+    /// chosen theme with it. Tests want [`Settings::save_to`] and a temporary
+    /// directory; front-ends that want to test the *deciding* should split it
+    /// from the saving, as `remember_layout` does.
     pub fn save(&self) -> io::Result<()> {
         let path = Self::config_path()
             .ok_or_else(|| io::Error::other("no config directory on this platform"))?;
