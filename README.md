@@ -3,8 +3,8 @@
 A dual-pane file manager in Rust, in the Norton Commander tradition, with two
 front-ends over one engine. It runs unchanged on **Linux, macOS and Windows**.
 
-- **`rcmd`** — a terminal UI. Two panes, function keys, no mouse required.
-- **`rcmd-gui`** — a graphical view laid out for a pointer rather than a
+- **`lostc`** — a terminal UI. Two panes, function keys, no mouse required.
+- **`lostc-gui`** — a graphical view laid out for a pointer rather than a
   teletype: a sidebar, a breadcrumb trail, per-pane list/grid/tree views, and
   a real shell in a drawer along the bottom.
 
@@ -30,7 +30,34 @@ panel.rs  5.66K  25.07.26 04:42  [2 marked, 14.6K]  (sort: name)
 
 ## The graphical view
 
-![rcmd-gui](docs/rcmd-gui.png)
+![lostc-gui](docs/lostc-gui.png)
+
+## Installing
+
+Nothing is packaged yet; this is the first release. From source:
+
+```sh
+cargo install lost-commander-tui     # lostc, the terminal one
+cargo install lost-commander-egui    # lostc-gui, the graphical one
+```
+
+`packaging/` holds what a distribution package needs: man pages, completions
+for bash, zsh and fish, a desktop entry, AppStream metainfo and an icon. A
+package should install them as:
+
+```
+packaging/lostc.1                        -> /usr/share/man/man1/
+packaging/lostc-gui.1                    -> /usr/share/man/man1/
+packaging/completions/lostc.bash         -> /usr/share/bash-completion/completions/lostc
+packaging/completions/_lostc             -> /usr/share/zsh/site-functions/
+packaging/completions/lostc.fish         -> /usr/share/fish/vendor_completions.d/
+packaging/lostc-gui.desktop              -> /usr/share/applications/
+packaging/io.github.garalex.lost-commander.metainfo.xml -> /usr/share/metainfo/
+packaging/io.github.garalex.lost-commander.svg          -> /usr/share/icons/hicolor/scalable/apps/
+```
+
+The desktop entry, the metainfo id and the icon filename all have to keep
+agreeing, or a software centre shows an entry with no icon.
 
 ## Building
 
@@ -47,17 +74,17 @@ for the other. The terminal binary pulls in no windowing or GPU dependency at
 all:
 
 ```sh
-cargo build --release -p lost-commander-tui    # rcmd alone
-cargo build --release -p lost-commander-egui   # rcmd-gui alone
+cargo build --release -p lost-commander-tui    # lostc alone
+cargo build --release -p lost-commander-egui   # lostc-gui alone
 ```
 
 ## Running the terminal front-end
 
 ```sh
-cargo run --bin rcmd                      # the current directory in both panes
-cargo run --bin rcmd -- ~/src ~/documents # explicit left and right
-cargo run --bin rcmd -- --list ~/src      # print a listing and exit
-cargo run --bin rcmd -- --help
+cargo run --bin lostc                      # the current directory in both panes
+cargo run --bin lostc -- ~/src ~/documents # explicit left and right
+cargo run --bin lostc -- --list ~/src      # print a listing and exit
+cargo run --bin lostc -- --help
 ```
 
 ```
@@ -74,12 +101,12 @@ it useful for a quick check that a build works, and for scripting.
 ## Running the graphical front-end
 
 ```sh
-cargo run --bin rcmd-gui                        # current directory
-cargo run --bin rcmd-gui -- ~/src ~/documents   # explicit left and right
-cargo run --bin rcmd-gui -- --grid              # start both panes in the icon grid
-cargo run --bin rcmd-gui -- --tree              # tree above the files, XTree's arrangement
-cargo run --bin rcmd-gui -- --preview           # right pane follows the left, as F3 does
-cargo run --bin rcmd-gui -- --help
+cargo run --bin lostc-gui                        # current directory
+cargo run --bin lostc-gui -- ~/src ~/documents   # explicit left and right
+cargo run --bin lostc-gui -- --grid              # start both panes in the icon grid
+cargo run --bin lostc-gui -- --tree              # tree above the files, XTree's arrangement
+cargo run --bin lostc-gui -- --preview           # right pane follows the left, as F3 does
+cargo run --bin lostc-gui -- --help
 ```
 
 Each pane carries its own view switch in its header — a dense detail list, a
@@ -90,7 +117,7 @@ There is one more argument, and it is how the view gets checked without a
 human at the screen:
 
 ```sh
-cargo run --bin rcmd-gui -- --screenshot shot.png ~/src ~/documents
+cargo run --bin lostc-gui -- --screenshot shot.png ~/src ~/documents
 ```
 
 It renders a few frames, writes a PNG and exits. The picture above was made
@@ -108,11 +135,11 @@ The terminal one is not a cut-down version of the graphical one - it came
 first, and it is the portable one. What it does not do is mostly what a
 terminal cannot, plus one thing not yet built:
 
-| | `rcmd` | `rcmd-gui` | why |
+| | `lostc` | `lostc-gui` | why |
 |---|---|---|---|
 | File-type icons, grid of large icons | — | yes | there is no grid of icons in a terminal |
 | Image viewing, and crop/rotate/resize | — | yes | same |
-| Built-in text editor | — | yes | `rcmd` hands the file to `$EDITOR`, which already knows your settings |
+| Built-in text editor | — | yes | `lostc` hands the file to `$EDITOR`, which already knows your settings |
 | A shell, with its commands recorded | — | yes | not built for the terminal yet — see below |
 | Session recording (`rec`) | — | yes | it records that shell, so it needs one |
 | Named colour schemes | one | several | the terminal view uses the classic blue/cyan palette, and a terminal has its own colours anyway |
@@ -127,13 +154,13 @@ line along the bottom of the panels, keep a real shell running underneath,
 and toggle to its screen with `Ctrl-O` - with the current directory shared
 both ways, so `cd` on the command line moves the panel and moving the panel
 `cd`s the shell. That is a different integration from the graphical view's
-drawer, and a better one for a terminal. `rcmd` has neither, and that is a
+drawer, and a better one for a terminal. `lostc` has neither, and that is a
 gap rather than a decision.
 
 ## Testing
 
 ```sh
-cargo test                     # all 986, from the workspace root
+cargo test                     # all 1002, from the workspace root
 ```
 
 From the root that is everything, because the root is a virtual manifest and
@@ -144,9 +171,9 @@ say `cargo test --workspace` there if you meant all of it.
 Per crate, when you want a fast loop:
 
 ```sh
-cargo test -p lost-commander-core    # 607 - the engine, seconds to build
-cargo test -p lost-commander-egui    # 181 - the graphical view
-cargo test -p lost-commander-tui     #  92 - the terminal view
+cargo test -p lost-commander-core    # 611 - the engine, seconds to build
+cargo test -p lost-commander-egui    # 190 - the graphical view
+cargo test -p lost-commander-tui     #  95 - the terminal view
 cargo test -p lost-commander-ffi     # 106 - the C ABI
 ```
 
@@ -175,8 +202,8 @@ on none of them, and the compiler is what keeps it that way.
 
 ```
 core/    the engine — filesystem and state, no drawing
-tui/     rcmd      — ratatui + crossterm
-egui/    rcmd-gui  — eframe/egui
+tui/     lostc      — ratatui + crossterm
+egui/    lostc-gui  — eframe/egui
 ffi/     a C ABI, for front-ends that are not written in Rust
 ```
 

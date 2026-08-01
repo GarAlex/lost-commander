@@ -1,8 +1,8 @@
 //! The engine behind lost-commander, with no user interface attached.
 //!
 //! Everything here is pure filesystem and state logic, which is what makes a
-//! second front-end possible: the terminal UI (`rcmd`) and the graphical one
-//! (`rcmd-gui`) are two thin shells over exactly the same code.
+//! second front-end possible: the terminal UI (`lostc`) and the graphical one
+//! (`lostc-gui`) are two thin shells over exactly the same code.
 
 pub mod apps;
 pub mod archive;

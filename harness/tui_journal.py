@@ -5,7 +5,7 @@ import pyte
 
 BIN = os.environ.get(
     "BIN",
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "target", "debug", "rcmd"),
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "target", "debug", "lostc"),
 )
 WORK = "/tmp/tmwork"
 CONF = "/tmp/tmconfig"
@@ -37,7 +37,7 @@ pid, fd = pty.fork()
 if pid == 0:
     os.environ["TERM"] = "xterm-256color"
     os.environ["XDG_CONFIG_HOME"] = CONF
-    os.execv(BIN, ["rcmd", f"{WORK}/from", f"{WORK}/to"])
+    os.execv(BIN, ["lostc", f"{WORK}/from", f"{WORK}/to"])
 fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", ROWS, COLS, 0, 0))
 
 

@@ -6,8 +6,8 @@ review.
 
 | | |
 |---|---|
-| `gui_archives.sh` | drives `rcmd-gui` under Xvfb with `xdotool`, screenshots with `scrot` |
-| `tui_journal.py`  | drives `rcmd` on a real pty, reading the screen with `pyte` |
+| `gui_archives.sh` | drives `lostc-gui` under Xvfb with `xdotool`, screenshots with `scrot` |
+| `tui_journal.py`  | drives `lostc` on a real pty, reading the screen with `pyte` |
 
 Both build their own fixtures and clean up after themselves. Point `BIN` at a
 different binary to run them against one.
@@ -23,7 +23,7 @@ python3 ./harness/tui_journal.py   # needs pyte
 **Killing Xvfb in the same shell call that writes a script via heredoc kills
 the wrapper** (exit 144). Write the script in one call, run it in another.
 
-**`pkill -f rcmd` matches background task wrappers.** Use `pkill -x rcmd`.
+**`pkill -f lostc` matches background task wrappers.** Use `pkill -x lostc`.
 
 ## One thing that looks like a bug and is not
 

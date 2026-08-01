@@ -256,7 +256,7 @@ fn run_thumbnailer(path: &Path, platform: Platform, thumbnailers: &[Thumbnailer]
 
 /// A scratch directory for a thumbnailer to write into.
 fn tempdir() -> std::io::Result<PathBuf> {
-    let base = std::env::temp_dir().join("rcmd-preview");
+    let base = std::env::temp_dir().join("lostc-preview");
     std::fs::create_dir_all(&base)?;
     // The process id and a counter keep two panels from colliding.
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);

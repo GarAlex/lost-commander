@@ -1,0 +1,25 @@
+#compdef lostc lostc-gui
+# zsh completion for lost-commander.
+
+_lostc() {
+  case "$service" in
+    lostc)
+      _arguments -s \
+        '(-h --help)'{-h,--help}'[print a summary of the keys and exit]' \
+        '(-V --version)'{-V,--version}'[print the version and exit]' \
+        '--list[print a directory listing and exit]' \
+        '*:directory:_directories'
+      ;;
+    lostc-gui)
+      _arguments -s \
+        '(-h --help)'{-h,--help}'[print a summary and exit]' \
+        '(-V --version)'{-V,--version}'[print the version and exit]' \
+        '--grid[start both panes in the icon grid]' \
+        '--tree[start with the tree above the files]' \
+        '--preview[start the right pane following the left]' \
+        '--screenshot[render a few frames to a PNG and exit]:file:_files -g "*.png"' \
+        '*:directory:_directories'
+      ;;
+  esac
+}
+_lostc "$@"

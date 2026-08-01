@@ -1,4 +1,4 @@
-//! rcmd - a Norton Commander-style dual-pane file manager.
+//! lostc - a Norton Commander-style dual-pane file manager.
 //!
 //! Portability note: every terminal interaction goes through crossterm, which
 //! supports the Windows console (ConPTY), macOS and Linux with the same code.
@@ -32,7 +32,7 @@ fn main() -> io::Result<()> {
             return Ok(());
         }
         Some("-V") | Some("--version") => {
-            println!("rcmd {VERSION}");
+            println!("lostc {VERSION}");
             return Ok(());
         }
         // Headless listing: prints what a panel would show. Useful for
@@ -53,12 +53,12 @@ fn main() -> io::Result<()> {
 
 fn print_usage() {
     println!(
-        "rcmd {VERSION} - dual-pane terminal file manager
+        "lostc {VERSION} - dual-pane terminal file manager
 
 USAGE:
-    rcmd [LEFT_DIR] [RIGHT_DIR]
-    rcmd --list [DIR]      print a directory listing and exit
-    rcmd --help | --version
+    lostc [LEFT_DIR] [RIGHT_DIR]
+    lostc --list [DIR]      print a directory listing and exit
+    lostc --help | --version
 
 KEYS:
     Tab switch panel      Enter open      Backspace parent

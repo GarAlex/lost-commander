@@ -1,4 +1,4 @@
-//! rcmd-gui - the graphical front-end.
+//! lostc-gui - the graphical front-end.
 //!
 //! A thin shell: window setup, arguments, and handing control to
 //! [`lost_commander_egui::GuiApp`]. Everything it does to the filesystem comes
@@ -18,12 +18,12 @@ fn main() -> eframe::Result<()> {
         Some("-h") | Some("--help")
     ) {
         println!(
-            "rcmd-gui {VERSION} - graphical dual-pane file manager
+            "lostc-gui {VERSION} - graphical dual-pane file manager
 
 USAGE:
-    rcmd-gui [--grid] [--tree] [--preview] [LEFT_DIR] [RIGHT_DIR]
-    rcmd-gui --screenshot FILE.png [LEFT_DIR] [RIGHT_DIR]
-    rcmd-gui --help | --version
+    lostc-gui [--grid] [--tree] [--preview] [LEFT_DIR] [RIGHT_DIR]
+    lostc-gui --screenshot FILE.png [LEFT_DIR] [RIGHT_DIR]
+    lostc-gui --help | --version
 
     --grid starts both panes in the icon grid instead of the detail list.
     Each pane also has its own list / grid / tree switch in its header.
@@ -44,7 +44,7 @@ USAGE:
         args.first().map(String::as_str),
         Some("-V") | Some("--version")
     ) {
-        println!("rcmd-gui {VERSION}");
+        println!("lostc-gui {VERSION}");
         return Ok(());
     }
 

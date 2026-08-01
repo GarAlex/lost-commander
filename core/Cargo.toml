@@ -7,6 +7,9 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+keywords = ["filesystem", "file-manager", "norton-commander", "tui", "archive"]
+categories = ["filesystem", "command-line-utilities"]
 
 [lib]
 name = "lost_commander_core"

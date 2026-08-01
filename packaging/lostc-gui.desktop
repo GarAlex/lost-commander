@@ -1,0 +1,17 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=lost-commander
+GenericName=File Manager
+Comment=Dual-pane file manager in the Norton Commander tradition
+Exec=lostc-gui %U
+TryExec=lostc-gui
+Icon=io.github.garalex.lost-commander
+Terminal=false
+Categories=System;FileTools;FileManager;Utility;
+Keywords=file;manager;commander;norton;xtree;dual;pane;archive;
+StartupNotify=true
+# A file manager is what a desktop hands a directory to, so it claims the
+# directory type and nothing else: claiming every file type would make it the
+# default opener for things it only lists.
+MimeType=inode/directory;

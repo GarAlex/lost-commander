@@ -664,7 +664,7 @@ pub struct Applied {
 fn aside(path: &Path) -> PathBuf {
     let mut n = 0u32;
     loop {
-        let candidate = path.with_file_name(format!(".rcmd-rename-{n}"));
+        let candidate = path.with_file_name(format!(".lostc-rename-{n}"));
         if !candidate.exists() {
             return candidate;
         }
@@ -1164,7 +1164,7 @@ mod tests {
     #[test]
     fn apply_renames_and_reports_what_it_could_not() {
         let dir = std::env::temp_dir().join(format!(
-            "rcmd-rename-test-{}-{:?}",
+            "lostc-rename-test-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
         ));
@@ -1201,7 +1201,7 @@ mod tests {
         assert_eq!(std::fs::read_to_string(dir.join("a")).unwrap(), "b");
         assert_eq!(std::fs::read_to_string(dir.join("b")).unwrap(), "a");
         assert!(
-            !dir.join(".rcmd-rename-0").exists(),
+            !dir.join(".lostc-rename-0").exists(),
             "the temporary is not left behind"
         );
 

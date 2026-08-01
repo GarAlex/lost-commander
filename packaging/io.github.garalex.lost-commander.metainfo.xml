@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  AppStream metainfo. This is what puts the program in a software centre and
+  what Flatpak requires; without it the desktop entry alone gets you a menu
+  item and nothing more.
+
+  The id matches the desktop file and the icon name, and all three have to
+  agree or the software centre shows an entry with no icon.
+-->
+<component type="desktop-application">
+  <id>io.github.garalex.lost-commander</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT OR Apache-2.0</project_license>
+
+  <name>lost-commander</name>
+  <summary>Dual-pane file manager in the Norton Commander tradition</summary>
+
+  <description>
+    <p>
+      A file manager with two directory panels side by side: one where things
+      are, one where they are going. Copy, move, delete and compare run with
+      live progress and can be cancelled; archives open as directories; and an
+      account is kept of what was done.
+    </p>
+    <p>
+      Each pane can be a dense detail list, a grid of large icons, the
+      directory tree above its files, or a quick view of whatever the other
+      pane is pointing at. Text, markdown, images and raw bytes all preview in
+      place, and bytes can be edited.
+    </p>
+    <p>
+      There is a terminal front-end as well, called lostc, over exactly the
+      same engine.
+    </p>
+    <p>Also included:</p>
+    <ul>
+      <li>Folder compare and synchronise, and a duplicate finder</li>
+      <li>Find by name and by contents</li>
+      <li>A real shell in a drawer, with its commands recorded</li>
+      <li>Tabs, bookmarks, and network locations</li>
+      <li>Reading zip, tar, 7z and lha archives</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">lostc-gui.desktop</launchable>
+
+  <url type="homepage">https://github.com/GarAlex/lost-commander</url>
+  <url type="bugtracker">https://github.com/GarAlex/lost-commander/issues</url>
+
+  <developer id="io.github.garalex">
+    <name>Alexander Garmash</name>
+  </developer>
+
+  <content_rating type="oars-1.1" />
+
+  <categories>
+    <category>System</category>
+    <category>Utility</category>
+  </categories>
+
+  <keywords>
+    <keyword>file manager</keyword>
+    <keyword>commander</keyword>
+    <keyword>norton</keyword>
+    <keyword>xtree</keyword>
+    <keyword>dual pane</keyword>
+  </keywords>
+
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </supports>
+
+  <releases>
+    <release version="0.1.0" date="2026-08-01">
+      <description>
+        <p>First release.</p>
+      </description>
+    </release>
+  </releases>
+</component>

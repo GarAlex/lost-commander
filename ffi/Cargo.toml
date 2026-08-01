@@ -6,6 +6,9 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+keywords = ["ffi", "file-manager", "bindings", "c-api"]
+categories = ["api-bindings", "filesystem"]
 
 [lib]
 name = "lost_commander_ffi"

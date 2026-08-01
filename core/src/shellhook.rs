@@ -796,7 +796,7 @@ fn install_fish(dir: PathBuf, nonce: &str) -> std::io::Result<Installed> {
 }
 
 fn install_powershell(dir: PathBuf, nonce: &str) -> std::io::Result<Installed> {
-    let profile = dir.join("rcmd-profile.ps1");
+    let profile = dir.join("lostc-profile.ps1");
     std::fs::write(&profile, powershell_script(nonce))?;
     Ok(Installed {
         // -NoExit keeps the shell after the file runs, which is the whole
@@ -1346,7 +1346,7 @@ mod tests {
     #[test]
     fn powershell_gets_a_profile_it_is_told_to_run_and_stay() {
         let installed = install("pwsh", false).unwrap().expect("hooked");
-        let profile = installed.dir().join("rcmd-profile.ps1");
+        let profile = installed.dir().join("lostc-profile.ps1");
         assert!(profile.exists());
 
         // -NoExit or the shell runs the hook and quits, which would be a

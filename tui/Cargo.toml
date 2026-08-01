@@ -6,9 +6,12 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+keywords = ["file-manager", "tui", "norton-commander", "terminal", "ratatui"]
+categories = ["command-line-utilities", "filesystem"]
 
 [[bin]]
-name = "rcmd"
+name = "lostc"
 path = "src/main.rs"
 
 [dependencies]

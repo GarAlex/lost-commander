@@ -3,8 +3,8 @@ resolver = "2"
 # Four crates, one repository, one history.
 #
 #   core   the engine - filesystem and state, no user interface at all
-#   tui    rcmd      - ratatui + crossterm
-#   egui   rcmd-gui  - eframe/egui, the Linux one
+#   tui    lostc      - ratatui + crossterm
+#   egui   lostc-gui  - eframe/egui, the Linux one
 #   ffi    the C ABI, for front-ends that are not written in Rust
 #
 # They are separate crates rather than modules of one so the dependency
@@ -27,13 +27,17 @@ members = ["core", "tui", "egui", "ffi"]
 # between the front-ends.
 [workspace.package]
 version = "0.1.0"
+homepage = "https://github.com/GarAlex/lost-commander"
 edition = "2021"
 rust-version = "1.74"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/GarAlex/lost-commander"
 
 [workspace.dependencies]
-lost-commander-core = { path = "core" }
+# The version is not optional: a path dependency without one cannot be
+# published, because whoever installs from crates.io has no `core/` directory
+# to point at. Bump both together.
+lost-commander-core = { path = "core", version = "0.1.0" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }

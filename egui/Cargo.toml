@@ -6,6 +6,9 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+keywords = ["file-manager", "gui", "egui", "norton-commander", "xtree"]
+categories = ["gui", "filesystem"]
 
 # A library and a binary: the window and its widgets are the library, so the
 # tests can drive them without opening one, and `main.rs` is the thin shell
@@ -15,7 +18,7 @@ name = "lost_commander_egui"
 path = "src/lib.rs"
 
 [[bin]]
-name = "rcmd-gui"
+name = "lostc-gui"
 path = "src/main.rs"
 
 [dependencies]

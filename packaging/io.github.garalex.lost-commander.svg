@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Two panels side by side, one of them holding the cursor bar. The whole idea
+  of the program in the only shape that survives being drawn at 16 pixels:
+  anything with a folder or a document in it becomes mud at that size, and the
+  two panels stay legible because they are just blocks.
+
+  Blue ground and a cyan bar, which is what a Commander looked like.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <rect width="128" height="128" rx="24" fill="#00009c"/>
+
+  <!-- left panel, with the cursor on its second row -->
+  <g fill="#5ae6e6">
+    <rect x="20" y="28" width="38" height="5" rx="2.5"/>
+    <rect x="20" y="52" width="38" height="5" rx="2.5" opacity="0.55"/>
+    <rect x="20" y="64" width="30" height="5" rx="2.5" opacity="0.55"/>
+    <rect x="20" y="76" width="34" height="5" rx="2.5" opacity="0.55"/>
+    <rect x="20" y="88" width="26" height="5" rx="2.5" opacity="0.55"/>
+  </g>
+  <rect x="16" y="38" width="46" height="9" rx="3" fill="#009c9c"/>
+  <rect x="20" y="40.5" width="30" height="4" rx="2" fill="#f5f55a"/>
+
+  <!-- right panel -->
+  <g fill="#5ae6e6" opacity="0.55">
+    <rect x="70" y="28" width="38" height="5" rx="2.5" opacity="1"/>
+    <rect x="70" y="40" width="32" height="5" rx="2.5"/>
+    <rect x="70" y="52" width="38" height="5" rx="2.5"/>
+    <rect x="70" y="64" width="28" height="5" rx="2.5"/>
+    <rect x="70" y="76" width="35" height="5" rx="2.5"/>
+    <rect x="70" y="88" width="24" height="5" rx="2.5"/>
+  </g>
+
+  <!-- the divider between them, and the function-key row along the bottom -->
+  <rect x="63" y="24" width="2" height="74" rx="1" fill="#3eb8c4" opacity="0.6"/>
+  <rect x="16" y="104" width="96" height="7" rx="3" fill="#f5f55a" opacity="0.85"/>
+</svg>

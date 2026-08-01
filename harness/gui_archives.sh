@@ -4,8 +4,8 @@ set -u
 export DISPLAY=:99
 export LIBGL_ALWAYS_SOFTWARE=1
 export XDG_CONFIG_HOME=/tmp/aconfig
-SHOT="${SHOT:-/tmp/rcmd-shots}"; mkdir -p "$SHOT"
-BIN="${BIN:-$(dirname "$0")/../target/debug/rcmd-gui}"
+SHOT="${SHOT:-/tmp/lostc-shots}"; mkdir -p "$SHOT"
+BIN="${BIN:-$(dirname "$0")/../target/debug/lostc-gui}"
 
 rm -f "$SHOT"/arch-*.png
 rm -rf /tmp/awork /tmp/aconfig
@@ -20,7 +20,7 @@ head -c 200000 /dev/urandom > /tmp/awork/build/docs/blob.bin
 rm -rf /tmp/awork/build
 ls -1 /tmp/awork/here
 
-pkill -x rcmd-gui 2>/dev/null; pkill -f Xvfb 2>/dev/null; sleep 2
+pkill -x lostc-gui 2>/dev/null; pkill -f Xvfb 2>/dev/null; sleep 2
 Xvfb :99 -screen 0 1400x860x24 >/dev/null 2>&1 &
 sleep 2
 "$BIN" /tmp/awork/here /tmp/awork/there >/dev/null 2>&1 &

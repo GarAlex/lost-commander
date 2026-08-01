@@ -1,0 +1,79 @@
+.TH LOSTC\-GUI 1 "2026-08-01" "lost-commander 0.1.0" "User Commands"
+.SH NAME
+lostc\-gui \- dual-pane file manager, graphical
+.SH SYNOPSIS
+.B lostc\-gui
+.RB [ \-\-grid ]
+.RB [ \-\-tree ]
+.RB [ \-\-preview ]
+.RI [ LEFT_DIR ]
+.RI [ RIGHT_DIR ]
+.br
+.B lostc\-gui
+.B \-\-screenshot
+.I FILE.png
+.RI [ LEFT_DIR ]
+.RI [ RIGHT_DIR ]
+.br
+.B lostc\-gui
+.RB [ \-\-help | \-\-version ]
+.SH DESCRIPTION
+.B lostc\-gui
+is the graphical view of the same file manager as
+.BR lostc (1),
+laid out for a pointer rather than a teletype: a sidebar of places, a
+breadcrumb trail, per-pane views, and a real shell in a drawer along the
+bottom.
+.PP
+Each pane carries its own view switch in its header \- a dense detail list, a
+grid of large icons, the directory tree above its files, or a preview of
+whatever the other pane is pointing at.
+.SH OPTIONS
+.TP
+.B \-\-grid
+Start both panes in the icon grid instead of the detail list.
+.TP
+.B \-\-tree
+Start the left pane with the directory tree above its files, which is XTree's
+arrangement: walk directories above, tag files below.
+.TP
+.B \-\-preview
+Start the right pane showing whatever the left one is pointing at, which is
+what \fBF3\fR does.
+.TP
+.B \-\-screenshot " " \fIFILE.png\fR
+Render a few frames, write a PNG and exit. This is how the view is checked
+without a human at the screen.
+.TP
+.BR \-h ", " \-\-help
+Print a summary and exit.
+.TP
+.BR \-V ", " \-\-version
+Print the version and exit.
+.SH KEYS
+The function keys do what they do in
+.BR lostc (1).
+In addition:
+.TP
+.B F3
+Preview in the other pane, following the cursor. With one pane it opens the
+second to hold the preview and folds it away again afterwards.
+.TP
+.B F12
+One pane, or two.
+.TP
+.BR Ctrl\-1 ", " Ctrl\-2 ", " Ctrl\-3
+List, grid, tree.
+.TP
+.B Ctrl\-G
+In the byte editor, jump to a typed offset.
+.SH FILES
+The same as
+.BR lostc (1).
+The two front-ends share their settings, bookmarks and journal.
+.SH SEE ALSO
+.BR lostc (1)
+.SH AUTHOR
+Alexander Garmash.
+.SH BUGS
+Report at https://github.com/GarAlex/lost-commander/issues

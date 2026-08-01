@@ -278,7 +278,7 @@ pub fn macos_command(paths: &[PathBuf]) -> Launch {
 /// status for a whole batch cannot say *which* file would not go - and "some
 /// of these failed" is the kind of answer that reads like an answer while
 /// telling you nothing.
-const REPORT: &str = "rcmd-trash";
+const REPORT: &str = "lostc-trash";
 
 /// How long the generated script may get, in characters.
 ///

@@ -1,0 +1,108 @@
+.TH LOSTC 1 "2026-08-01" "lost-commander 0.1.0" "User Commands"
+.SH NAME
+lostc \- dual-pane terminal file manager
+.SH SYNOPSIS
+.B lostc
+.RI [ LEFT_DIR ]
+.RI [ RIGHT_DIR ]
+.br
+.B lostc
+.B \-\-list
+.RI [ DIR ]
+.br
+.B lostc
+.RB [ \-\-help | \-\-version ]
+.SH DESCRIPTION
+.B lostc
+is a file manager in the Norton Commander tradition: two directory panels
+side by side, function keys along the bottom, and a command line under the
+panels. Everything it does to the filesystem is shared with
+.BR lostc\-gui (1),
+which is the same program drawn in a window.
+.PP
+With no arguments both panels open on the current directory. One argument
+sets the left panel, two set both.
+.SH OPTIONS
+.TP
+.B \-\-list " " [\fIDIR\fR]
+Print what a panel would show for \fIDIR\fR and exit. The whole listing
+pipeline with no terminal attached, which makes it useful for scripting and
+for checking that a build works.
+.TP
+.BR \-h ", " \-\-help
+Print a summary of the keys and exit.
+.TP
+.BR \-V ", " \-\-version
+Print the version and exit.
+.SH KEYS
+.TP
+.B Tab
+The other panel.
+.TP
+.B Enter
+Open: descend into a directory, walk into an archive, or hand a file to the
+desktop.
+.TP
+.B Backspace
+The parent directory, when nothing is typed on the command line.
+.TP
+.BR F1 - F10
+Help, rename, view, edit, copy, move, mkdir, delete, sort, quit.
+.B F10
+is the only way to quit: letters go to the command line.
+.TP
+.B Space
+Mark the file under the cursor, when nothing is typed.
+.TP
+.B Ctrl\-H
+Show or hide hidden files.
+.TP
+.B Alt\-T
+The directory tree, above the files. \fBEnter\fR opens a directory and drops
+into its files; \fBEscape\fR climbs back to the tree.
+.TP
+.B Ctrl\-J
+The journal: an account of what has been done.
+.SH COMMAND LINE
+Typing goes to the command line under the panels, and \fBEnter\fR runs it in
+the directory the panel is showing. The program hands the terminal over while
+it runs, so interactive commands, colour and pagers all work, and waits for a
+key before taking the screen back.
+.PP
+An empty command line means the panels: \fBSpace\fR marks, \fBBackspace\fR
+climbs, \fBEscape\fR returns to the tree. Once something is typed they are
+characters.
+.SH FILES
+.TP
+.I ~/.config/lost\-commander/settings.toml
+Settings: theme, chosen shell, window arrangement.
+.TP
+.I ~/.config/lost\-commander/bookmarks.toml
+Saved local and network locations.
+.TP
+.I ~/.config/lost\-commander/journal/
+The account of what was done, one file a day.
+.PP
+On macOS these are under
+.IR ~/Library/Application\ Support/lost\-commander/ ,
+and on Windows under
+.IR %APPDATA%\\lost\-commander\\ .
+.SH ENVIRONMENT
+.TP
+.B EDITOR
+.TQ
+.B VISUAL
+What \fBF4\fR opens a file with. \fBVISUAL\fR wins.
+.TP
+.B SHELL
+The shell used for the command line, on Unix.
+.SH EXIT STATUS
+.B 0
+on a clean quit, non-zero if the terminal could not be set up.
+.SH SEE ALSO
+.BR lostc\-gui (1),
+.BR mc (1)
+.SH AUTHOR
+Alexander Garmash.
+.SH BUGS
+Report at https://github.com/GarAlex/lost-commander/issues
