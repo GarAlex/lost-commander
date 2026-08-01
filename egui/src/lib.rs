@@ -2238,54 +2238,6 @@ impl GuiApp {
         }
     }
 
-    /// Tab: the next thing in this window that takes the keyboard.
-    ///
-    /// With a tree up a pane has two halves and Tab walks them - this pane's
-    /// tree, this pane's files, then the other pane - because that is already
-    /// what Tab means here. With no tree it is exactly what it always was:
-    /// one pane to the other.
-    fn next_half(&mut self, side: Side) {
-        let index = match side {
-            Side::Left => 0,
-            Side::Right => 1,
-        };
-        // One pane: there is nowhere sideways to go, so Tab moves between
-        // this pane's halves. It used to fall through to the code below,
-        // which cleared the flag and then set it straight back - so Tab did
-        // nothing at all, and a key that does nothing reads as broken.
-        if !self.show_right {
-            if self.panel(side).in_tree_mode() {
-                self.on_tree[index] = !self.on_tree[index];
-                self.say_which_half(side);
-            }
-            return;
-        }
-        if self.panel(side).in_tree_mode() && !self.on_tree[index] {
-            // Up into this pane's tree before leaving the pane. This way
-            // round because the keyboard starts in the files: the other way
-            // made the tree reachable only if you were already in it, which
-            // is to say never - and with the arrows following the focused
-            // half, the tree could not be moved at all.
-            self.on_tree[index] = true;
-            self.say_which_half(side);
-            return;
-        }
-        // Never onto a pane that is not there, or the cursor would vanish
-        // along with it. With nowhere to go, Tab wraps onto this pane's tree.
-        // Leaving the pane, so the keyboard goes back to its files - which is
-        // where it will be when this pane comes round again.
-        self.on_tree[index] = false;
-        self.active = side.other();
-        let other = match side.other() {
-            Side::Left => 0,
-            Side::Right => 1,
-        };
-        // Landing in a pane with a tree lands on its files, which is where
-        // the work happens; its tree is one more Tab away.
-        self.on_tree[other] = false;
-        self.say_which_half(side.other());
-    }
-
     /// Say which half has the keyboard, when it is not obvious.
     fn say_which_half(&mut self, side: Side) {
         if !self.panel(side).in_tree_mode() {
@@ -2296,9 +2248,9 @@ impl GuiApp {
             Side::Right => 1,
         };
         let where_ = if self.on_tree[index] {
-            "The tree. Tab moves down to the files."
+            "The tree. Enter opens a directory and drops into it."
         } else {
-            "The files. Tab moves on."
+            "The files. Escape goes back up to the tree."
         };
         self.info(where_);
     }
@@ -3349,7 +3301,16 @@ impl GuiApp {
                     .unwrap_or_else(|| PathBuf::from("/"));
                 self.navigate(side, root);
             }
-            A::SwitchPane => self.next_half(side),
+            A::SwitchPane => {
+                // Tab means one thing: the other pane. It briefly also walked
+                // the halves of a pane with a tree, which made it mean two
+                // things depending on state - and a key whose meaning you
+                // have to work out is one you stop trusting. Enter goes down
+                // into the files, Escape comes back up.
+                if self.show_right {
+                    self.active = side.other();
+                }
+            }
             A::SwapPanes => {
                 std::mem::swap(&mut self.left, &mut self.right);
                 std::mem::swap(&mut self.left_view, &mut self.right_view);
@@ -3498,6 +3459,22 @@ impl GuiApp {
             A::HistoryForward => self.send_to_command_line(b"\x1b[B"),
 
             A::Cancel => {
+                let index = match side {
+                    Side::Left => 0,
+                    Side::Right => 1,
+                };
+                // With a tree above and nothing else asking for attention,
+                // Escape is the way back up to it - the other half of what
+                // Enter did coming down.
+                if self.dialog.is_none()
+                    && !self.show_select_menu
+                    && self.panel(side).in_tree_mode()
+                    && !self.on_tree[index]
+                {
+                    self.on_tree[index] = true;
+                    self.say_which_half(side);
+                    return;
+                }
                 self.dialog = None;
                 self.show_select_menu = false;
             }
@@ -3524,6 +3501,15 @@ impl GuiApp {
                 tree.expand(cursor);
                 if let Some(path) = path {
                     self.navigate(side, path);
+                    // And down into what was just opened. Enter on a
+                    // directory means "show me what is in here", and the
+                    // answer is in the half below - leaving the keyboard in
+                    // the tree would make you press another key to look at
+                    // the thing you just asked for.
+                    self.on_tree[match side {
+                        Side::Left => 0,
+                        Side::Right => 1,
+                    }] = false;
                 }
             }
             A::Parent => {
@@ -10078,56 +10064,35 @@ mod tests {
     }
 
     #[test]
-    fn tab_walks_the_two_halves_before_leaving_the_pane() {
+    fn enter_goes_down_into_the_files_and_escape_comes_back_up() {
         use keys::Action as A;
         let (_root, mut app) = fixture();
-        app.set_view(Side::Left, ViewMode::Tree);
-        // Turning the tree on lands the keyboard in it.
-        assert!(
-            app.on_tree[0],
-            "the tree you just asked for has the keyboard"
-        );
+        app.run_action(A::ViewTree);
+        assert!(app.on_tree[0], "the tree has the keyboard");
 
-        // Tree, then this pane's files, then the other pane. Reachable in
-        // that order from wherever the keyboard starts, which is the whole
-        // point - the first version walked the other way and left the tree
-        // unreachable, and with it the arrow keys that move it.
-        app.run_action(A::SwitchPane);
-        assert_eq!(app.active, Side::Right, "on past this pane");
+        // Enter on a directory means "show me what is in here", and what is
+        // in it is the half below.
+        app.run_action(A::Open);
+        assert!(!app.on_tree[0], "down into the files that were just opened");
 
-        let (_root2, mut app2) = fixture();
-        app2.set_view(Side::Left, ViewMode::Tree);
-        app2.on_tree[0] = false;
-        app2.run_action(A::SwitchPane);
-        assert_eq!(app2.active, Side::Left);
-        assert!(app2.on_tree[0], "up into the tree before leaving the pane");
+        app.run_action(A::Cancel);
+        assert!(app.on_tree[0], "and back up to the tree");
     }
 
     #[test]
-    fn landing_in_a_pane_with_a_tree_lands_on_its_files() {
+    fn tab_only_ever_means_the_other_pane() {
         use keys::Action as A;
         let (_root, mut app) = fixture();
-        app.set_view(Side::Right, ViewMode::Tree);
-        app.active = Side::Left;
+        app.run_action(A::ViewTree);
+        assert!(app.on_tree[0]);
 
+        // It briefly walked the halves too, which made it mean two things
+        // depending on state.
         app.run_action(A::SwitchPane);
         assert_eq!(app.active, Side::Right);
-        // The files are where work happens; the tree is one more Tab away.
-        assert!(!app.on_tree[1]);
-    }
-
-    #[test]
-    fn with_one_pane_tab_wraps_onto_this_panes_own_halves() {
-        use keys::Action as A;
-        let (_root, mut app) = fixture();
-        app.show_right = false;
-        app.set_view(Side::Left, ViewMode::Tree);
-        app.on_tree[0] = false;
-
-        // Nowhere to go sideways, so Tab moves between this pane's halves.
         app.run_action(A::SwitchPane);
         assert_eq!(app.active, Side::Left);
-        assert!(app.on_tree[0]);
+        assert!(app.on_tree[0], "and left the halves alone");
     }
 
     #[test]
@@ -10231,23 +10196,5 @@ mod tests {
             before,
             "Down moves the tree"
         );
-    }
-
-    #[test]
-    fn tab_walks_the_halves_when_there_is_only_one_pane() {
-        use keys::Action as A;
-        let (_root, mut app) = fixture();
-        app.show_right = false;
-        app.run_action(A::ViewTree);
-        assert!(app.on_tree[0]);
-
-        // With nowhere sideways to go, Tab has to move between the halves or
-        // it does nothing at all - and a key that does nothing reads as
-        // broken.
-        app.run_action(A::SwitchPane);
-        assert!(!app.on_tree[0], "down to the files");
-        app.run_action(A::SwitchPane);
-        assert!(app.on_tree[0], "and back up to the tree");
-        assert_eq!(app.active, Side::Left);
     }
 }

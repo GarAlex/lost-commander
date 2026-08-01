@@ -2274,7 +2274,7 @@ impl App {
             // Tab to reach the thing you just asked for reads as the key not
             // having worked.
             self.on_tree[index] = true;
-            self.info("Tree above, files below. Tab moves between them, Alt-T closes");
+            self.info("Tree above, files below. Enter opens one, Escape comes back, Alt-T closes");
         }
     }
 
@@ -2321,23 +2321,21 @@ impl App {
         }
     }
 
-    /// Tab: the next thing that takes the keyboard.
+    /// Escape in the file half: back up to the tree above it.
     ///
-    /// With a tree up a pane has two halves and Tab walks them - this pane's
-    /// files, this pane's tree, then the other pane. That order because the
-    /// keyboard starts in the files: the other way round leaves the tree
-    /// reachable only if you are already in it, which is to say never.
-    fn next_half(&mut self) {
+    /// The other half of what Enter does coming down, and the reason Tab is
+    /// left alone - Tab means the other pane, here and everywhere else, and a
+    /// key whose meaning depends on state is one you stop trusting.
+    ///
+    /// Returns whether it took the key.
+    fn back_up_to_the_tree(&mut self) -> bool {
         let index = self.side_index();
         if self.active_panel().in_tree_mode() && !self.on_tree[index] {
             self.on_tree[index] = true;
-            self.info("The tree. Tab moves on.");
-            return;
+            self.info("The tree. Enter opens a directory, Alt-T closes.");
+            return true;
         }
-        // Leaving the pane, so the keyboard goes back to its files - which is
-        // where it will be when this pane comes round again.
-        self.on_tree[index] = false;
-        self.switch_panel();
+        false
     }
 
     fn handle_tree_key(&mut self, key: KeyEvent) -> bool {
@@ -2377,6 +2375,13 @@ impl App {
                 // next tagging files as you go is the whole reason to have
                 // one.
                 if let Some(path) = tree.selected_path() {
+                    // And down into what was just opened: Enter means "show
+                    // me what is in here", and the answer is the half below.
+                    let index = match self.active {
+                        Side::Left => 0,
+                        Side::Right => 1,
+                    };
+                    self.on_tree[index] = false;
                     self.active_panel_mut().chdir(path.clone());
                     if let Some(error) = self.active_panel().error.clone() {
                         self.error(format!("{}: {error}", path.display()));
@@ -2387,6 +2392,7 @@ impl App {
             }
             KeyCode::Esc => {
                 self.active_panel_mut().leave_tree_mode();
+                self.on_tree[self.side_index()] = false;
                 self.info("Tree closed");
             }
             KeyCode::Char('r') if ctrl => tree.refresh(),
@@ -2483,7 +2489,12 @@ impl App {
         }
 
         match key.code {
-            KeyCode::Tab => self.next_half(),
+            KeyCode::Tab => self.switch_panel(),
+            // Only reaches here with nothing typed - the command line takes
+            // Escape first, to clear itself.
+            KeyCode::Esc => {
+                self.back_up_to_the_tree();
+            }
             KeyCode::Up => self.active_panel_mut().move_cursor(-1),
             KeyCode::Down => self.active_panel_mut().move_cursor(1),
             // Before the unguarded pair: match arms are tried in order.
@@ -5282,7 +5293,11 @@ mod tests {
         // than a tree you can work in, and walking from one directory to the
         // next tagging files as you go is the whole reason to have one.
         assert!(app.active_panel().in_tree_mode());
-        assert!(app.on_tree[0], "and the keyboard is still in it");
+        // ...and the keyboard goes down into the files it just opened.
+        // Escape is the way back up. Tab is left meaning the other pane.
+        assert!(!app.on_tree[0]);
+        app.on_key(key(KeyCode::Esc));
+        assert!(app.on_tree[0], "Escape climbs back to the tree");
         assert!(!app.status_is_error, "{}", app.status);
     }
 
