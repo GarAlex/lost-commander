@@ -94,6 +94,30 @@ cargo run --bin rcmd-gui -- --screenshot shot.png ~/src ~/documents
 It renders a few frames, writes a PNG and exits. The picture above was made
 with it.
 
+## What each front-end does
+
+Both drive the same engine, so listing, sorting, marking, copy/move/delete
+with progress and cancel, archives, folder compare and sync, the duplicate
+finder, find-by-name-and-contents, permissions, tabs, bookmarks, network
+locations, the directory tree, the trash and the journal work the same in
+either.
+
+The terminal one is not a cut-down version of the graphical one - it came
+first, and it is the portable one. What it does not do is mostly what a
+terminal cannot, plus one thing not yet built:
+
+| | `rcmd` | `rcmd-gui` | why |
+|---|---|---|---|
+| File-type icons, grid of large icons | — | yes | there is no grid of icons in a terminal |
+| Image viewing, and crop/rotate/resize | — | yes | same |
+| Built-in text editor | — | yes | `rcmd` hands the file to `$EDITOR`, which already knows your settings |
+| A shell in a panel, with its commands recorded | — | yes | `rcmd` is already *in* a terminal; run the shell you are standing in |
+| Session recording (`rec`) | — | yes | it records that panel, so it needs one |
+| Named colour schemes | one | several | the terminal view uses the classic blue/cyan palette, and a terminal has its own colours anyway |
+| Markdown rendered rather than shown as markup | — | yes | not built for the terminal yet; the parse is in the engine, so it is drawing that is missing, not logic |
+
+Reading bytes as hex, the directory tree, tabs and the journal are in both.
+
 ## Testing
 
 ```sh
