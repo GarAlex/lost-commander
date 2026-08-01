@@ -381,6 +381,19 @@ pub struct Panel {
     pub error: Option<String>,
     /// When present the panel shows a directory tree instead of a listing.
     pub tree: Option<crate::tree::Tree>,
+
+    /// Files tagged while walking a tree, by full path.
+    ///
+    /// `Entry::marked` is a fact about a row, and a row only exists while its
+    /// directory is the one being shown - so marks made in one directory used
+    /// to vanish on the way to the next. Tagging files across directories and
+    /// then acting on the lot is the thing XTree had that nothing else did,
+    /// and it needs somewhere to live that outlasts a listing.
+    ///
+    /// Only while a tree is up. Without one every marked file is on screen,
+    /// and marks that survived walking away would be a set the reader could
+    /// no longer see to undo.
+    pub tagged: std::collections::BTreeSet<PathBuf>,
     /// When present the panel is inside an archive rather than a directory.
     pub inside: Option<Inside>,
     /// What the directory looked like when it was last read, so a change made
@@ -393,6 +406,7 @@ impl Panel {
         let mut panel = Panel {
             cwd: path,
             entries: Vec::new(),
+            tagged: std::collections::BTreeSet::new(),
             cursor: 0,
             sort_by: SortBy::Name,
             order: SortBy::Name.natural_order(),
@@ -406,6 +420,48 @@ impl Panel {
         panel
     }
 
+    /// Fold the marks on the rows in view into the set that outlives them.
+    ///
+    /// Called after anything that changes a mark. The rows in view are the
+    /// authority for their own directory - a file unmarked here is untagged,
+    /// not merely left alone - which is what makes unmarking work at all.
+    fn remember_marks(&mut self) {
+        if self.tree.is_none() {
+            return;
+        }
+        for entry in &self.entries {
+            if entry.kind == EntryKind::Parent {
+                continue;
+            }
+            let path = self.cwd.join(&entry.name);
+            if entry.marked {
+                self.tagged.insert(path);
+            } else {
+                self.tagged.remove(&path);
+            }
+        }
+    }
+
+    /// Put the marks back on a freshly read listing.
+    fn restore_marks(&mut self) {
+        for entry in self.entries.iter_mut() {
+            if entry.kind == EntryKind::Parent {
+                continue;
+            }
+            entry.marked = self.tagged.contains(&self.cwd.join(&entry.name));
+        }
+    }
+
+    /// Everything tagged, in a stable order.
+    pub fn tagged_paths(&self) -> Vec<PathBuf> {
+        self.tagged.iter().cloned().collect()
+    }
+
+    /// How many files are tagged, including the ones not on screen.
+    pub fn tagged_count(&self) -> usize {
+        self.tagged.len()
+    }
+
     pub fn in_tree_mode(&self) -> bool {
         self.tree.is_some()
     }
@@ -414,10 +470,16 @@ impl Panel {
     /// directory the panel is currently showing.
     pub fn enter_tree_mode(&mut self) {
         self.tree = Some(crate::tree::Tree::revealing(&self.cwd, self.show_hidden));
+        // Whatever was marked in this directory is the start of the set.
+        self.remember_marks();
     }
 
     pub fn leave_tree_mode(&mut self) {
         self.tree = None;
+        // Tags do not outlive the tree that made them reachable. Keeping them
+        // would leave the reader holding a selection spread over directories
+        // they can no longer see, and no way to find it again.
+        self.tagged.clear();
     }
 
     /// Re-read the current directory, keeping the cursor on the same file
@@ -449,6 +511,13 @@ impl Panel {
                 self.entries = Entry::parent_entry(&self.cwd).into_iter().collect();
                 self.error = Some(e.to_string());
             }
+        }
+        // With a tree up the marks come from the set rather than from the
+        // names that happened to be marked a moment ago: this reload may be
+        // a different directory entirely, and `a.txt` there is not `a.txt`
+        // here.
+        if self.tree.is_some() {
+            self.restore_marks();
         }
 
         self.cursor = previous
@@ -747,6 +816,7 @@ impl Panel {
                 entry.marked = !entry.marked;
             }
         }
+        self.remember_marks();
         self.move_cursor(1);
     }
 
@@ -754,6 +824,7 @@ impl Panel {
         for e in self.entries.iter_mut() {
             e.marked = false;
         }
+        self.remember_marks();
     }
 
     /// Mark everything. `..` is never marked - it is not a file.
@@ -761,6 +832,7 @@ impl Panel {
         for e in self.entries.iter_mut() {
             e.marked = e.kind != EntryKind::Parent;
         }
+        self.remember_marks();
     }
 
     pub fn invert_marks(&mut self) {
@@ -769,6 +841,7 @@ impl Panel {
                 e.marked = !e.marked;
             }
         }
+        self.remember_marks();
     }
 
     /// Mark every entry between `from` and `to`, whichever way round they are.
@@ -792,6 +865,7 @@ impl Panel {
                 }
             }
         }
+        self.remember_marks();
     }
 
     /// Mark, or unmark, every name matching a glob.
@@ -809,6 +883,7 @@ impl Panel {
                 changed += 1;
             }
         }
+        self.remember_marks();
         changed
     }
 
@@ -1377,6 +1452,118 @@ mod tests {
     fn an_unreadable_directory_still_has_a_signature() {
         let missing = Path::new("/no/such/directory/at/all");
         assert_eq!(signature(missing, 100), Signature::default());
+    }
+
+    /// Build two directories with a file each, and a panel showing the first.
+    fn two_directories() -> (tempfile::TempDir, Panel) {
+        let root = tempfile::tempdir().unwrap();
+        for dir in ["one", "two"] {
+            std::fs::create_dir(root.path().join(dir)).unwrap();
+            std::fs::write(root.path().join(dir).join("same-name.txt"), b"x").unwrap();
+        }
+        let panel = Panel::new(root.path().join("one"));
+        (root, panel)
+    }
+
+    #[test]
+    fn a_tag_survives_walking_to_another_directory_and_back() {
+        let (root, mut panel) = two_directories();
+        panel.enter_tree_mode();
+
+        let at = panel
+            .entries
+            .iter()
+            .position(|e| e.name == "same-name.txt")
+            .unwrap();
+        panel.cursor_to(at);
+        panel.toggle_mark();
+        assert_eq!(panel.tagged_count(), 1);
+
+        // Away, and the mark is not on any row here...
+        panel.cwd = root.path().join("two");
+        panel.reload();
+        assert!(
+            panel.entries.iter().all(|e| !e.marked),
+            "a file of the same name in another directory is a different file"
+        );
+        assert_eq!(panel.tagged_count(), 1, "and the tag is still held");
+
+        // ...and back, where it is.
+        panel.cwd = root.path().join("one");
+        panel.reload();
+        assert!(
+            panel
+                .entries
+                .iter()
+                .any(|e| e.marked && e.name == "same-name.txt"),
+            "the tag comes back onto the row it was made on"
+        );
+    }
+
+    #[test]
+    fn untagging_sticks_rather_than_coming_back_on_the_next_reload() {
+        // The failure this guards is subtle: if unmarking only cleared the
+        // row and not the set, the file would look unmarked until anything
+        // re-read the directory and then quietly mark itself again.
+        let (_root, mut panel) = two_directories();
+        panel.enter_tree_mode();
+
+        let at = panel
+            .entries
+            .iter()
+            .position(|e| e.name == "same-name.txt")
+            .unwrap();
+        panel.cursor_to(at);
+        panel.toggle_mark();
+        panel.cursor_to(at);
+        panel.toggle_mark();
+
+        assert_eq!(panel.tagged_count(), 0);
+        panel.reload();
+        assert!(panel.entries.iter().all(|e| !e.marked));
+    }
+
+    #[test]
+    fn tags_do_not_outlive_the_tree_that_made_them_reachable() {
+        let (_root, mut panel) = two_directories();
+        panel.enter_tree_mode();
+        panel.mark_all();
+        assert!(panel.tagged_count() > 0);
+
+        panel.leave_tree_mode();
+        // Without a tree every marked file is on screen. A set spread over
+        // directories the reader can no longer reach is one they cannot undo.
+        assert_eq!(panel.tagged_count(), 0);
+    }
+
+    #[test]
+    fn without_a_tree_nothing_is_tagged_at_all() {
+        // The whole point of gating on the tree: an ordinary two-pane listing
+        // gains no lasting set, so nothing about it changes.
+        let (root, mut panel) = two_directories();
+        panel.mark_all();
+        assert_eq!(panel.tagged_count(), 0, "no tree, no lasting set");
+
+        // Not asserted here: whether the *rows* keep their marks. `reload`
+        // has always restored them by name, and both directories hold a
+        // `same-name.txt` - which is exactly the confusion the tagged set
+        // exists to avoid, and is pre-existing behaviour either way.
+        panel.cwd = root.path().join("two");
+        panel.reload();
+        assert_eq!(panel.tagged_count(), 0);
+    }
+
+    #[test]
+    fn the_parent_row_is_never_tagged() {
+        let (_root, mut panel) = two_directories();
+        panel.enter_tree_mode();
+        panel.mark_all();
+        panel.invert_marks();
+        panel.mark_range(0, panel.entries.len(), true);
+
+        // `..` is not a file, and a job that tried to copy it would be acting
+        // on the directory the reader is standing in.
+        assert!(panel.tagged_paths().iter().all(|p| !p.ends_with("..")));
     }
 }
 
