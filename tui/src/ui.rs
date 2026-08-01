@@ -23,8 +23,9 @@ pub fn draw(frame: &mut Frame, app: &App) {
 
     let rows = Layout::vertical([
         Constraint::Min(3),
-        Constraint::Length(1),
-        Constraint::Length(1),
+        Constraint::Length(1), // status
+        Constraint::Length(1), // the command line
+        Constraint::Length(1), // function keys
     ])
     .split(area);
 
@@ -34,7 +35,8 @@ pub fn draw(frame: &mut Frame, app: &App) {
     draw_pane(frame, panes[0], &app.left, app.active == Side::Left);
     draw_pane(frame, panes[1], &app.right, app.active == Side::Right);
     draw_status(frame, rows[1], app);
-    draw_keybar(frame, rows[2]);
+    draw_command_line(frame, rows[2], app);
+    draw_keybar(frame, rows[3]);
 
     match &app.mode {
         Mode::Normal => {}
@@ -1639,6 +1641,35 @@ fn draw_tree(frame: &mut Frame, area: Rect, tree: &Tree, active: bool) {
     frame.render_stateful_widget(List::new(items).style(theme::base()), area, &mut state);
 }
 
+/// The command line, under the panels and over the function keys.
+///
+/// Always there rather than appearing when typed into: a prompt that is only
+/// present once you have started is one nobody discovers, and this is the
+/// part of Norton Commander that made it a shell you could see the files
+/// from rather than a file manager with a shell bolted on.
+///
+/// The prompt is the directory being shown, because that is where a command
+/// will run.
+fn draw_command_line(frame: &mut Frame, area: Rect, app: &App) {
+    let cwd = app.active_panel().cwd.display().to_string();
+    // The tail of a long path, not the head: the end says which directory
+    // this is, and the beginning only says which disk.
+    let shown = if cwd.chars().count() > 40 {
+        let tail: String = cwd.chars().rev().take(38).collect();
+        format!("...{}", tail.chars().rev().collect::<String>())
+    } else {
+        cwd
+    };
+    let line = Line::from(vec![
+        Span::styled(format!("{shown}> "), Style::default().fg(theme::TITLE_FG)),
+        Span::styled(app.command.clone(), Style::default().fg(theme::FILE_FG)),
+        // A block where the next character will go, drawn rather than moved
+        // there with the real cursor - that one belongs to the file panel.
+        Span::styled("\u{2588}", Style::default().fg(theme::CURSOR_FG)),
+    ]);
+    frame.render_widget(Paragraph::new(line).style(theme::base()), area);
+}
+
 fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
     let panel = app.active_panel();
 
@@ -2040,7 +2071,7 @@ pub const HELP: &[(&str, &str)] = &[
     ("Ctrl-P", "open with..."),
     ("Ctrl-E", "a shell as administrator"),
     ("F9", "cycle sort order"),
-    ("F10 / q", "quit"),
+    ("F10", "quit"),
     ("", ""),
     ("Ctrl-T", "another tab, here"),
     ("Ctrl-W", "close this tab"),

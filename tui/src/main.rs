@@ -64,7 +64,11 @@ KEYS:
     Tab switch panel      Enter open      Backspace parent
     F1 help    F2 rename  F3 view         F4 edit
     F5 copy    F6 move    F7 mkdir        F8 delete
-    F9 sort    F10 quit   Space mark      Ctrl-H hidden files"
+    F9 sort    F10 quit   Space mark      Ctrl-H hidden files
+
+    Typing goes to the command line under the panels, and Enter runs it in the
+    directory being shown - as in Norton and Midnight Commander. An empty
+    command line means the panels: Space marks, Backspace goes up."
     );
 }
 
@@ -140,7 +144,8 @@ fn run_tui(left: PathBuf, right: PathBuf) -> io::Result<()> {
         // put its password prompt somewhere, and this front-end owns the
         // screen. Same suspend-and-restore as $EDITOR above.
         if let Some(line) = app.pending_shell.take() {
-            if let Err(e) = run_shell_line(&mut terminal, &line) {
+            let cwd = app.active_panel().cwd.clone();
+            if let Err(e) = run_shell_line(&mut terminal, &line, &cwd) {
                 app.status = format!("Failed: {e}");
                 app.status_is_error = true;
             }
@@ -204,18 +209,54 @@ fn edit_file(terminal: &mut ratatui::DefaultTerminal, path: &Path) -> io::Result
 /// Through the user's shell rather than spawned directly, since the line is
 /// shell syntax - `cd ... && sudo -i` - and since a privileged prompt should
 /// be reading from the real terminal, not from a pipe.
-fn run_shell_line(terminal: &mut ratatui::DefaultTerminal, line: &str) -> io::Result<()> {
+fn run_shell_line(
+    terminal: &mut ratatui::DefaultTerminal,
+    line: &str,
+    cwd: &Path,
+) -> io::Result<()> {
     ratatui::restore();
 
+    // In the directory the panel is showing, which is the only one the reader
+    // could have meant. Running in whatever directory the program was started
+    // from would make `ls` answer about somewhere else entirely.
     let status = if cfg!(windows) {
-        Command::new("cmd").args(["/C", line]).status()
+        Command::new("cmd")
+            .args(["/C", line])
+            .current_dir(cwd)
+            .status()
     } else {
-        Command::new(shell_for_lines()).args(["-c", line]).status()
+        Command::new(shell_for_lines())
+            .args(["-c", line])
+            .current_dir(cwd)
+            .status()
     };
+
+    // The output is on the screen and the screen is about to be taken back.
+    // Without this the terminal is cleared the instant the command finishes,
+    // and anything it printed is gone before it can be read.
+    press_any_key();
 
     *terminal = ratatui::init();
     terminal.clear()?;
     status.map(|_| ())
+}
+
+/// Hold the terminal until a key is pressed, so output can be read.
+fn press_any_key() {
+    use crossterm::event::{self, Event, KeyEventKind};
+
+    println!();
+    println!("-- press any key to return --");
+    let _ = crossterm::terminal::enable_raw_mode();
+    loop {
+        match event::read() {
+            // Windows reports releases as well; a key press is what ends it.
+            Ok(Event::Key(key)) if key.kind == KeyEventKind::Press => break,
+            Ok(_) => {}
+            Err(_) => break,
+        }
+    }
+    let _ = crossterm::terminal::disable_raw_mode();
 }
 
 /// `$SHELL`, or a shell that is certainly there.

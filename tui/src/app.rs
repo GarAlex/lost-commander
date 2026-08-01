@@ -337,6 +337,12 @@ pub struct App {
     /// Set when a privileged command needs to be run with the TUI suspended,
     /// so its password prompt has the terminal to itself.
     pub pending_shell: Option<String>,
+    /// The command being typed, along the bottom of the panels.
+    ///
+    /// Norton Commander's arrangement, and Midnight Commander's after it: the
+    /// panels are drawn over a shell rather than instead of one, so what you
+    /// type when you are not pressing a function key is a command.
+    pub command: String,
     /// Set when the user asks to edit a file; the main loop suspends the TUI,
     /// runs $EDITOR, and clears this.
     pub pending_edit: Option<PathBuf>,
@@ -416,6 +422,7 @@ impl App {
             status: String::from("F1 help  Tab switches panels  F10 quits"),
             status_is_error: false,
             should_quit: false,
+            command: String::new(),
             pending_edit: None,
             pending_shell: None,
             bookmarks: Bookmarks::default(),
@@ -2308,6 +2315,69 @@ impl App {
         true
     }
 
+    /// Give a key to the command line, and say whether it took it.
+    ///
+    /// The rule is Midnight Commander's, and it is the one that makes a
+    /// command line and a file panel share a keyboard without either being
+    /// crippled: **an empty command line means you are working the panels.**
+    /// Space marks a file when there is nothing typed and is a space once
+    /// there is; the same for the selection keys. Backspace goes up a
+    /// directory until there is something to delete.
+    ///
+    /// Letters are the exception in the other direction: they always type.
+    /// `q` used to quit, and does not any more - F10 does, as it always has,
+    /// and as it does in both of the programs this follows. A `q` that quit
+    /// would make `qemu` unwritable.
+    fn command_key(&mut self, code: KeyCode) -> bool {
+        let empty = self.command.is_empty();
+        match code {
+            KeyCode::Char(' ') if empty => false,
+            KeyCode::Char('+') | KeyCode::Char('-') | KeyCode::Char('*') if empty => false,
+            KeyCode::Char(character) => {
+                self.command.push(character);
+                true
+            }
+            KeyCode::Backspace if !empty => {
+                self.command.pop();
+                true
+            }
+            KeyCode::Enter if !empty => {
+                self.run_command();
+                true
+            }
+            // Escape clears what is typed rather than leaving it to be
+            // deleted a character at a time.
+            KeyCode::Esc if !empty => {
+                self.command.clear();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Hand the typed line to a shell, in the directory being shown.
+    ///
+    /// Through the same suspend-and-restore the editor and privileged
+    /// commands use: the command gets the real terminal, so it can be
+    /// interactive, print colour, and be read afterwards - none of which is
+    /// true of output captured into a box.
+    fn run_command(&mut self) {
+        let line = std::mem::take(&mut self.command);
+        let line = line.trim().to_string();
+        if line.is_empty() {
+            return;
+        }
+        // Written down, like everything else this program does on the
+        // reader's behalf. The graphical view records what its shell runs by
+        // asking the shell; here the line is known before it is handed over,
+        // which is the one case where nothing has to be inferred.
+        if let Some(journal) = &self.journal {
+            let where_ = self.active_panel().cwd.display().to_string();
+            journal.record(journal::Event::new(journal::Kind::Command, where_).note(&line));
+        }
+        self.pending_shell = Some(line);
+    }
+
     fn on_key_normal(&mut self, key: KeyEvent) {
         // The tree takes navigation keys first; anything it ignores falls
         // through to the usual bindings.
@@ -2317,6 +2387,14 @@ impl App {
 
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
+
+        // The command line takes ordinary typing, as it does in Norton and
+        // Midnight Commander. Function keys and anything with Ctrl or Alt
+        // behind it still work the panels, which is why those are the
+        // bindings for everything that matters.
+        if !ctrl && !alt && self.command_key(key.code) {
+            return;
+        }
 
         match key.code {
             KeyCode::Tab => self.switch_panel(),
@@ -3060,14 +3138,67 @@ mod tests {
     }
 
     #[test]
-    fn f10_and_q_quit() {
+    fn f10_quits_and_q_is_a_character() {
         let (_root, mut app) = app_fixture();
         app.on_key(key(KeyCode::F(10)));
         assert!(app.should_quit);
 
+        // `q` used to quit. It cannot any more, and this is not a
+        // regression: with a command line under the panels a letter has to be
+        // a letter, or `qemu` is unwritable and the reader loses their work
+        // to a typo. F10 is how both Norton and Midnight Commander quit, and
+        // is unchanged.
         let (_root2, mut app2) = app_fixture();
         app2.on_key(key(KeyCode::Char('q')));
-        assert!(app2.should_quit);
+        assert!(!app2.should_quit);
+        assert_eq!(app2.command, "q");
+    }
+
+    #[test]
+    fn an_empty_command_line_means_you_are_working_the_panels() {
+        let (_root, mut app) = app_fixture();
+        // Off `..`, which is never marked - it is not a file.
+        app.active_panel_mut().cursor_to(1);
+        let marked = app.active_panel().marked_count();
+
+        // Space marks a file while nothing is typed...
+        app.on_key(key(KeyCode::Char(' ')));
+        assert_ne!(app.active_panel().marked_count(), marked);
+        assert!(app.command.is_empty());
+
+        // ...and is a space once there is, or a command could never hold one.
+        app.on_key(key(KeyCode::Char('l')));
+        app.on_key(key(KeyCode::Char(' ')));
+        app.on_key(key(KeyCode::Char('x')));
+        assert_eq!(app.command, "l x");
+    }
+
+    #[test]
+    fn backspace_goes_up_a_directory_until_there_is_something_to_delete() {
+        let (_root, mut app) = app_fixture();
+        let here = app.active_panel().cwd.clone();
+
+        app.on_key(key(KeyCode::Char('a')));
+        app.on_key(key(KeyCode::Backspace));
+        assert!(app.command.is_empty(), "it deleted the character");
+        assert_eq!(app.active_panel().cwd, here, "and did not move the panel");
+
+        app.on_key(key(KeyCode::Backspace));
+        assert_ne!(app.active_panel().cwd, here, "now it climbs");
+    }
+
+    #[test]
+    fn a_typed_command_is_handed_over_and_the_line_is_cleared() {
+        let (_root, mut app) = app_fixture();
+        for character in "echo hello".chars() {
+            app.on_key(key(KeyCode::Char(character)));
+        }
+        app.on_key(key(KeyCode::Enter));
+
+        // The main loop is what runs it - this front-end owns the screen and
+        // has to give it up first.
+        assert_eq!(app.pending_shell.as_deref(), Some("echo hello"));
+        assert!(app.command.is_empty());
     }
 
     #[test]
