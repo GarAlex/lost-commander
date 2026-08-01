@@ -331,6 +331,12 @@ pub struct GuiApp {
     /// Two lists in one pane is two cursors, and a reader who cannot tell
     /// which one an arrow key moves will not trust either.
     pub on_tree: [bool; 2],
+    /// Where each pane's tree cursor was last frame.
+    ///
+    /// So the view can be scrolled only when the cursor has actually moved.
+    /// Scrolling to it every frame would make the wheel useless - the view
+    /// would snap back before the hand left it.
+    tree_at: [usize; 2],
     /// How much of the width the left pane gets. Dragged on the divider.
     pub split: f32,
     pub bookmarks: Bookmarks,
@@ -497,6 +503,7 @@ impl GuiApp {
             pane_opened_to_view: false,
             tree_split: 0.45,
             on_tree: [false, false],
+            tree_at: [0, 0],
             split: 0.5,
             bookmarks,
             bookmarks_path: None,
@@ -2507,6 +2514,7 @@ impl GuiApp {
             return false;
         };
         let cwd = self.panel(side).cwd.clone();
+        let at = tree.cursor;
         let nodes: Vec<(PathBuf, String, usize, bool, bool, char)> = tree
             .nodes
             .iter()
@@ -2525,6 +2533,7 @@ impl GuiApp {
 
         let mut interacted = false;
         let mut scrolled = false;
+        self.tree_at[Self::side_index(side)] = at;
         let mut toggle: Option<usize> = None;
         let mut navigate_to: Option<PathBuf> = None;
 
@@ -2532,17 +2541,34 @@ impl GuiApp {
             let (rect, response) =
                 ui.allocate_exact_size(Vec2::new(ui.available_width(), 22.0), Sense::click());
 
-            // The pane's own directory is the highlighted row: that is the
-            // "you are here" the switch exists to show.
+            // Two different things, and they were one: the *cursor* is the
+            // row the arrow keys move, and "you are here" is the directory
+            // the pane is showing. Highlighting only the second meant up and
+            // down moved a cursor that was never drawn - they looked dead
+            // while left and right, which visibly add and remove rows,
+            // looked fine.
             let is_here = *path == cwd;
-            if is_here && self.tree_scroll[Self::side_index(side)] {
+            let is_cursor = index == at;
+            let index_of_side = Self::side_index(side);
+            if is_here && self.tree_scroll[index_of_side] {
+                // Opening the tree puts where you are in the middle, which is
+                // the one moment centring is what you want.
                 ui.scroll_to_rect(rect, Some(Align::Center));
                 scrolled = true;
+            } else if is_cursor && at != self.tree_at[index_of_side] {
+                // Only when the cursor has moved, and only as far as it must:
+                // `None` brings the row into view without re-centring, so the
+                // cursor travels down the screen the way it does in an editor
+                // and the view follows once it runs out of room.
+                ui.scroll_to_rect(rect, None);
             }
             if !ui.is_rect_visible(rect) {
                 continue;
             }
-            paint_selection(ui, rect, is_here, false, focused);
+            // The cursor is the selection; where the pane is standing is a
+            // wash underneath it, so both are legible when they differ - and
+            // they differ exactly while you are walking somewhere else.
+            paint_selection(ui, rect, is_cursor, is_here && !is_cursor, focused);
 
             let indent = *depth as f32 * 12.0;
             let arrow = Rect::from_min_size(
