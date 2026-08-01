@@ -77,6 +77,7 @@ it useful for a quick check that a build works, and for scripting.
 cargo run --bin rcmd-gui                        # current directory
 cargo run --bin rcmd-gui -- ~/src ~/documents   # explicit left and right
 cargo run --bin rcmd-gui -- --grid              # start both panes in the icon grid
+cargo run --bin rcmd-gui -- --tree              # tree above the files, XTree's arrangement
 cargo run --bin rcmd-gui -- --preview           # right pane follows the left, as F3 does
 cargo run --bin rcmd-gui -- --help
 ```

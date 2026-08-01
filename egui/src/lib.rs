@@ -321,6 +321,16 @@ pub struct GuiApp {
     /// the way it was found - a pane that stayed behind would be the viewer
     /// redecorating on its way out.
     pub pane_opened_to_view: bool,
+    /// How much of a pane's height the tree half gets, when it has one.
+    ///
+    /// A fraction rather than rows, so it means the same on a tall window as
+    /// on a short one.
+    pub tree_split: f32,
+    /// Whether the keyboard is in the tree half rather than the file list.
+    ///
+    /// Two lists in one pane is two cursors, and a reader who cannot tell
+    /// which one an arrow key moves will not trust either.
+    pub on_tree: [bool; 2],
     /// How much of the width the left pane gets. Dragged on the divider.
     pub split: f32,
     pub bookmarks: Bookmarks,
@@ -475,6 +485,8 @@ impl GuiApp {
             show_sidebar: true,
             show_right: true,
             pane_opened_to_view: false,
+            tree_split: 0.45,
+            on_tree: [false, false],
             split: 0.5,
             bookmarks,
             bookmarks_path: None,
@@ -2140,6 +2152,19 @@ impl GuiApp {
             Side::Left => "scroll_left",
             Side::Right => "scroll_right",
         };
+
+        // The tree does not replace the listing - it sits above it. How the
+        // files are drawn and whether there is a tree over them are two
+        // independent questions, and making them one meant choosing the tree
+        // cost you the files.
+        if self.view(side) == ViewMode::Tree {
+            clicked_side |= self.pane_halves(&mut inner, side, focused);
+            if clicked_side {
+                self.active = side;
+            }
+            return;
+        }
+
         egui::ScrollArea::vertical()
             .id_salt(scroll_id)
             .auto_shrink([false, false])
@@ -2147,7 +2172,8 @@ impl GuiApp {
                 let hit = match self.view(side) {
                     ViewMode::Details => self.details_view(ui, side, focused),
                     ViewMode::Grid => self.grid_view(ui, side, focused),
-                    ViewMode::Tree => self.pane_tree(ui, side, focused),
+                    // Drawn as halves above, and never inside this one.
+                    ViewMode::Tree => false,
                     // Handled above; it does not belong in a ScrollArea.
                     ViewMode::Preview => false,
                 };
@@ -2156,6 +2182,168 @@ impl GuiApp {
 
         if clicked_side {
             self.active = side;
+        }
+    }
+
+    /// Tab: the next thing in this window that takes the keyboard.
+    ///
+    /// With a tree up a pane has two halves and Tab walks them - this pane's
+    /// tree, this pane's files, then the other pane - because that is already
+    /// what Tab means here. With no tree it is exactly what it always was:
+    /// one pane to the other.
+    fn next_half(&mut self, side: Side) {
+        let index = match side {
+            Side::Left => 0,
+            Side::Right => 1,
+        };
+        if self.panel(side).in_tree_mode() && self.on_tree[index] {
+            // Down through this pane first: its tree is behind us now.
+            self.on_tree[index] = false;
+            self.say_which_half(side);
+            return;
+        }
+        // Never onto a pane that is not there, or the cursor would vanish
+        // along with it. With nowhere to go, Tab wraps onto this pane's tree.
+        if !self.show_right {
+            if self.panel(side).in_tree_mode() {
+                self.on_tree[index] = true;
+                self.say_which_half(side);
+            }
+            return;
+        }
+        self.active = side.other();
+        let other = match side.other() {
+            Side::Left => 0,
+            Side::Right => 1,
+        };
+        // Landing in a pane with a tree lands on its files, which is where
+        // the work happens; its tree is one more Tab away.
+        self.on_tree[other] = false;
+        self.say_which_half(side.other());
+    }
+
+    /// Say which half has the keyboard, when it is not obvious.
+    fn say_which_half(&mut self, side: Side) {
+        if !self.panel(side).in_tree_mode() {
+            return;
+        }
+        let index = match side {
+            Side::Left => 0,
+            Side::Right => 1,
+        };
+        let where_ = if self.on_tree[index] {
+            "The tree. Tab moves down to the files."
+        } else {
+            "The files. Tab moves on."
+        };
+        self.info(where_);
+    }
+
+    /// A pane in two halves: the tree, then the files under it.
+    ///
+    /// XTree's arrangement, and the reason it is worth copying is the pair of
+    /// them together - you walk directories in the top half and the files of
+    /// wherever you are stand in the bottom one, so tagging a file here and
+    /// another one three directories away is a single continuous gesture
+    /// rather than two visits.
+    ///
+    /// Returns whether anything in either half was clicked.
+    fn pane_halves(&mut self, ui: &mut egui::Ui, side: Side, focused: bool) -> bool {
+        let index = match side {
+            Side::Left => 0,
+            Side::Right => 1,
+        };
+        let on_tree = self.on_tree[index];
+        let mut clicked = false;
+
+        let total = ui.available_height();
+        // A floor on both halves: a divider dragged to the very top leaves a
+        // tree that cannot be read and no way to drag it back.
+        let top = (total * self.tree_split).clamp(60.0, (total - 60.0).max(60.0));
+
+        let id = match side {
+            Side::Left => "tree_left",
+            Side::Right => "tree_right",
+        };
+        ui.allocate_ui(Vec2::new(ui.available_width(), top), |ui| {
+            egui::ScrollArea::vertical()
+                .id_salt(id)
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    clicked |= self.pane_tree(ui, side, focused && on_tree);
+                });
+        });
+
+        // The divider, and the grip that drags it. Wider than the line it
+        // draws: a one-pixel target is one nobody can hit.
+        let (grip, response) = ui.allocate_exact_size(
+            Vec2::new(ui.available_width(), 8.0),
+            Sense::click_and_drag(),
+        );
+        let line = egui::Rect::from_min_size(
+            egui::pos2(grip.min.x, grip.center().y),
+            Vec2::new(grip.width(), 1.0),
+        );
+        ui.painter().rect_filled(
+            line,
+            0.0,
+            if response.hovered() || response.dragged() {
+                theme::accent()
+            } else {
+                theme::border()
+            },
+        );
+        if response.hovered() || response.dragged() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+        }
+        if response.dragged() && total > 0.0 {
+            self.tree_split = (self.tree_split + response.drag_delta().y / total).clamp(0.15, 0.85);
+        }
+
+        let files_id = match side {
+            Side::Left => "files_left",
+            Side::Right => "files_right",
+        };
+        egui::ScrollArea::vertical()
+            .id_salt(files_id)
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                clicked |= self.details_view(ui, side, focused && !on_tree);
+            });
+        clicked
+    }
+
+    /// Put the cursor on a row the file half is actually showing.
+    ///
+    /// With a tree up the listing draws files only, so a cursor left on a
+    /// directory would be a selection nobody can see - and F5 would copy
+    /// something the reader never pointed at. Called after anything that
+    /// moves it.
+    fn snap_to_a_visible_row(&mut self, side: Side) {
+        if !self.panel(side).in_tree_mode() {
+            return;
+        }
+        let panel = self.panel(side);
+        if panel
+            .entries
+            .get(panel.cursor)
+            .is_some_and(|e| !e.is_dir() && !e.is_parent())
+        {
+            return;
+        }
+        let cursor = panel.cursor;
+        // Nearest first, downwards on a tie: a cursor that jumped to the top
+        // of the listing every time it landed on a directory would throw away
+        // where the reader was.
+        let next = panel
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| !e.is_dir() && !e.is_parent())
+            .min_by_key(|(index, _)| (index.abs_diff(cursor), if *index < cursor { 1 } else { 0 }))
+            .map(|(index, _)| index);
+        if let Some(index) = next {
+            self.panel_mut(side).cursor_to(index);
         }
     }
 
@@ -2386,7 +2574,16 @@ impl GuiApp {
         let mut open: Option<PathBuf> = None;
         let mut select: Option<(usize, Click)> = None;
 
+        // With a tree up, the directories are the half above this one, and
+        // repeating them here would be the same list twice with the cursor
+        // ambiguous between them. `..` goes too - climbing is what the tree
+        // is for.
+        let files_only = self.panel(side).in_tree_mode();
+
         for (index, entry) in entries.iter().enumerate() {
+            if files_only && (entry.is_dir() || entry.is_parent()) {
+                continue;
+            }
             let (rect, response) =
                 ui.allocate_exact_size(Vec2::new(ui.available_width(), ROW_HEIGHT), Sense::click());
             if !ui.is_rect_visible(rect) {
@@ -2980,12 +3177,29 @@ impl GuiApp {
     /// Everything the toolbar and the pane headers do goes through here too,
     /// so a key and a click cannot drift apart.
     pub fn run_action(&mut self, action: keys::Action) {
+        self.run_action_inner(action);
+        // Whatever just happened, the cursor has to end on a row the file
+        // half is drawing. With a tree up it draws files only, so a cursor
+        // left on a directory would be a selection nobody can see - and F5
+        // would copy something the reader never pointed at.
+        let side = self.active;
+        self.snap_to_a_visible_row(side);
+    }
+
+    fn run_action_inner(&mut self, action: keys::Action) {
         use keys::Action as A;
         let side = self.active;
 
-        // A tree pane navigates differently: left and right are collapse and
-        // expand rather than parent and open.
-        if self.panel(side).in_tree_mode() && keys::is_navigation(action) {
+        // A tree navigates differently: left and right are collapse and
+        // expand rather than parent and open. Only while the keyboard is in
+        // the tree half, though - the files below it are an ordinary listing
+        // and an arrow key there means what it means everywhere else.
+        let in_the_tree = self.panel(side).in_tree_mode()
+            && self.on_tree[match side {
+                Side::Left => 0,
+                Side::Right => 1,
+            }];
+        if in_the_tree && keys::is_navigation(action) {
             self.tree_action(side, action);
             return;
         }
@@ -3049,13 +3263,7 @@ impl GuiApp {
                     .unwrap_or_else(|| PathBuf::from("/"));
                 self.navigate(side, root);
             }
-            A::SwitchPane => {
-                // Never onto a pane that is not there, or the cursor would
-                // vanish along with it.
-                if self.show_right {
-                    self.active = side.other();
-                }
-            }
+            A::SwitchPane => self.next_half(side),
             A::SwapPanes => {
                 std::mem::swap(&mut self.left, &mut self.right);
                 std::mem::swap(&mut self.left_view, &mut self.right_view);
@@ -9781,5 +9989,100 @@ mod tests {
             selection_summary(panel, count, ViewMode::Details),
             format!("1 of {count} selected")
         );
+    }
+
+    #[test]
+    fn tab_walks_the_two_halves_before_leaving_the_pane() {
+        use keys::Action as A;
+        let (_root, mut app) = fixture();
+        app.set_view(Side::Left, ViewMode::Tree);
+        app.on_tree[0] = true;
+
+        // Tree, then files, then the other pane. The tree is behind you once
+        // you have passed it, which is what makes Tab a walk and not a toggle.
+        app.run_action(A::SwitchPane);
+        assert_eq!(app.active, Side::Left);
+        assert!(!app.on_tree[0], "down to this pane's files");
+
+        app.run_action(A::SwitchPane);
+        assert_eq!(app.active, Side::Right, "and only then to the other pane");
+    }
+
+    #[test]
+    fn landing_in_a_pane_with_a_tree_lands_on_its_files() {
+        use keys::Action as A;
+        let (_root, mut app) = fixture();
+        app.set_view(Side::Right, ViewMode::Tree);
+        app.on_tree[1] = true;
+        app.active = Side::Left;
+
+        app.run_action(A::SwitchPane);
+        assert_eq!(app.active, Side::Right);
+        // The files are where work happens; the tree is one more Tab away.
+        assert!(!app.on_tree[1]);
+    }
+
+    #[test]
+    fn with_one_pane_tab_wraps_onto_this_panes_own_halves() {
+        use keys::Action as A;
+        let (_root, mut app) = fixture();
+        app.show_right = false;
+        app.set_view(Side::Left, ViewMode::Tree);
+        app.on_tree[0] = false;
+
+        // Nowhere to go sideways, so it goes up. The alternative - doing
+        // nothing - leaves the tree unreachable from the keyboard entirely.
+        app.run_action(A::SwitchPane);
+        assert_eq!(app.active, Side::Left);
+        assert!(app.on_tree[0]);
+    }
+
+    #[test]
+    fn arrows_reach_the_tree_only_while_the_tree_has_the_keyboard() {
+        use keys::Action as A;
+        let (_root, mut app) = fixture();
+        app.set_view(Side::Left, ViewMode::Tree);
+
+        // In the files half, Down moves the file cursor and leaves the tree
+        // where it is.
+        app.on_tree[0] = false;
+        let tree_before = app.left.current().tree.as_ref().unwrap().cursor;
+        app.run_action(A::CursorDown);
+        assert_eq!(
+            app.left.current().tree.as_ref().unwrap().cursor,
+            tree_before,
+            "the tree does not move when the files have the keyboard"
+        );
+
+        // In the tree half, the same key moves the tree.
+        app.on_tree[0] = true;
+        app.run_action(A::CursorDown);
+        assert_ne!(
+            app.left.current().tree.as_ref().unwrap().cursor,
+            tree_before
+        );
+    }
+
+    #[test]
+    fn the_cursor_never_rests_on_a_row_the_file_half_does_not_draw() {
+        let (_root, mut app) = fixture();
+        app.set_view(Side::Left, ViewMode::Tree);
+
+        // Put it on a directory by hand, the way any listing change could.
+        let at = app
+            .left
+            .current()
+            .entries
+            .iter()
+            .position(|e| e.is_dir() || e.is_parent());
+        if let Some(at) = at {
+            app.left.current_mut().cursor_to(at);
+            app.snap_to_a_visible_row(Side::Left);
+            let entry = app.left.current().selected().expect("something selected");
+            assert!(
+                !entry.is_dir() && !entry.is_parent(),
+                "a cursor on a directory is a selection nobody can see"
+            );
+        }
     }
 }

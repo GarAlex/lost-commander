@@ -21,12 +21,15 @@ fn main() -> eframe::Result<()> {
             "rcmd-gui {VERSION} - graphical dual-pane file manager
 
 USAGE:
-    rcmd-gui [--grid] [--preview] [LEFT_DIR] [RIGHT_DIR]
+    rcmd-gui [--grid] [--tree] [--preview] [LEFT_DIR] [RIGHT_DIR]
     rcmd-gui --screenshot FILE.png [LEFT_DIR] [RIGHT_DIR]
     rcmd-gui --help | --version
 
     --grid starts both panes in the icon grid instead of the detail list.
     Each pane also has its own list / grid / tree switch in its header.
+
+    --tree starts the left pane with the directory tree above its files,
+    which is XTree's arrangement: walk directories above, tag files below.
 
     --preview starts the right pane showing what the left one is pointing at,
     which is what F3 does. It pairs with --screenshot: a quick view cannot be
@@ -48,6 +51,7 @@ USAGE:
     let mut screenshot = None;
     let mut grid = false;
     let mut preview = false;
+    let mut tree = false;
     let mut positional: Vec<String> = Vec::new();
     let mut rest = args.into_iter();
     while let Some(arg) = rest.next() {
@@ -55,6 +59,7 @@ USAGE:
             "--screenshot" => screenshot = rest.next().map(PathBuf::from),
             "--grid" => grid = true,
             "--preview" => preview = true,
+            "--tree" => tree = true,
             _ => positional.push(arg),
         }
     }
@@ -90,6 +95,15 @@ USAGE:
         options,
         Box::new(move |_cc| {
             let mut app = GuiApp::new(left, right);
+            if tree {
+                // Through `set_view`, which is what actually builds the tree.
+                // Assigning the field only changes what is drawn, which is a
+                // pane with an empty half above it.
+                app.set_view(
+                    lost_commander_egui::Side::Left,
+                    lost_commander_egui::ViewMode::Tree,
+                );
+            }
             if preview {
                 app.right_view = lost_commander_egui::ViewMode::Preview;
                 // The cursor starts on `..`, and a quick view of the parent
