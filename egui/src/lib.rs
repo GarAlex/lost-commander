@@ -290,6 +290,13 @@ pub struct GuiApp {
     /// fills the window; the other keeps its directory and cursor for when it
     /// comes back.
     pub show_right: bool,
+    /// Whether the second pane is only on screen to hold a quick view.
+    ///
+    /// A preview has to appear somewhere, so F3 in a one-pane window opens
+    /// the other pane. Closing the preview then has to put the window back
+    /// the way it was found - a pane that stayed behind would be the viewer
+    /// redecorating on its way out.
+    pub pane_opened_to_view: bool,
     /// How much of the width the left pane gets. Dragged on the divider.
     pub split: f32,
     pub bookmarks: Bookmarks,
@@ -443,6 +450,7 @@ impl GuiApp {
             right_view: ViewMode::Details,
             show_sidebar: true,
             show_right: true,
+            pane_opened_to_view: false,
             split: 0.5,
             bookmarks,
             bookmarks_path: None,
@@ -636,6 +644,20 @@ impl GuiApp {
     /// The tree is built on the panel itself, so it always reflects that
     /// pane's directory rather than some separate idea of where you are.
     pub fn set_view(&mut self, side: Side, mode: ViewMode) {
+        // Asked here rather than in each of the keys that can close a quick
+        // view - F3 again, Ctrl-Q, Escape, or picking another view from the
+        // pane's own header. They all arrive through this one function, and a
+        // pane handed back by three of the four would be worse than one never
+        // handed back at all.
+        let was_previewing = self.view(side) == ViewMode::Preview;
+        if was_previewing && mode != ViewMode::Preview && self.pane_opened_to_view {
+            self.pane_opened_to_view = false;
+            if side == Side::Right {
+                self.show_right = false;
+                // The keyboard cannot be left in a pane that is not there.
+                self.active = Side::Left;
+            }
+        }
         // Two quick-view panes would have nothing to look at: each follows the
         // other's cursor, and neither would be a listing to move a cursor in.
         if mode == ViewMode::Preview && self.view(side.other()) == ViewMode::Preview {
@@ -3117,6 +3139,9 @@ impl GuiApp {
             }
             A::ToggleSidebar => self.show_sidebar = !self.show_sidebar,
             A::ToggleSecondPane => {
+                // Asking for the pane yourself makes it yours: the viewer no
+                // longer gets to fold it away when the preview closes.
+                self.pane_opened_to_view = false;
                 self.show_right = !self.show_right;
                 if !self.show_right {
                     // The visible pane is the active one, so nothing is lost.
@@ -3789,11 +3814,24 @@ impl GuiApp {
             self.error("Nothing to view");
             return;
         }
+        // A second press stops, rather than setting a mode that is already
+        // set. F3 is how you look at a file and how you stop looking at it -
+        // one key, because that is what a reader reaches for either way.
+        if self.view(side.other()) == ViewMode::Preview {
+            self.set_view(side.other(), ViewMode::Details);
+            self.active = side;
+            self.info("Preview off.");
+            return;
+        }
         if !self.show_right {
+            // Borrowed, and noted as borrowed. `set_view` gives it back when
+            // the preview closes.
             self.show_right = true;
+            self.pane_opened_to_view = true;
         }
         self.set_view(side.other(), ViewMode::Preview);
         self.active = side;
+        self.info("Preview on - it follows the cursor. F3 again to stop.");
     }
 
     /// F4: hand the file to `$EDITOR`, in a shell tab.
@@ -9612,5 +9650,79 @@ mod tests {
         let lines = wrap_label("exactly-sixteen!", 15);
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[1], "!");
+    }
+
+    #[test]
+    fn viewing_in_a_one_pane_window_gives_the_pane_back_afterwards() {
+        let (_root, mut app) = fixture();
+        app.show_right = false;
+        app.active = Side::Left;
+        app.left.current_mut().cursor_to(1);
+
+        app.view_selected();
+        assert!(app.show_right, "a preview has to appear somewhere");
+        assert_eq!(app.view(Side::Right), ViewMode::Preview);
+        assert_eq!(app.active, Side::Left, "the keyboard stays where it was");
+
+        // F3 again. The window goes back to how it was found: a viewer that
+        // left a pane behind would be redecorating on its way out.
+        app.view_selected();
+        assert!(!app.show_right, "the borrowed pane is handed back");
+        assert_eq!(app.active, Side::Left);
+    }
+
+    #[test]
+    fn a_pane_that_was_already_open_is_not_folded_away_by_the_viewer() {
+        let (_root, mut app) = fixture();
+        assert!(app.show_right, "two panes to begin with");
+        app.left.current_mut().cursor_to(1);
+
+        app.view_selected();
+        app.view_selected();
+        // Nothing was borrowed, so nothing is given back. Closing a preview
+        // must not take away a pane the reader had open before they asked.
+        assert!(app.show_right);
+    }
+
+    #[test]
+    fn the_pane_comes_back_however_the_preview_is_closed() {
+        // F3 is not the only way out - Ctrl-Q, Escape and the pane's own view
+        // buttons all end up in `set_view`, and a pane handed back by only
+        // one of them would be worse than one never handed back at all.
+        for closed_with in [ViewMode::Details, ViewMode::Grid, ViewMode::Tree] {
+            let (_root, mut app) = fixture();
+            app.show_right = false;
+            app.left.current_mut().cursor_to(1);
+
+            app.view_selected();
+            assert!(app.show_right);
+
+            app.set_view(Side::Right, closed_with);
+            assert!(
+                !app.show_right,
+                "closing the preview with {closed_with:?} should give the pane back"
+            );
+        }
+    }
+
+    #[test]
+    fn asking_for_the_second_pane_yourself_makes_it_yours() {
+        use keys::Action as A;
+        let (_root, mut app) = fixture();
+        app.show_right = false;
+        app.left.current_mut().cursor_to(1);
+
+        app.view_selected();
+        assert!(app.pane_opened_to_view);
+
+        // The reader takes ownership of the arrangement by toggling it
+        // themselves; the viewer does not get to undo that later.
+        app.run_action(A::ToggleSecondPane);
+        assert!(!app.pane_opened_to_view);
+        app.set_view(Side::Right, ViewMode::Details);
+        assert!(
+            !app.show_right,
+            "the toggle folded it away, and the viewer did not put it back"
+        );
     }
 }

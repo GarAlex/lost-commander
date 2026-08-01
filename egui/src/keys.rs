@@ -428,7 +428,7 @@ pub const HELP: &[(&str, &str)] = &[
     ("Ctrl-J", "what was done - the account"),
     ("Alt-E", "edit with $EDITOR in a shell tab"),
     ("Alt-T", "directory tree"),
-    ("F3", "view - show it in the other pane"),
+    ("F3", "view - show it in the other pane; F3 again stops"),
     ("F4 on a binary", "edit its bytes"),
     ("F4", "edit the text here, with its encoding"),
     ("F5", "copy to the other pane"),
