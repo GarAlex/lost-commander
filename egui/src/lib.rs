@@ -861,6 +861,37 @@ impl GuiApp {
         self.info(format!("Commands will run with {program}"));
     }
 
+    /// Send the visible shell after the active pane, when the pane has moved.
+    ///
+    /// The other half of the coupling: `cd here` did this on demand and
+    /// nothing did it on its own, so walking the panes left the shell behind
+    /// and the next command ran somewhere you were no longer looking.
+    ///
+    /// Switching panes counts as moving, because the pane you are working in
+    /// is the one the shell should be in - that is the whole point of the two
+    /// being coupled.
+    ///
+    /// A pinned tab is left alone.
+    fn shell_follows_the_pane(&mut self) {
+        if self.terminals.is_pinned(self.terminals.active) {
+            return;
+        }
+        let cwd = self.active_panel().cwd.clone();
+        let Some(session) = self.terminals.active_mut() else {
+            return;
+        };
+        // Where the shell says it is, or failing that where it was started -
+        // an unhooked shell never says, and would otherwise be sent a `cd`
+        // after every keystroke that moved a pane.
+        let already = session.shell_cwd().unwrap_or_else(|| session.cwd.clone());
+        if already == cwd {
+            return;
+        }
+        let line = lost_commander_core::shell::cd_command(&session.program, &cwd);
+        session.run_line(&line);
+        session.cwd = cwd;
+    }
+
     /// Move the active pane to wherever the visible shell has just gone.
     ///
     /// Only on a change, and only for the tab that reported it. A shell says
@@ -879,6 +910,11 @@ impl GuiApp {
         else {
             return;
         };
+        if self.terminals.is_pinned(tab) {
+            // Pinned: left where it is, and steering nothing.
+            self.shell_was = Some((tab, where_));
+            return;
+        }
         let changed = match &self.shell_was {
             Some((was_tab, was)) => *was_tab == tab && *was != where_,
             None => false,
@@ -1563,6 +1599,7 @@ impl eframe::App for GuiApp {
 
         self.terminals.reap_finished();
         self.follow_the_shell();
+        self.shell_follows_the_pane();
         self.terminal_input(ctx);
 
         egui::TopBottomPanel::top("toolbar")
@@ -6485,6 +6522,30 @@ impl GuiApp {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
 
+                // A pinned tab is left where it is: it does not follow the
+                // panes and the panes do not follow it. What you want for a
+                // build running in one directory while you work in another -
+                // without it, coupling the two means a shell you cannot keep
+                // still.
+                let tab = self.terminals.active;
+                let mut pinned = self.terminals.is_pinned(tab);
+                if ui
+                    .checkbox(&mut pinned, RichText::new("pin").size(11.0))
+                    .on_hover_text(
+                        "Keep this terminal where it is: it stops following the panels,                          and they stop following it",
+                    )
+                    .changed()
+                {
+                    self.terminals.set_pinned(tab, pinned);
+                    self.info(if pinned {
+                        "Terminal pinned - it stays where it is"
+                    } else {
+                        "Terminal follows the panels again"
+                    });
+                }
+
+                ui.add_space(6.0);
+
                 if ui
                     .add(
                         egui::Button::new(RichText::new("cd here").size(11.0))
@@ -10301,5 +10362,41 @@ mod tests {
         let went = app.left.cwd().to_path_buf();
         app.follow_the_shell();
         assert_eq!(app.left.cwd(), went, "a different tab is not a move");
+    }
+
+    #[test]
+    fn a_pinned_terminal_is_steered_by_nobody() {
+        let (root, mut app) = fixture();
+        let elsewhere = root.path().join("sub");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+
+        // Set directly: `set_pinned` pins a tab that exists, and the
+        // checkbox is only drawn when one does. Spawning a real shell here
+        // would test the pty rather than the rule.
+        app.terminals.pinned = vec![true];
+        assert!(app.terminals.is_pinned(0));
+
+        // Neither direction does anything without a session, and neither
+        // panics reaching for one.
+        let went = app.left.cwd().to_path_buf();
+        app.shell_was = Some((0, elsewhere.clone()));
+        app.follow_the_shell();
+        app.shell_follows_the_pane();
+        assert_eq!(app.left.cwd(), went);
+    }
+
+    #[test]
+    fn closing_a_tab_takes_its_pin_with_it() {
+        // Or every tab after it inherits its neighbour's pin, and a terminal
+        // nobody pinned quietly stops following the panels.
+        let terminals = lost_commander_core::pty::Terminals {
+            pinned: vec![false, true, false],
+            ..Default::default()
+        };
+        // `close` on an empty session list is a no-op, so the pins are asked
+        // about directly - the point is that the two stay the same length.
+        assert!(terminals.is_pinned(1));
+        assert!(!terminals.is_pinned(2));
+        assert!(!terminals.is_pinned(9), "past the end is not pinned");
     }
 }

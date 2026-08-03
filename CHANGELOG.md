@@ -29,6 +29,14 @@ Notable changes, newest first. Versions follow [semantic versioning]; until
   for the same reason: half-sharing a directory is worse than not sharing
   one. A hooked shell is left alone, since sending it back would undo a `cd`
   the reader meant.
+- **The graphical view's shell and panes follow each other.** A `cd` in the
+  visible shell moves the active pane; moving a pane, or switching to the
+  other one, sends the shell after it. Previously `cd here` was the only
+  connection and it pointed one way.
+- **A terminal tab can be pinned**, with the checkbox beside `cd here`. A
+  pinned shell is left where it is: it stops following the panes and they
+  stop following it — for a build running in one directory while you work in
+  another. Without it, coupling the two means a shell you cannot keep still.
 - **The graphical view follows its shell too.** A `cd` in the visible shell
   moves the active pane, which it never did before — it had `cd here` and
   nothing the other way.

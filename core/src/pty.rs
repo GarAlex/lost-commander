@@ -798,6 +798,17 @@ impl Drop for PtySession {
 pub struct Terminals {
     pub sessions: Vec<PtySession>,
     pub active: usize,
+    /// Which sessions are pinned, by index alongside `sessions`.
+    ///
+    /// A pinned shell is left where it is: it does not follow the panes and
+    /// the panes do not follow it. That is what you want for a build running
+    /// in one directory while you work in another - without it, coupling the
+    /// two means a shell you cannot keep still.
+    ///
+    /// Kept beside the sessions rather than inside them because it is a
+    /// front-end's policy about a session, not a fact about the process, and
+    /// [`Terminals::close`] keeps the two in step.
+    pub pinned: Vec<bool>,
 }
 
 impl Terminals {
@@ -830,8 +841,26 @@ impl Terminals {
             session.title = format!("{} ({})", session.title, same + 1);
         }
         self.sessions.push(session);
+        self.pinned.push(false);
         self.active = self.sessions.len() - 1;
         Ok(())
+    }
+
+    /// Whether the session at `index` is left where it is.
+    pub fn is_pinned(&self, index: usize) -> bool {
+        self.pinned.get(index).copied().unwrap_or(false)
+    }
+
+    /// Pin or unpin a session.
+    pub fn set_pinned(&mut self, index: usize, pinned: bool) {
+        // Grown rather than indexed blindly: a session opened before this
+        // existed, or by a front-end that never pins, has no entry yet.
+        while self.pinned.len() < self.sessions.len() {
+            self.pinned.push(false);
+        }
+        if let Some(slot) = self.pinned.get_mut(index) {
+            *slot = pinned;
+        }
     }
 
     /// Close one terminal, keeping the selection somewhere sensible.
@@ -841,6 +870,11 @@ impl Terminals {
         }
         let mut session = self.sessions.remove(index);
         session.shutdown();
+        // In step with the sessions, or every tab after this one would
+        // inherit the pin of its neighbour.
+        if index < self.pinned.len() {
+            self.pinned.remove(index);
+        }
 
         if self.sessions.is_empty() {
             self.active = 0;
