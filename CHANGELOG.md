@@ -23,6 +23,14 @@ Notable changes, newest first. Versions follow [semantic versioning]; until
   `settings.toml` was read and then ignored there, so the setting the
   graphical view respects did nothing. It matters on Windows, where the
   machine's own answer is `cmd` and `cmd` has no seam for the hook.
+- **`Alt-O` picks the shell**, and says which of them can be recorded. It
+  matters most on Windows, where the machine's answer is `cmd` and `cmd` has
+  no seam to hook — so without a way to choose, the shared directory was
+  unreachable and unexplained.
+- **`cd` is quoted the way each shell quotes.** `cd 'C:\src'` is an error in
+  `cmd`, which has no single quotes at all, and `cmd` will not cross drives
+  without `/d`. PowerShell doubles a quote inside a name where a POSIX shell
+  escapes it.
 - **The directory is shared both ways.** A `cd` in the shell moves the panel;
   moving the panel `cd`s the shell. The shell reports where it is through the
   `OSC 133` hook the graphical view already used — read rather than guessed

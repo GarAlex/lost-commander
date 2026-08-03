@@ -78,7 +78,11 @@ KEYS:
     Ctrl-O swaps between the panels and the shell running underneath them.
     It is one shell for the whole session, so a cd in one command is still
     true for the next - and a cd there moves the panel, as moving the panel
-    cds the shell."
+    cds the shell. That sharing needs a shell with a seam to hook: bash, zsh,
+    fish and PowerShell have one, cmd and dash do not.
+
+    Alt-O picks which shell that is, and says which of them can be recorded.
+    On Windows the default is cmd, which cannot."
     );
 }
 

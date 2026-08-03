@@ -78,6 +78,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
             ..
         } => draw_viewer(frame, area, title, lines, *scroll, *forced, *detected),
         Mode::Connections { tab, cursor } => draw_connections(frame, area, app, *tab, *cursor),
+        Mode::Shells { shells, cursor } => draw_shells(frame, area, app, shells, *cursor),
         Mode::Progress => draw_progress(frame, area, app),
         Mode::Help { scroll } => draw_help(frame, area, *scroll),
         Mode::Overwrite { conflict } => draw_overwrite(frame, area, conflict),
@@ -2195,7 +2196,8 @@ pub const HELP: &[(&str, &str)] = &[
     ("Ctrl-P", "open with..."),
     ("Ctrl-E", "a shell as administrator"),
     ("F9", "cycle sort order"),
-    ("Ctrl-O", "shell screen"),
+    ("Ctrl-O", "the shell underneath, and back"),
+    ("Alt-O", "which shell that is"),
     (
         "F10 / Ctrl-Q",
         "quit - some terminals keep F10 for their own menu",
@@ -2343,4 +2345,82 @@ fn colour_of(hex: &str) -> Option<Color> {
     }
     let byte = |at: usize| u8::from_str_radix(&hex[at..at + 2], 16).ok();
     Some(Color::Rgb(byte(0)?, byte(2)?, byte(4)?))
+}
+
+/// The shell picker.
+///
+/// Each shell says whether it can be recorded, because that is the whole
+/// reason to choose one over another: a shell with a seam to hook reports
+/// where it is and what it ran, so the panel and the shell share a directory
+/// and the journal fills up. One without does neither, and on Windows the
+/// machine's own answer - `cmd` - is one without.
+fn draw_shells(frame: &mut Frame, area: Rect, app: &App, shells: &[String], cursor: usize) {
+    use lost_commander_core::shell::program_name;
+    use lost_commander_core::shellhook::journals;
+
+    let width = 74u16.min(area.width.saturating_sub(4));
+    let height = (shells.len() as u16 + 6).min(area.height.saturating_sub(2));
+    let rect = centered(width, height, area);
+    frame.render_widget(Clear, rect);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(theme::border_style(true))
+        .title(Span::styled(" Shell ", theme::title_style()))
+        .title_alignment(Alignment::Center);
+    let inner = block.inner(rect);
+    frame.render_widget(block, rect);
+
+    let split = Layout::vertical([Constraint::Min(1), Constraint::Length(2)]).split(inner);
+    let running = app.shell_choice();
+
+    let items: Vec<ListItem> = shells
+        .iter()
+        .map(|shell| {
+            let name = program_name(shell);
+            let note = if journals(shell) {
+                "shares its directory, and is recorded"
+            } else {
+                "not recorded, and cannot share a directory"
+            };
+            let mark = if *shell == running { '*' } else { ' ' };
+            ListItem::new(Line::from(vec![
+                Span::styled(
+                    format!("{mark}{:<14}", fit(&name, 14)),
+                    Style::default().fg(theme::FILE_FG),
+                ),
+                Span::styled(
+                    format!("{note:<44}"),
+                    Style::default().fg(if journals(shell) {
+                        theme::TITLE_FG
+                    } else {
+                        theme::BORDER_FG
+                    }),
+                ),
+            ]))
+        })
+        .collect();
+
+    let mut state = ListState::default();
+    state.select(Some(cursor.min(shells.len().saturating_sub(1))));
+    frame.render_stateful_widget(
+        List::new(items).style(Style::default().bg(theme::DIALOG_BG)),
+        split[0],
+        &mut state,
+    );
+
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(Span::styled(
+                format!(" now: {}", fit(&running, width as usize - 8)),
+                Style::default().bg(theme::DIALOG_BG).fg(theme::BORDER_FG),
+            )),
+            Line::from(Span::styled(
+                " Enter chooses and remembers it   Esc closes",
+                Style::default().bg(theme::DIALOG_BG).fg(theme::BORDER_FG),
+            )),
+        ])
+        .style(Style::default().bg(theme::DIALOG_BG)),
+        split[1],
+    );
 }

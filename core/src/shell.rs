@@ -830,3 +830,74 @@ mod tests {
         assert!(out.stdout.ends_with("[output truncated]"));
     }
 }
+
+/// How to tell this shell to change directory.
+///
+/// Quoting is not one thing. A POSIX shell and PowerShell both take single
+/// quotes and treat what is inside literally, which is what a path wants -
+/// but `cmd` has no single quotes at all and reads them as part of the name,
+/// so `cd 'C:\src'` is an error rather than a directory change. `cmd` also
+/// needs `/d` to cross drives, which is the case a file manager hits at once.
+///
+/// Here rather than in a front-end because it is a fact about shells, and
+/// because a second front-end wanting the same thing should not have to
+/// rediscover that `cmd` is different.
+pub fn cd_command(program: &str, path: &std::path::Path) -> String {
+    let shown = path.display().to_string();
+    match program_name(program).as_str() {
+        "cmd" | "cmd.exe" => format!("cd /d \"{shown}\""),
+        // Single quotes are literal in PowerShell as well, so a space or a
+        // `$` in a name arrives intact - but the two families escape a quote
+        // *inside* one differently, and a name that closed the quote early
+        // would turn the rest of the path into commands.
+        "powershell" | "powershell.exe" | "pwsh" | "pwsh.exe" => {
+            format!("cd '{}'", shown.replace('\'', "''"))
+        }
+        _ => format!("cd '{}'", shown.replace('\'', r"'\''")),
+    }
+}
+
+#[cfg(test)]
+mod cd_tests {
+    use super::cd_command;
+    use std::path::Path;
+
+    #[test]
+    fn cmd_gets_double_quotes_and_a_drive_switch() {
+        // `cd 'C:\src'` in cmd is an error: it has no single quotes and
+        // reads them as part of the name. Without `/d` it will not cross
+        // from one drive to another, which is the first thing a file manager
+        // asks it to do.
+        assert_eq!(
+            cd_command("cmd.exe", Path::new(r"C:\src")),
+            r#"cd /d "C:\src""#
+        );
+    }
+
+    #[test]
+    fn everything_else_gets_single_quotes() {
+        assert_eq!(cd_command("bash", Path::new("/home/you")), "cd '/home/you'");
+        assert_eq!(
+            cd_command("powershell.exe", Path::new(r"C:\Program Files")),
+            r"cd 'C:\Program Files'"
+        );
+    }
+
+    #[test]
+    fn powershell_doubles_a_quote_and_posix_does_not() {
+        assert_eq!(
+            cd_command("pwsh", Path::new("/tmp/it's")),
+            "cd '/tmp/it''s'"
+        );
+    }
+
+    #[test]
+    fn a_quote_in_a_name_does_not_end_the_quoting() {
+        // A directory may be called anything at all, and a name that closed
+        // the quote would turn the rest of it into commands.
+        assert_eq!(
+            cd_command("bash", Path::new("/tmp/it's")),
+            r"cd '/tmp/it'\''s'"
+        );
+    }
+}

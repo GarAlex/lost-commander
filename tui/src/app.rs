@@ -207,6 +207,17 @@ pub enum Mode {
         tab: ConnTab,
         cursor: usize,
     },
+    /// Which shell runs underneath the panels.
+    ///
+    /// Worth a picker rather than only a line in a configuration file,
+    /// because on Windows the machine's own answer is `cmd`, `cmd` has no
+    /// seam for the hook, and a reader would otherwise have no way to
+    /// discover that the shared directory needs a different shell - or that
+    /// there is a shared directory at all.
+    Shells {
+        shells: Vec<String>,
+        cursor: usize,
+    },
     /// A long-running copy/move/delete is in flight.
     Progress,
     /// Find files by name, and by what is inside them.
@@ -2335,6 +2346,7 @@ impl App {
             Mode::Bytes { .. } => self.on_key_bytes(key),
             Mode::Journal { .. } => self.on_key_journal(key),
             Mode::Connections { .. } => self.on_key_connections(key),
+            Mode::Shells { .. } => self.on_key_shells(key),
             Mode::OpenWith { .. } => self.on_key_open_with(key),
             Mode::Overwrite { .. } => self.on_key_overwrite(key),
             Mode::Find { .. } => self.on_key_find(key),
@@ -2499,6 +2511,7 @@ impl App {
     /// happens while the panels have the keyboard - which means the shell is
     /// sitting at a prompt with nothing half-typed for this to interrupt.
     pub fn tell_the_shell(&mut self) {
+        let program = self.shell_choice();
         let Some(shell) = self.shell.as_mut() else {
             return;
         };
@@ -2509,10 +2522,85 @@ impl App {
         if shell.shell_cwd().as_deref() == Some(cwd.as_path()) {
             return;
         }
-        // Quoted, because a directory may have a space in it and the shell
-        // would otherwise read the tail as another argument.
-        shell.write(format!("cd '{}'", cwd.display()).as_bytes());
+        // Quoted the way *this* shell quotes. `cd 'C:\src'` is an error in
+        // cmd, which has no single quotes and reads them as part of the name
+        // - and cmd will not cross drives without `/d`, which is the first
+        // thing a file manager asks it to do.
+        let line = lost_commander_core::shell::cd_command(&program, &cwd);
+        shell.write(line.as_bytes());
         shell.write(ENTER);
+    }
+
+    /// Alt-O: choose the shell that runs underneath the panels.
+    pub fn open_shell_picker(&mut self) {
+        let mut shells = lost_commander_core::shell::discover_shells();
+        // Whatever is in use belongs on the list even if the search missed
+        // it - somebody who named a shell by hand should see it, not wonder
+        // where it went.
+        let current = self.shell_choice();
+        if !shells.contains(&current) {
+            shells.insert(0, current.clone());
+        }
+        let cursor = shells.iter().position(|s| *s == current).unwrap_or(0);
+        self.mode = Mode::Shells { shells, cursor };
+    }
+
+    /// The shell that would run now.
+    pub fn shell_choice(&self) -> String {
+        self.shell_program
+            .clone()
+            .unwrap_or_else(|| lost_commander_core::shell::current_shell().0)
+    }
+
+    fn on_key_shells(&mut self, key: KeyEvent) {
+        let Mode::Shells { shells, cursor } = &mut self.mode else {
+            return;
+        };
+        let last = shells.len().saturating_sub(1);
+        match key.code {
+            KeyCode::Up => *cursor = cursor.saturating_sub(1),
+            KeyCode::Down => *cursor = (*cursor + 1).min(last),
+            KeyCode::Home => *cursor = 0,
+            KeyCode::End => *cursor = last,
+            KeyCode::Esc | KeyCode::F(10) => self.mode = Mode::Normal,
+            KeyCode::Enter => {
+                let chosen = shells.get(*cursor).cloned();
+                self.mode = Mode::Normal;
+                if let Some(chosen) = chosen {
+                    self.use_shell(chosen);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Run this shell from now on, and remember it.
+    ///
+    /// The one already running is dropped rather than kept: a reader who has
+    /// just chosen a different shell means the next command to go to it, and
+    /// two shells with one command line would be a coin toss.
+    fn use_shell(&mut self, program: String) {
+        self.shell_program = Some(program.clone());
+        self.shell = None;
+        self.showing_shell = false;
+
+        let mut settings = lost_commander_core::config::Settings::load();
+        settings.shell = Some(program.clone());
+        if let Err(e) = settings.save() {
+            self.error(format!("Chose {program}, but could not save it: {e}"));
+            return;
+        }
+        let name = lost_commander_core::shell::program_name(&program);
+        if lost_commander_core::shellhook::journals(&program) {
+            self.info(format!(
+                "{name} from now on. It reports where it is, so the panel and the shell share a directory."
+            ));
+        } else {
+            self.info(format!(
+                "{name} from now on - {}",
+                lost_commander_core::shellhook::why_not()
+            ));
+        }
     }
 
     /// Ctrl-C: stop whatever is going on, and if nothing is, leave.
@@ -2825,6 +2913,9 @@ impl App {
             // what it does here; the tree, which had it, moves to Alt-T.
             KeyCode::Char('t') if ctrl => self.new_tab(),
             KeyCode::Char('t') if alt => self.toggle_tree(),
+            // Pairs with Ctrl-O, which shows the shell: one letter for
+            // looking at it and for choosing which one it is.
+            KeyCode::Char('o') if alt => self.open_shell_picker(),
             KeyCode::Char('w') if ctrl => self.close_tab(),
             KeyCode::Char('w') if alt => self.close_other_tabs(),
             // F10 is the Commander key for this and stays, but a terminal
