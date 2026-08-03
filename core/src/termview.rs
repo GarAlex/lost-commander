@@ -249,3 +249,99 @@ mod tests {
         assert!(xterm(240).0 > xterm(232).0);
     }
 }
+
+/// What a key sends to a shell, by name.
+///
+/// Named rather than coded because a key code is a fact about one windowing
+/// system, and three front-ends would otherwise each hold their own copy of
+/// this table - which is what was happening: the C ABI had it written out,
+/// the graphical crate had it again in its own key type, and the terminal
+/// one was about to make a third. A `Left` that sent something different in
+/// one window would be a different program.
+///
+/// `None` means the key sends nothing, which is not an error: most keys on a
+/// keyboard have no meaning to a shell.
+pub fn key_bytes(name: &str, ctrl: bool, alt: bool) -> Option<Vec<u8>> {
+    // Ctrl with a letter is that letter's control code: Ctrl-C is 3, Ctrl-D
+    // is 4, and so on down the alphabet. This is why Ctrl-C interrupts.
+    if ctrl && name.len() == 1 {
+        let letter = name.as_bytes()[0].to_ascii_lowercase();
+        if letter.is_ascii_lowercase() {
+            return Some(vec![letter - b'a' + 1]);
+        }
+    }
+
+    let bytes: &[u8] = match name {
+        "Enter" => b"\r",
+        "Tab" => b"\t",
+        "Backspace" => b"\x7f",
+        "Escape" => b"\x1b",
+        "Up" => b"\x1b[A",
+        "Down" => b"\x1b[B",
+        "Right" => b"\x1b[C",
+        "Left" => b"\x1b[D",
+        "Home" => b"\x1b[H",
+        "End" => b"\x1b[F",
+        "PageUp" => b"\x1b[5~",
+        "PageDown" => b"\x1b[6~",
+        "Insert" => b"\x1b[2~",
+        "Delete" => b"\x1b[3~",
+        // A single character is itself. Anything longer is a name this table
+        // does not know, and sending its letters would type gibberish.
+        other if other.chars().count() == 1 => return Some(other.as_bytes().to_vec()),
+        _ => return None,
+    };
+
+    // Alt is the same sequence with an escape in front, which is what a
+    // terminal has meant by "meta" since it was a real key on the keyboard.
+    if alt {
+        let mut out = vec![0x1b];
+        out.extend_from_slice(bytes);
+        return Some(out);
+    }
+    Some(bytes.to_vec())
+}
+
+#[cfg(test)]
+mod key_tests {
+    use super::key_bytes;
+
+    #[test]
+    fn arrows_are_the_sequences_a_terminal_expects() {
+        assert_eq!(key_bytes("Up", false, false).unwrap(), b"\x1b[A");
+        assert_eq!(key_bytes("Left", false, false).unwrap(), b"\x1b[D");
+        assert_eq!(key_bytes("Enter", false, false).unwrap(), b"\r");
+    }
+
+    #[test]
+    fn ctrl_and_a_letter_is_that_letters_control_code() {
+        // Ctrl-C is 3, which is why it interrupts: the shell's line
+        // discipline turns that byte into a signal.
+        assert_eq!(key_bytes("c", true, false).unwrap(), vec![3]);
+        assert_eq!(key_bytes("d", true, false).unwrap(), vec![4]);
+        assert_eq!(
+            key_bytes("A", true, false).unwrap(),
+            vec![1],
+            "case is not part of it"
+        );
+    }
+
+    #[test]
+    fn alt_puts_an_escape_in_front() {
+        assert_eq!(key_bytes("Up", false, true).unwrap(), b"\x1b\x1b[A");
+    }
+
+    #[test]
+    fn an_ordinary_character_is_itself() {
+        assert_eq!(key_bytes("x", false, false).unwrap(), b"x");
+        assert_eq!(key_bytes("\u{e9}", false, false).unwrap(), "é".as_bytes());
+    }
+
+    #[test]
+    fn a_key_that_means_nothing_to_a_shell_sends_nothing() {
+        // Not an error. Most keys on a keyboard have nothing to say here, and
+        // sending the letters of their names would type gibberish.
+        assert!(key_bytes("F7", false, false).is_none());
+        assert!(key_bytes("ScrollLock", false, false).is_none());
+    }
+}

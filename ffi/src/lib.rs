@@ -1528,39 +1528,14 @@ pub unsafe extern "C" fn rcmd_term_key(
         };
         let name = borrowed(name).unwrap_or_default();
 
-        // Ctrl with a letter is that letter's control code: Ctrl-C is 3,
-        // Ctrl-D is 4, and so on down the alphabet.
-        if ctrl != 0 && name.len() == 1 {
-            let letter = name.as_bytes()[0].to_ascii_lowercase();
-            if letter.is_ascii_lowercase() {
-                term.session.write(&[letter - b'a' + 1]);
-                return out("{\"sent\":true}".to_string());
-            }
-        }
-
-        let bytes: &[u8] = match name.as_str() {
-            "Enter" => b"\r",
-            "Tab" => b"\t",
-            "Backspace" => b"\x7f",
-            "Escape" => b"\x1b",
-            "Up" => b"\x1b[A",
-            "Down" => b"\x1b[B",
-            "Right" => b"\x1b[C",
-            "Left" => b"\x1b[D",
-            "Home" => b"\x1b[H",
-            "End" => b"\x1b[F",
-            "PageUp" => b"\x1b[5~",
-            "PageDown" => b"\x1b[6~",
-            "Insert" => b"\x1b[2~",
-            "Delete" => b"\x1b[3~",
-            _ => return out("{\"sent\":false}".to_string()),
+        // The table is the engine's: the graphical crate needs the same
+        // answers and the terminal one needs them too, and three copies of
+        // "what does Left send" is three chances to disagree.
+        let Some(bytes) = lost_commander_core::termview::key_bytes(&name, ctrl != 0, alt != 0)
+        else {
+            return out("{\"sent\":false}".to_string());
         };
-        // Alt is the same sequence with an escape in front, which is what a
-        // terminal has meant by "meta" since it was a real key.
-        if alt != 0 {
-            term.session.write(b"\x1b");
-        }
-        term.session.write(bytes);
+        term.session.write(&bytes);
         out("{\"sent\":true}".to_string())
     })
 }
