@@ -31,5 +31,10 @@ lost-commander-core.workspace = true
 ratatui = "0.30"
 crossterm = "0.29"
 
+# Only to stop ourselves on Ctrl-Z, which needs a real SIGTSTP. There is no
+# portable way to ask for that, and nothing else here needs libc.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 tempfile.workspace = true

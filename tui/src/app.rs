@@ -337,6 +337,10 @@ pub struct App {
     /// Set when a privileged command needs to be run with the TUI suspended,
     /// so its password prompt has the terminal to itself.
     pub pending_shell: Option<String>,
+    /// Set by Ctrl-Z: give the terminal back and stop, until resumed.
+    ///
+    /// The main loop does it, for the same reason as the shell screen.
+    pub pending_suspend: bool,
     /// Set by Ctrl-O: hide the panels and show what the shell has printed.
     ///
     /// The main loop does it, because taking the terminal back is its job.
@@ -436,6 +440,7 @@ impl App {
             pending_edit: None,
             pending_shell: None,
             pending_peek: false,
+            pending_suspend: false,
             bookmarks: Bookmarks::default(),
             bookmarks_path: None,
             job: None,
@@ -2319,6 +2324,26 @@ impl App {
         }
     }
 
+    /// Ctrl-C: stop whatever is going on, and if nothing is, leave.
+    ///
+    /// In that order, because the reflex means "stop" and what wants stopping
+    /// is whatever is most immediate. A copy running is the loudest thing on
+    /// screen; a half-typed command is the next; and with neither, there is
+    /// nothing to interrupt except the program itself, which is what the
+    /// keystroke means everywhere else in a terminal.
+    fn interrupt(&mut self) {
+        if self.job_is_running() {
+            self.cancel_job();
+            return;
+        }
+        if !self.command.is_empty() {
+            self.command.clear();
+            self.info("Command cleared. Ctrl-C again to quit.");
+            return;
+        }
+        self.should_quit = true;
+    }
+
     fn side_index(&self) -> usize {
         match self.active {
             Side::Left => 0,
@@ -2607,9 +2632,21 @@ impl App {
             KeyCode::Char('t') if alt => self.toggle_tree(),
             KeyCode::Char('w') if ctrl => self.close_tab(),
             KeyCode::Char('w') if alt => self.close_other_tabs(),
+            // F10 is the Commander key for this and stays, but a terminal
+            // may never let it through - GNOME Terminal opens its own menu
+            // with F10, and some emulators are configured to close the window
+            // outright. So there is a second way that no terminal claims.
             KeyCode::F(10) => self.should_quit = true,
-
-            KeyCode::Char('q') if !ctrl => self.should_quit = true,
+            KeyCode::Char('q') if ctrl => self.should_quit = true,
+            // What everybody's hands do to leave a terminal program. In raw
+            // mode this arrives as a keystroke rather than a signal, so it is
+            // ours to answer - and answering nothing is how a program traps
+            // somebody in it.
+            KeyCode::Char('c') if ctrl => self.interrupt(),
+            // And what everybody's hands do to put one in the background.
+            // Also a keystroke here rather than a signal; the main loop does
+            // the actual stopping, because it owns the terminal.
+            KeyCode::Char('z') if ctrl => self.pending_suspend = true,
             KeyCode::Char('h') if ctrl => {
                 self.active_panel_mut().toggle_hidden();
                 let showing = self.active_panel().show_hidden;
@@ -5759,5 +5796,46 @@ mod tests {
         app.on_key(key(KeyCode::Enter));
         assert!(!app.on_tree[0]);
         assert!(!crate::ui::status_line(&app).contains("(tree)"));
+    }
+
+    #[test]
+    fn there_is_more_than_one_way_out() {
+        // A terminal that keeps F10 for its own menu - GNOME Terminal does -
+        // leaves a reader with no way to quit at all, which is how this was
+        // reported: "I couldn't figure out how to quit."
+        let (_root, mut app) = app_fixture();
+        app.on_key(key(KeyCode::F(10)));
+        assert!(app.should_quit);
+
+        let (_root2, mut app2) = app_fixture();
+        app2.on_key(ctrl_key(KeyCode::Char('q')));
+        assert!(app2.should_quit, "Ctrl-Q always reaches us");
+    }
+
+    #[test]
+    fn ctrl_c_stops_the_nearest_thing_and_quits_when_there_is_none() {
+        let (_root, mut app) = app_fixture();
+
+        // A half-typed command is nearer than the program itself.
+        app.on_key(key(KeyCode::Char('r')));
+        app.on_key(key(KeyCode::Char('m')));
+        app.on_key(ctrl_key(KeyCode::Char('c')));
+        assert!(app.command.is_empty(), "the line is cleared");
+        assert!(!app.should_quit, "and that is all it did");
+
+        // With nothing to interrupt, it means what it means everywhere else.
+        app.on_key(ctrl_key(KeyCode::Char('c')));
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn ctrl_z_asks_the_main_loop_to_suspend() {
+        // The key cannot do it itself: the terminal has to be handed back
+        // first, and the main loop is what owns it. A process stopped while
+        // the screen is in raw mode leaves the shell unusable.
+        let (_root, mut app) = app_fixture();
+        app.on_key(ctrl_key(KeyCode::Char('z')));
+        assert!(app.pending_suspend);
+        assert!(!app.should_quit, "suspending is not quitting");
     }
 }

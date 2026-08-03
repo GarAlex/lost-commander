@@ -7,7 +7,19 @@ Notable changes, newest first. Versions follow [semantic versioning]; until
 
 ## Unreleased
 
-Nothing yet.
+### Fixed
+
+- **There is more than one way to quit the terminal view.** `F10` is the
+  Commander key and stays, but a terminal may keep it for its own menu and
+  never pass it on — GNOME Terminal does — which left a reader with no way
+  out at all. `Ctrl-Q` always works.
+- **`Ctrl-C` does something.** In raw mode it arrives as a keystroke rather
+  than a signal, so it was being swallowed. It now cancels a running copy, or
+  clears the command line, or quits when there is neither.
+- **`Ctrl-Z` suspends** on Unix, giving the terminal back before it stops so
+  the shell is usable afterwards. `fg` resumes. Windows has no job control.
+- The manual said `F10` "is the only way to quit". It was, and that was the
+  bug.
 
 ## 0.1.0 — 2026-08-01
 

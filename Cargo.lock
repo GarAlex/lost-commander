@@ -1879,6 +1879,7 @@ name = "lost-commander-tui"
 version = "0.1.0"
 dependencies = [
  "crossterm",
+ "libc",
  "lost-commander-core",
  "ratatui",
  "tempfile",

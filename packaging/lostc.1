@@ -47,9 +47,26 @@ desktop.
 The parent directory, when nothing is typed on the command line.
 .TP
 .BR F1 - F10
-Help, rename, view, edit, copy, move, mkdir, delete, sort, quit.
+Help, rename, view, edit, copy, move, mkdir, delete, sort, quit. Letters go
+to the command line, so
+.B q
+does not quit.
+.TP
+.B Ctrl\-Q
+Quit. There is a second way out because a terminal may keep
 .B F10
-is the only way to quit: letters go to the command line.
+for its own menu and never pass it on: GNOME Terminal does, and some
+emulators are configured to close the window with it instead.
+.TP
+.B Ctrl\-C
+Cancel a running copy or move; with nothing running, clear the command line;
+with neither, quit \- which is what the keystroke means everywhere else in a
+terminal.
+.TP
+.B Ctrl\-Z
+Suspend, giving the terminal back to the shell;
+.B fg
+resumes. Windows has no job control, so there it does nothing.
 .TP
 .B Space
 Mark the file under the cursor, when nothing is typed.

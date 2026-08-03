@@ -107,7 +107,15 @@ F1    help             F2     rename         F3         view
 F4    edit             F5     copy           F6         move
 F7    mkdir            F8     delete         F9         sort
 F10   quit             Space  mark           Ctrl-H     hidden files
+Ctrl-Q quit            Ctrl-C cancel or quit  Ctrl-Z     suspend
+Ctrl-O shell screen    Alt-T  tree            Escape     back to the tree
 ```
+
+There is more than one way to quit on purpose. Some terminals keep `F10` for
+their own menu and never pass it on — GNOME Terminal is one — so `Ctrl-Q`
+always works. `Ctrl-C` cancels a running copy, or clears the command line, or
+quits when there is neither, which is what the keystroke means everywhere
+else in a terminal. Letters go to the command line, so `q` does not quit.
 
 `--list` is the whole listing pipeline with no terminal attached, which makes
 it useful for a quick check that a build works, and for scripting.
@@ -182,7 +190,7 @@ list.
 ## Testing
 
 ```sh
-cargo test                     # all 1006, from the workspace root
+cargo test                     # all 1009, from the workspace root
 ```
 
 From the root that is everything, because the root is a virtual manifest and
@@ -195,7 +203,7 @@ Per crate, when you want a fast loop:
 ```sh
 cargo test -p lost-commander-core    # 611 - the engine, seconds to build
 cargo test -p lost-commander-egui    # 190 - the graphical view
-cargo test -p lost-commander-tui     #  99 - the terminal view
+cargo test -p lost-commander-tui     # 102 - the terminal view
 cargo test -p lost-commander-ffi     # 106 - the C ABI
 ```
 

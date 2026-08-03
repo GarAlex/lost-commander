@@ -1801,6 +1801,9 @@ fn draw_keybar(frame: &mut Frame, area: Rect) {
         ("7", "MkDir"),
         ("8", "Delete"),
         ("9", "Sort"),
+        // Said as "10 Quit" because that is the Commander bar everybody
+        // knows, but the help and the manual both name Ctrl-Q too: a terminal
+        // that keeps F10 for itself would otherwise leave no way out.
         ("10", "Quit"),
     ];
 

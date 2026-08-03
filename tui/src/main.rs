@@ -63,6 +63,10 @@ KEYS:
     F5 copy    F6 move    F7 mkdir        F8 delete
     F9 sort    F10 quit   Space mark      Ctrl-H hidden files
 
+    Ctrl-Q also quits, and Ctrl-C quits when there is nothing to interrupt.
+    Some terminals keep F10 for their own menu and never pass it on, which is
+    why there is more than one way out. Ctrl-Z suspends, as anywhere else.
+
     Typing goes to the command line under the panels, and Enter runs it in the
     directory being shown - as in Norton and Midnight Commander. An empty
     command line means the panels: Space marks, Backspace goes up.
@@ -140,9 +144,12 @@ fn run_tui(left: PathBuf, right: PathBuf) -> io::Result<()> {
             continue;
         }
 
-        // A privileged command needs the terminal to itself: `sudo` has to
-        // put its password prompt somewhere, and this front-end owns the
-        // screen. Same suspend-and-restore as $EDITOR above.
+        if app.pending_suspend {
+            app.pending_suspend = false;
+            suspend(&mut terminal)?;
+            continue;
+        }
+
         if app.pending_peek {
             app.pending_peek = false;
             if let Err(e) = show_shell_screen(&mut terminal) {
@@ -152,6 +159,10 @@ fn run_tui(left: PathBuf, right: PathBuf) -> io::Result<()> {
             continue;
         }
 
+        // The command gets the terminal to itself: it may be interactive, it
+        // may print colour, `sudo` has to put a password prompt somewhere -
+        // and this front-end owns the screen until it gives it up. Same
+        // suspend-and-restore as $EDITOR above.
         if let Some(line) = app.pending_shell.take() {
             let cwd = app.active_panel().cwd.clone();
             if let Err(e) = run_shell_line(&mut terminal, &line, &cwd) {
@@ -249,6 +260,33 @@ fn run_shell_line(
     *terminal = ratatui::init();
     terminal.clear()?;
     status.map(|_| ())
+}
+
+/// Ctrl-Z: give the terminal back and stop, until the shell resumes us.
+///
+/// The terminal has to be handed back *first*. A process stopped while the
+/// screen is in raw mode on the alternate buffer leaves the shell with a
+/// terminal it cannot type into - which is the failure this is written to
+/// avoid, and is worse than not supporting Ctrl-Z at all.
+///
+/// `SIGTSTP` rather than `SIGSTOP`: the first is the one a shell knows how to
+/// resume with `fg`, and the one it prints a job number for.
+#[cfg(unix)]
+fn suspend(terminal: &mut ratatui::DefaultTerminal) -> io::Result<()> {
+    ratatui::restore();
+    // Safety: raising a signal at a point of our choosing, with the terminal
+    // already given back. Execution continues here when the shell resumes us.
+    unsafe {
+        libc::raise(libc::SIGTSTP);
+    }
+    *terminal = ratatui::init();
+    terminal.clear()
+}
+
+/// Windows has no job control, so there is nothing to suspend to.
+#[cfg(not(unix))]
+fn suspend(_terminal: &mut ratatui::DefaultTerminal) -> io::Result<()> {
+    Ok(())
 }
 
 /// Show the shell's screen until a key is pressed, then take the panels back.
