@@ -128,3 +128,38 @@ fn the_readme_shows_what_the_program_draws() {
         out.display()
     );
 }
+
+#[test]
+fn the_shell_screen_says_what_the_shell_can_do() {
+    // A shell with no seam to hook runs commands perfectly well and simply
+    // never says where it is, so the shared directory quietly does not
+    // happen. Without a line saying so, nothing on screen explains why - and
+    // on Windows the machine's own answer is one of those shells.
+    let root = tempfile::tempdir().expect("a temporary directory");
+    let mut app = lostc::app::App::new(root.path().to_path_buf(), root.path().to_path_buf());
+
+    for (program, expected) in [
+        ("/bin/bash", "shares this directory"),
+        ("cmd.exe", "not recorded"),
+    ] {
+        app.shell_program = Some(program.to_string());
+        app.showing_shell = true;
+
+        let backend = ratatui::backend::TestBackend::new(100, 10);
+        let mut terminal = ratatui::Terminal::new(backend).expect("a terminal");
+        terminal.draw(|frame| lostc::ui::draw(frame, &app)).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let top: String = (0..100)
+            .map(|x| buffer.cell((x, 0)).map(|c| c.symbol()).unwrap_or(" "))
+            .collect();
+        assert!(
+            top.contains(expected),
+            "the shell screen should say what {program} can do, got: {top}"
+        );
+        assert!(
+            top.contains(&lost_commander_core::shell::program_name(program)),
+            "and which shell it is, got: {top}"
+        );
+    }
+}

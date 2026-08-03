@@ -2290,9 +2290,42 @@ fn draw_help(frame: &mut Frame, area: Rect, scroll: usize) {
 fn draw_shell(frame: &mut Frame, area: Rect, app: &App) {
     use lost_commander_core::termview;
 
+    // A line saying which shell this is and what it can do, because the
+    // difference is invisible otherwise: a shell with no seam to hook runs
+    // commands perfectly well and simply never says where it is, so the
+    // shared directory quietly does not happen and nothing on screen would
+    // have explained why.
+    let split = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(area);
+    let program = app.shell_choice();
+    let name = lost_commander_core::shell::program_name(&program);
+    let hooked = lost_commander_core::shellhook::journals(&program);
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                format!(" {name} "),
+                Style::default().bg(theme::BG).fg(theme::TITLE_FG),
+            ),
+            Span::styled(
+                if hooked {
+                    "shares this directory with the panel, and is recorded"
+                } else {
+                    "not recorded, and cannot share this directory - Alt-O to change"
+                },
+                Style::default().bg(theme::BG).fg(if hooked {
+                    theme::FILE_FG
+                } else {
+                    theme::BORDER_FG
+                }),
+            ),
+        ]))
+        .style(theme::base()),
+        split[0],
+    );
+    let area = split[1];
+
     let Some(shell) = app.shell.as_ref() else {
         frame.render_widget(
-            Paragraph::new("No shell running. Type a command, or press Ctrl-O again.")
+            Paragraph::new("No shell running yet. Type a command, or press Ctrl-O to go back.")
                 .style(theme::base()),
             area,
         );
