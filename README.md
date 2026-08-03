@@ -176,29 +176,25 @@ terminal cannot, plus one thing not yet built:
 | Image viewing, and crop/rotate/resize | — | yes | same |
 | Built-in text editor | — | yes | `lostc` hands the file to `$EDITOR`, which already knows your settings |
 | Running commands | a command line, `Ctrl-O` for the output | a shell in a drawer, output in the window | `lostc` hands each command the real terminal; `lostc-gui` has no terminal to hand over, so it keeps one |
-| A shell that stays put, sharing the panel's directory | — | yes | see below |
+| A shell that stays put, sharing the panel's directory | yes | yes | one shell per session in both; `Ctrl-O` shows it in the terminal view |
 | Session recording (`rec`) | — | yes | it records that shell, so it needs one |
 | Named colour schemes | one | several | the terminal view uses the classic blue/cyan palette, and a terminal has its own colours anyway |
 | Markdown rendered rather than shown as markup | — | yes | not built for the terminal yet; the parse is in the engine, so it is drawing that is missing, not logic |
 
 Reading bytes as hex, the directory tree, tabs and the journal are in both.
 
-**On the shell**, where the two differ in kind rather than in degree.
+**On the shell.** `lostc` keeps one shell running underneath the panels for
+the whole session, the way Midnight Commander does. Typing goes to the
+command line and Enter hands the line to that shell; `Ctrl-O` swaps between
+the panels and the shell's own screen, where you can work in it directly.
 
-`lostc` has the command line along the bottom and `Ctrl-O` to the shell
-screen, which is Norton Commander's arrangement — and it works without any
-emulation, because the panels are drawn on the terminal's alternate screen
-and a command runs on the main one, where its output stays until you look.
-
-What it has not got is the other half of what Midnight Commander does: a
-shell that *stays running* between commands, with the current directory
-shared both ways, so that `cd` on the command line moves the panel and moving
-the panel `cd`s the shell. Today each command gets a fresh shell in the
-directory the panel is showing, so `cd` in one has no effect on the next.
-The engine already runs real shells on real pseudo-terminals and already
-knows how to ask one where it is — `PtySession::shell_cwd`, tested and unused
-— so this is wiring rather than invention. It is the largest thing on the
-list.
+Because it is one shell rather than one per command, `cd` means something:
+the directory it leaves you in is where the next command runs. It is shared
+both ways — a `cd` in the shell moves the panel when you come back to it, and
+moving the panel `cd`s the shell. The shell reports where it is through the
+same `OSC 133` hook the graphical view uses, so this is reading an answer
+rather than guessing at one; a shell with no seam to hook (`cmd`, `dash`)
+still runs, and the two simply stop following each other.
 
 ## Testing
 

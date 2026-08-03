@@ -7,7 +7,18 @@ Notable changes, newest first. Versions follow [semantic versioning]; until
 
 ## Unreleased
 
-Nothing yet.
+### Added
+
+- **A shell that stays running under the terminal view.** One shell for the
+  session rather than one per command, so `cd` means something: the directory
+  it leaves you in is where the next command runs. `Ctrl-O` swaps between the
+  panels and the shell's own screen, and keys go straight to it while it is
+  showing.
+- **The directory is shared both ways.** A `cd` in the shell moves the panel;
+  moving the panel `cd`s the shell. The shell reports where it is through the
+  `OSC 133` hook the graphical view already used — read rather than guessed
+  at. A shell with no seam to hook still runs; the two simply stop following
+  each other.
 
 ## 0.1.0 — 2026-08-01
 

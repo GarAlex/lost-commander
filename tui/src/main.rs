@@ -75,8 +75,10 @@ KEYS:
     directory being shown - as in Norton and Midnight Commander. An empty
     command line means the panels: Space marks, Backspace goes up.
 
-    Ctrl-O hides the panels and shows what the shell has printed, with the
-    terminal's own scrollback. Any key brings the panels back."
+    Ctrl-O swaps between the panels and the shell running underneath them.
+    It is one shell for the whole session, so a cd in one command is still
+    true for the next - and a cd there moves the panel, as moving the panel
+    cds the shell."
     );
 }
 
@@ -154,15 +156,6 @@ fn run_tui(left: PathBuf, right: PathBuf) -> io::Result<()> {
             continue;
         }
 
-        if app.pending_peek {
-            app.pending_peek = false;
-            if let Err(e) = show_shell_screen(&mut terminal) {
-                app.status = format!("Failed: {e}");
-                app.status_is_error = true;
-            }
-            continue;
-        }
-
         // The command gets the terminal to itself: it may be interactive, it
         // may print colour, `sudo` has to put a password prompt somewhere -
         // and this front-end owns the screen until it gives it up. Same
@@ -181,7 +174,11 @@ fn run_tui(left: PathBuf, right: PathBuf) -> io::Result<()> {
         // UI has to keep repainting so the progress bar actually moves.
         // A comparison runs on its own thread too, and its list fills while
         // it goes, so it wants the same short timeout a copy does.
-        let timeout = if app.job_is_running() || app.scan.is_some() || app.hunt.is_some() {
+        // A shell on show repaints as its output arrives, which is not tied
+        // to anybody pressing a key. The panels do not need that.
+        let timeout = if app.showing_shell {
+            Duration::from_millis(50)
+        } else if app.job_is_running() || app.scan.is_some() || app.hunt.is_some() {
             Duration::from_millis(80)
         } else {
             Duration::from_millis(500)
@@ -275,6 +272,16 @@ fn run_shell_line(
 ///
 /// `SIGTSTP` rather than `SIGSTOP`: the first is the one a shell knows how to
 /// resume with `fg`, and the one it prints a job number for.
+
+/// Ctrl-Z: give the terminal back and stop, until the shell resumes us.
+///
+/// The terminal has to be handed back *first*. A process stopped while the
+/// screen is in raw mode on the alternate buffer leaves the shell with a
+/// terminal it cannot type into - which is the failure this is written to
+/// avoid, and is worse than not supporting Ctrl-Z at all.
+///
+/// `SIGTSTP` rather than `SIGSTOP`: the first is the one a shell knows how to
+/// resume with `fg`, and the one it prints a job number for.
 #[cfg(unix)]
 fn suspend(terminal: &mut ratatui::DefaultTerminal) -> io::Result<()> {
     ratatui::restore();
@@ -291,38 +298,6 @@ fn suspend(terminal: &mut ratatui::DefaultTerminal) -> io::Result<()> {
 #[cfg(not(unix))]
 fn suspend(_terminal: &mut ratatui::DefaultTerminal) -> io::Result<()> {
     Ok(())
-}
-
-/// Show the shell's screen until a key is pressed, then take the panels back.
-///
-/// The panels are drawn on the alternate screen; everything commands have
-/// printed is on the main one, with the terminal's own scrollback. Leaving
-/// the alternate screen reveals it exactly as the shell left it - nothing has
-/// to be captured, buffered or re-rendered, which is why this is four lines
-/// and not a screen emulator.
-fn show_shell_screen(terminal: &mut ratatui::DefaultTerminal) -> io::Result<()> {
-    ratatui::restore();
-    press_any_key();
-    *terminal = ratatui::init();
-    terminal.clear()
-}
-
-/// Hold the terminal until a key is pressed.
-fn press_any_key() {
-    use crossterm::event::{self, Event, KeyEventKind};
-
-    println!();
-    println!("-- press any key to return to the panels --");
-    let _ = crossterm::terminal::enable_raw_mode();
-    loop {
-        match event::read() {
-            // Windows reports releases as well; a key press is what ends it.
-            Ok(Event::Key(key)) if key.kind == KeyEventKind::Press => break,
-            Ok(_) => {}
-            Err(_) => break,
-        }
-    }
-    let _ = crossterm::terminal::disable_raw_mode();
 }
 
 /// `$SHELL`, or a shell that is certainly there.

@@ -328,6 +328,14 @@ impl Mode {
     }
 }
 
+/// What submits a line to a shell: a carriage return, byte 13.
+///
+/// Written as the number rather than as an escape so the character never has
+/// to appear in this file. A stray one in a source file is invisible in every
+/// editor and rejected by the compiler with a message about a byte nobody can
+/// see.
+const ENTER: &[u8] = &[13];
+
 pub struct App {
     pub left: Tabs,
     pub right: Tabs,
@@ -341,14 +349,20 @@ pub struct App {
     /// Set when a privileged command needs to be run with the TUI suspended,
     /// so its password prompt has the terminal to itself.
     pub pending_shell: Option<String>,
+    /// The shell running underneath the panels, once anything has needed one.
+    ///
+    /// One shell for the whole session rather than one per command, which is
+    /// what makes `cd` mean anything: a fresh shell per command starts in
+    /// whatever directory it is given and forgets everything the last one
+    /// did. Started on first use, because most of what this program does
+    /// needs no shell at all and a pty costs a process.
+    pub shell: Option<lost_commander_core::pty::PtySession>,
+    /// Whether the shell's screen is what is on show, rather than the panels.
+    pub showing_shell: bool,
     /// Set by Ctrl-Z: give the terminal back and stop, until resumed.
     ///
     /// The main loop does it, for the same reason as the shell screen.
     pub pending_suspend: bool,
-    /// Set by Ctrl-O: hide the panels and show what the shell has printed.
-    ///
-    /// The main loop does it, because taking the terminal back is its job.
-    pub pending_peek: bool,
     /// Whether the keyboard is in a pane's tree half rather than its files.
     ///
     /// One flag per side. Two lists in one pane is two cursors, and a reader
@@ -446,7 +460,8 @@ impl App {
             command: String::new(),
             pending_edit: None,
             pending_shell: None,
-            pending_peek: false,
+            shell: None,
+            showing_shell: false,
             pending_suspend: false,
             bookmarks: Bookmarks::default(),
             bookmarks_path: None,
@@ -2238,10 +2253,68 @@ impl App {
         // directory would be a selection nobody can see - and F5 would copy
         // something the reader never pointed at.
         self.snap_to_a_visible_row();
-        self.record_visits(before);
+        self.record_visits(before.clone());
+        // If the panel moved, the shell goes with it. Hooked here for the
+        // same reason `record_visits` is: this catches every route - Enter,
+        // Backspace, the tree, a bookmark - without a call threaded through
+        // each of them.
+        let now = (
+            self.left.cwd().to_path_buf(),
+            self.right.cwd().to_path_buf(),
+        );
+        if now != before {
+            self.tell_the_shell();
+        }
+    }
+
+    /// Give a key to the shell, and say whether it took it.
+    ///
+    /// Everything except Ctrl-O, which is how you get back: while the shell
+    /// is on show it *is* the program, and a file manager reserving keys out
+    /// of a running shell would break whatever is running in it. Ctrl-O is
+    /// the one toll, and it is the same key that got you here.
+    fn shell_key(&mut self, key: KeyEvent) -> bool {
+        if !self.showing_shell {
+            return false;
+        }
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        if ctrl && matches!(key.code, KeyCode::Char('o')) {
+            self.toggle_shell_view();
+            return true;
+        }
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
+        // Named, not coded: the engine holds the table saying what each key
+        // sends, so this window and the graphical one agree about it.
+        let name = match key.code {
+            KeyCode::Char(c) => c.to_string(),
+            KeyCode::Enter => "Enter".to_string(),
+            KeyCode::Tab => "Tab".to_string(),
+            KeyCode::Backspace => "Backspace".to_string(),
+            KeyCode::Esc => "Escape".to_string(),
+            KeyCode::Up => "Up".to_string(),
+            KeyCode::Down => "Down".to_string(),
+            KeyCode::Left => "Left".to_string(),
+            KeyCode::Right => "Right".to_string(),
+            KeyCode::Home => "Home".to_string(),
+            KeyCode::End => "End".to_string(),
+            KeyCode::PageUp => "PageUp".to_string(),
+            KeyCode::PageDown => "PageDown".to_string(),
+            KeyCode::Insert => "Insert".to_string(),
+            KeyCode::Delete => "Delete".to_string(),
+            _ => return true,
+        };
+        if let Some(bytes) = lost_commander_core::termview::key_bytes(&name, ctrl, alt) {
+            if let Some(shell) = self.shell.as_mut() {
+                shell.write(&bytes);
+            }
+        }
+        true
     }
 
     fn dispatch_key(&mut self, key: KeyEvent) {
+        if self.shell_key(key) {
+            return;
+        }
         match &mut self.mode {
             Mode::Normal => self.on_key_normal(key),
             Mode::Input(_) => self.on_key_input(key),
@@ -2334,6 +2407,97 @@ impl App {
                 }
             }
         }
+    }
+
+    /// The shell, started if this is the first thing to want one.
+    ///
+    /// In the directory the panel is showing, which is where a reader typing
+    /// a command means it to run. Hooked where the shell has a seam for it -
+    /// `PtySession::spawn` does that itself - which is what makes
+    /// `shell_cwd` able to answer later.
+    fn shell_now(&mut self) -> bool {
+        if self.shell.is_some() {
+            return true;
+        }
+        let program = lost_commander_core::shell::current_shell().0;
+        let cwd = self.active_panel().cwd.clone();
+        match lost_commander_core::pty::PtySession::spawn(&program, &cwd, 24, 80) {
+            Ok(session) => {
+                self.shell = Some(session);
+                true
+            }
+            Err(e) => {
+                self.error(format!("Could not start {program}: {e}"));
+                false
+            }
+        }
+    }
+
+    /// Hand a line to the shell and show it working.
+    pub fn send_to_shell(&mut self, line: &str) {
+        if !self.shell_now() {
+            return;
+        }
+        if let Some(shell) = self.shell.as_mut() {
+            shell.write(line.as_bytes());
+            shell.write(ENTER);
+        }
+        // Onto the shell's screen, because that is where the answer will
+        // appear. Watching a command run is the normal case; Ctrl-O comes
+        // back to the panels.
+        self.showing_shell = true;
+    }
+
+    /// Ctrl-O: swap between the panels and the shell underneath them.
+    pub fn toggle_shell_view(&mut self) {
+        if !self.showing_shell && !self.shell_now() {
+            return;
+        }
+        self.showing_shell = !self.showing_shell;
+        if !self.showing_shell {
+            self.follow_the_shell();
+            self.info("Panels. Ctrl-O returns to the shell.");
+        }
+    }
+
+    /// Move the panel to wherever the shell has got to.
+    ///
+    /// The shell reports where it is through the hook, so this is reading an
+    /// answer rather than guessing at one. Only when it has actually moved,
+    /// and only for the active panel: a `cd` is something the reader did, and
+    /// following it is what makes the command line and the panels one program
+    /// instead of two things sharing a window.
+    pub fn follow_the_shell(&mut self) {
+        let Some(where_) = self.shell.as_ref().and_then(|s| s.shell_cwd()) else {
+            return;
+        };
+        if where_ == self.active_panel().cwd || !where_.is_dir() {
+            return;
+        }
+        self.active_panel_mut().chdir(where_.clone());
+        self.info(format!("Followed the shell to {}", where_.display()));
+    }
+
+    /// Tell the shell where the panel has gone.
+    ///
+    /// The other direction, and safe to do without asking because it only
+    /// happens while the panels have the keyboard - which means the shell is
+    /// sitting at a prompt with nothing half-typed for this to interrupt.
+    pub fn tell_the_shell(&mut self) {
+        let Some(shell) = self.shell.as_mut() else {
+            return;
+        };
+        let cwd = match self.active {
+            Side::Left => self.left.current().cwd.clone(),
+            Side::Right => self.right.current().cwd.clone(),
+        };
+        if shell.shell_cwd().as_deref() == Some(cwd.as_path()) {
+            return;
+        }
+        // Quoted, because a directory may have a space in it and the shell
+        // would otherwise read the tail as another argument.
+        shell.write(format!("cd '{}'", cwd.display()).as_bytes());
+        shell.write(ENTER);
     }
 
     /// Ctrl-C: stop whatever is going on, and if nothing is, leave.
@@ -2503,7 +2667,11 @@ impl App {
             let where_ = self.active_panel().cwd.display().to_string();
             journal.record(journal::Event::new(journal::Kind::Command, where_).note(&line));
         }
-        self.pending_shell = Some(line);
+        // Into the shell that is already running, not a fresh one. A new
+        // shell per command starts wherever it is put and forgets everything
+        // the last one did, which makes `cd` a command that appears to work
+        // and then has no effect on anything after it.
+        self.send_to_shell(&line);
     }
 
     fn on_key_normal(&mut self, key: KeyEvent) {
@@ -2577,7 +2745,7 @@ impl App {
             // Ctrl-O is what Norton and Midnight Commander both use for this,
             // and it is the reason a command does not have to pause: the
             // output is still on the screen underneath, whenever you want it.
-            KeyCode::Char('o') if ctrl => self.pending_peek = true,
+            KeyCode::Char('o') if ctrl => self.toggle_shell_view(),
             KeyCode::Char('j') if ctrl => self.open_journal(),
             KeyCode::Char('a') if ctrl => {
                 let panel = self.active_panel_mut();
@@ -3350,10 +3518,34 @@ mod tests {
         }
         app.on_key(key(KeyCode::Enter));
 
-        // The main loop is what runs it - this front-end owns the screen and
-        // has to give it up first.
-        assert_eq!(app.pending_shell.as_deref(), Some("echo hello"));
-        assert!(app.command.is_empty());
+        assert!(app.command.is_empty(), "the line was taken");
+        // Into the shell that keeps running, so that a `cd` in one command is
+        // still true for the next. Either it started and is on show, or it
+        // could not start and said why - never silently nothing.
+        if app.shell.is_some() {
+            assert!(app.showing_shell, "you are shown the shell doing it");
+        } else {
+            assert!(app.status_is_error, "a shell that will not start says so");
+        }
+    }
+
+    #[test]
+    fn the_shell_outlives_the_command() {
+        // The whole point of a subshell: one shell for the session, so `cd`
+        // in one command is still true in the next. A fresh shell per command
+        // starts where it is put and forgets everything the last one did.
+        let (_root, mut app) = app_fixture();
+        app.send_to_shell("echo one");
+        if app.shell.is_none() {
+            return; // No shell on this machine; nothing to prove.
+        }
+        let first = app.shell.as_ref().map(|s| s as *const _);
+        app.send_to_shell("echo two");
+        assert_eq!(
+            app.shell.as_ref().map(|s| s as *const _),
+            first,
+            "the same session, not a second one"
+        );
     }
 
     #[test]

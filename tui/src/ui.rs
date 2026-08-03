@@ -6,7 +6,7 @@
 //! touches ratatui types.
 
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Gauge, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::Frame;
@@ -32,6 +32,17 @@ pub fn draw(frame: &mut Frame, app: &App) {
         Constraint::Length(1), // function keys
     ])
     .split(area);
+
+    // The shell takes the whole window when it is on show. Not a panel and
+    // not a drawer: while you are looking at it, it is the program you are
+    // talking to, and a shell in a corner is a shell nobody can read.
+    if app.showing_shell {
+        draw_shell(frame, rows[0], app);
+        draw_status(frame, rows[1], app);
+        draw_command_line(frame, rows[2], app);
+        draw_keybar(frame, rows[3]);
+        return;
+    }
 
     let panes =
         Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(rows[0]);
@@ -2266,4 +2277,70 @@ fn draw_help(frame: &mut Frame, area: Rect, scroll: usize) {
         .collect();
 
     frame.render_widget(Paragraph::new(body).style(theme::base()), inner);
+}
+
+/// The shell's screen, filling the window.
+///
+/// The rows come from the engine, which turns a terminal's screen into runs
+/// of styled text - the same function the graphical front-end draws from, so
+/// a shell looks the same in both. What is left here is the part that is
+/// genuinely this window's: turning a run into a ratatui span.
+fn draw_shell(frame: &mut Frame, area: Rect, app: &App) {
+    use lost_commander_core::termview;
+
+    let Some(shell) = app.shell.as_ref() else {
+        frame.render_widget(
+            Paragraph::new("No shell running. Type a command, or press Ctrl-O again.")
+                .style(theme::base()),
+            area,
+        );
+        return;
+    };
+
+    let rows = shell.with_screen(termview::rows_of);
+    let mut lines: Vec<Line> = Vec::with_capacity(area.height as usize);
+    for row in 0..area.height {
+        let Some(found) = rows.iter().find(|r| r.row == row) else {
+            lines.push(Line::from(""));
+            continue;
+        };
+        let mut spans = Vec::with_capacity(found.runs.len() * 2);
+        let mut at = 0u16;
+        for run in &found.runs {
+            // The engine says where each run starts, and says nothing about
+            // the gaps: they are background, and this window knows what its
+            // own background is.
+            if run.col > at {
+                spans.push(Span::raw(" ".repeat((run.col - at) as usize)));
+            }
+            let mut style = Style::default();
+            if let Some(fg) = run.fg.as_deref().and_then(colour_of) {
+                style = style.fg(fg);
+            }
+            if let Some(bg) = run.bg.as_deref().and_then(colour_of) {
+                style = style.bg(bg);
+            }
+            if run.bold {
+                style = style.add_modifier(Modifier::BOLD);
+            }
+            if run.italic {
+                style = style.add_modifier(Modifier::ITALIC);
+            }
+            at = run.col + run.text.chars().count() as u16;
+            spans.push(Span::styled(run.text.clone(), style));
+        }
+        lines.push(Line::from(spans));
+    }
+
+    frame.render_widget(Paragraph::new(lines).style(theme::base()), area);
+}
+
+/// `#rrggbb` as a terminal colour.
+fn colour_of(hex: &str) -> Option<Color> {
+    let hex = hex.strip_prefix('#')?;
+    if hex.len() != 6 {
+        return None;
+    }
+    let byte = |at: usize| u8::from_str_radix(&hex[at..at + 2], 16).ok();
+    Some(Color::Rgb(byte(0)?, byte(2)?, byte(4)?))
 }
