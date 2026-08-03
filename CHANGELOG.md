@@ -19,7 +19,10 @@ Two front-ends over one engine, running unchanged on Linux, macOS and
 Windows:
 
 - **`lostc`** — a terminal UI: two panels, function keys, and a command line
-  under them that runs in the directory being shown.
+  under them that runs in the directory being shown. `Ctrl-O` hides the
+  panels and shows what the shell has printed, with the terminal's own
+  scrollback — the panels are drawn on the alternate screen, so nothing has
+  to be captured for that to work.
 - **`lostc-gui`** — a graphical view: a sidebar of places, a breadcrumb trail,
   per-pane views, and a real shell in a drawer.
 
@@ -31,7 +34,9 @@ Windows:
 - Find by name and by contents
 - Quick view of text, markdown, images and raw bytes, and a byte editor
 - The directory tree above the files, XTree's arrangement, with tags that
-  survive walking to another directory
+  survive walking to another directory. Both front-ends show the row the
+  arrows move and, separately, the directory the listing belongs to, plus a
+  count of what is tagged out of sight
 - Tabs, bookmarks, network locations, permissions, trash
 - A journal of what was done, including commands run
 - Named colour schemes, among them Norton Commander and XTree Gold
