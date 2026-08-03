@@ -5708,4 +5708,56 @@ mod tests {
         assert!(app.status_is_error);
         assert!(app.status.contains("Not a directory"), "{}", app.status);
     }
+
+    #[test]
+    fn the_status_counts_what_is_tagged_across_the_tree() {
+        let (root, mut app) = app_fixture();
+        app.toggle_tree();
+        app.active_panel_mut().cursor_to(1);
+        app.active_panel_mut().toggle_mark();
+
+        // Tag something in a directory the pane is not showing, which is what
+        // walking a tree does and what makes the count worth printing.
+        let elsewhere = root.path().join("sub");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::write(elsewhere.join("far.txt"), b"x").unwrap();
+        app.active_panel_mut()
+            .tagged
+            .insert(elsewhere.join("far.txt"));
+
+        let line = crate::ui::status_line(&app);
+        assert!(
+            line.contains("2 tagged across the tree"),
+            "the one number a reader cannot get by looking: {line}"
+        );
+    }
+
+    #[test]
+    fn without_a_tree_the_status_says_what_it_always_said() {
+        let (_root, mut app) = app_fixture();
+        app.active_panel_mut().cursor_to(1);
+        app.active_panel_mut().toggle_mark();
+
+        let line = crate::ui::status_line(&app);
+        assert!(line.contains("marked"), "{line}");
+        assert!(!line.contains("tagged"), "no tree, no tally: {line}");
+    }
+
+    #[test]
+    fn the_status_describes_whichever_half_has_the_keyboard() {
+        let (_root, mut app) = app_fixture();
+        app.toggle_tree();
+        assert!(app.on_tree[0], "the tree has it to begin with");
+        assert!(
+            crate::ui::status_line(&app).contains("(tree)"),
+            "in the tree, it describes the tree"
+        );
+
+        // Enter drops into the files, and the status has to follow - saying
+        // "(tree)" while the arrows move a file cursor would be describing
+        // the half you are not in.
+        app.on_key(key(KeyCode::Enter));
+        assert!(!app.on_tree[0]);
+        assert!(!crate::ui::status_line(&app).contains("(tree)"));
+    }
 }

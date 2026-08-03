@@ -1567,7 +1567,7 @@ fn draw_panel(frame: &mut Frame, area: Rect, panel: &Panel, active: bool, on_tre
     if let Some(tree) = &panel.tree {
         let halves =
             Layout::vertical([Constraint::Percentage(45), Constraint::Min(3)]).split(inner);
-        draw_tree(frame, halves[0], tree, active && on_tree);
+        draw_tree(frame, halves[0], tree, active && on_tree, &panel.cwd);
         draw_listing(frame, halves[1], panel, active && !on_tree, true);
         return;
     }
@@ -1656,7 +1656,14 @@ fn draw_listing(frame: &mut Frame, inner: Rect, panel: &Panel, active: bool, fil
     frame.render_stateful_widget(List::new(items).style(theme::base()), split[1], &mut state);
 }
 
-fn draw_tree(frame: &mut Frame, area: Rect, tree: &Tree, active: bool) {
+/// The tree half.
+///
+/// Two things are marked and they are not the same thing: the *cursor* is the
+/// row the arrows move, and `here` is the directory the files below actually
+/// belong to. They differ the whole time you are walking somewhere else,
+/// which is most of the time a tree is open - and without the second, nothing
+/// on screen says which directory the listing is of.
+fn draw_tree(frame: &mut Frame, area: Rect, tree: &Tree, active: bool, here: &std::path::Path) {
     let width = area.width as usize;
 
     let items: Vec<ListItem> = tree
@@ -1670,7 +1677,10 @@ fn draw_tree(frame: &mut Frame, area: Rect, tree: &Tree, active: bool) {
             let text = format!("{indent}{} {}", tree.marker(index), node.label);
             ListItem::new(Line::from(Span::styled(
                 fit(&text, width),
-                theme::entry_style(true, false, index == tree.cursor, active),
+                // "You are here" borrows the colour a marked file uses -
+                // one more colour for one more meaning would be a legend to
+                // learn, and this reads as "this row is special" already.
+                theme::entry_style(true, node.path == here, index == tree.cursor, active),
             )))
         })
         .collect();
@@ -1709,19 +1719,27 @@ fn draw_command_line(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(Paragraph::new(line).style(theme::base()), area);
 }
 
-fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
+/// What the status line says.
+///
+/// Lifted out of the drawing so it can be tested. Three faults this session
+/// were in what got drawn rather than in what was computed, and every one of
+/// them passed the tests - the fix for that is to leave as little as possible
+/// inside the paint.
+pub(crate) fn status_line(app: &App) -> String {
     let panel = app.active_panel();
-
-    let text = if app.status_is_error {
-        app.status.clone()
-    } else if let Some(tree) = &panel.tree {
-        match tree.selected_path() {
-            Some(path) => format!("{}   (tree)", path.display()),
-            None => "<empty tree>".to_string(),
-        }
+    // What is tagged is mostly not on screen once a tree is open, so the count
+    // has to be said out loud - it is the one number a reader cannot get by
+    // looking. Without a tree every marked file is in view and the row count
+    // is the true one.
+    let tally = if panel.in_tree_mode() && panel.tagged_count() > 0 {
+        format!("  [{} tagged across the tree]", panel.tagged_count())
     } else {
+        String::new()
+    };
+
+    let describe_file = |panel: &Panel| -> String {
         let marks = panel.marked_count();
-        let mark_note = if marks > 0 {
+        let mark_note = if marks > 0 && !panel.in_tree_mode() {
             format!("  [{} marked, {}]", marks, human_size(panel.marked_size()))
         } else {
             String::new()
@@ -1739,6 +1757,26 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
             None => format!("<empty>{mark_note}"),
         }
     };
+
+    let on_tree = app.on_tree[match app.active {
+        Side::Left => 0,
+        Side::Right => 1,
+    }];
+    if app.status_is_error {
+        return app.status.clone();
+    }
+    if let (Some(tree), true) = (&panel.tree, on_tree) {
+        // The keyboard is in the tree, so the status describes the tree.
+        return match tree.selected_path() {
+            Some(path) => format!("{}   (tree){tally}", path.display()),
+            None => format!("<empty tree>{tally}"),
+        };
+    }
+    format!("{}{tally}", describe_file(panel))
+}
+
+fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
+    let text = status_line(app);
 
     let style = if app.status_is_error {
         Style::default().bg(theme::BG).fg(theme::ERROR_FG)
