@@ -436,7 +436,10 @@ impl App {
             // so this is only wired up by `new`.
             journal: None,
             mode: Mode::Normal,
-            status: String::from("F1 help  Tab switches panels  F10 quits"),
+            // The first thing on screen, and until now the first thing never
+            // shown. It names Ctrl-Q as well as F10 because F10 is the one
+            // key here that a terminal may keep for itself.
+            status: String::from("F1 help   Tab switches panels   F10 or Ctrl-Q quits"),
             status_is_error: false,
             should_quit: false,
             on_tree: [false, false],
@@ -2224,6 +2227,11 @@ impl App {
             self.left.cwd().to_path_buf(),
             self.right.cwd().to_path_buf(),
         );
+        // Cleared before the key is handled, not after: whatever it says next
+        // is about what is about to happen, and the last message was about
+        // the previous keystroke. Anything set during the dispatch survives.
+        self.status.clear();
+        self.status_is_error = false;
         self.dispatch_key(key);
         // Whatever that did, the cursor has to end on a row the file half is
         // drawing. Under a tree it draws files only, so a cursor left on a
@@ -5766,6 +5774,10 @@ mod tests {
             .tagged
             .insert(elsewhere.join("far.txt"));
 
+        // The status shows what the program last said; these are about what
+        // it shows when it has nothing to say, which is the state after the
+        // next keystroke.
+        app.status.clear();
         let line = crate::ui::status_line(&app);
         assert!(
             line.contains("2 tagged across the tree"),
@@ -5779,6 +5791,10 @@ mod tests {
         app.active_panel_mut().cursor_to(1);
         app.active_panel_mut().toggle_mark();
 
+        // The status shows what the program last said; these are about what
+        // it shows when it has nothing to say, which is the state after the
+        // next keystroke.
+        app.status.clear();
         let line = crate::ui::status_line(&app);
         assert!(line.contains("marked"), "{line}");
         assert!(!line.contains("tagged"), "no tree, no tally: {line}");
@@ -5789,6 +5805,10 @@ mod tests {
         let (_root, mut app) = app_fixture();
         app.toggle_tree();
         assert!(app.on_tree[0], "the tree has it to begin with");
+        // The status shows what the program last said; these are about what
+        // it shows when it has nothing to say, which is the state after the
+        // next keystroke.
+        app.status.clear();
         assert!(
             crate::ui::status_line(&app).contains("(tree)"),
             "in the tree, it describes the tree"

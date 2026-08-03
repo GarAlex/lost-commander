@@ -32,9 +32,9 @@ whatever it looked like the day somebody typed it.
 │                                                ││                                                │
 │                                                ││                                                │
 └────────────────────────────────────────────────┘└────────────────────────────────────────────────┘
-panel.rs  28.1K  25.07.26 04:42  [2 marked, 14.6K]  (sort: name)
+F1 help   Tab switches panels   F10 or Ctrl-Q quits
 ~/src/lost-commander/core> cargo test█
-F1Help   F2Rename F3View   F4Edit   F5Copy   F6Move   F7MkDir  F8Delete F9Sort   F10Quit    ^QQuit
+F1Help   F2Rename F3View   F4Edit   F5Copy   F6Move   F7MkDir  F8Delete F9Sort   F10Quit
 ```
 
 The third row from the bottom is the command line: what you type goes there

@@ -22,6 +22,13 @@ be driven through a C ABI by front-ends it knows nothing about.
 
 ### Fixed before release
 
+- **The status line shows what the program says.** `info` wrote to a field
+  that only errors were ever read from, so roughly forty messages — including
+  the opening line naming the help and quit keys — were composed and drawn
+  nowhere.
+- **The key bar reads `F1`, not `1`.** The bare number is the Commander
+  convention and everybody who grew up with it reads it as the function key,
+  but that was knowledge the bar assumed rather than supplied.
 - **There is more than one way to quit the terminal view.** `F10` is the
   Commander key and stays, but a terminal may keep it for its own menu and
   never pass it on — GNOME Terminal does — which left a reader with no way

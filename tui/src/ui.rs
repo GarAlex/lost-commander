@@ -1766,7 +1766,14 @@ pub(crate) fn status_line(app: &App) -> String {
         Side::Left => 0,
         Side::Right => 1,
     }];
-    if app.status_is_error {
+    // Anything the program has to say comes first, and it says plenty: forty
+    // or so messages, none of which were ever drawn. Only errors were, so
+    // "Tree above, files below", "Preview off" and "Command cleared, Ctrl-C
+    // again to quit" were all written into a field nothing read.
+    //
+    // It lasts until the next keystroke, which clears it. A message that
+    // stayed would soon be describing something two actions ago.
+    if !app.status.is_empty() {
         return app.status.clone();
     }
     if let (Some(tree), true) = (&panel.tree, on_tree) {
@@ -1815,15 +1822,20 @@ fn draw_keybar(frame: &mut Frame, area: Rect) {
     // reading of the characters actually on the screen.
     //
     // It costs a column per key, so it is spent only where the terminal has
-    // the width. A bar that ran off the edge would lose the last keys, and
-    // the last key is the one that says how to leave.
+    // the width; a bar that ran off the edge would lose the keys at the end.
+    //
+    // Function keys only, and nothing else. `Ctrl-Q` briefly sat on the end
+    // of it because F10 may never arrive - but a row labelled by function key
+    // that also holds one key that is not a function key teaches the reader
+    // that the row cannot be trusted to mean anything. It is in the help,
+    // beside F10, the way `Ctrl-B` is beside F11.
     const LABEL: usize = 7;
     let bare = KEYS.len() * (1 + LABEL) + 1; // "10" is two digits
     let with_f = bare + KEYS.len();
     let width = area.width as usize;
     let spell_it_out = width >= with_f;
 
-    let mut spans = Vec::with_capacity(KEYS.len() * 2 + 2);
+    let mut spans = Vec::with_capacity(KEYS.len() * 2);
     for (number, label) in KEYS {
         let key = if spell_it_out {
             format!("F{number}")
@@ -1836,20 +1848,6 @@ fn draw_keybar(frame: &mut Frame, area: Rect) {
         ));
         spans.push(Span::styled(
             format!("{label:<LABEL$}"),
-            Style::default().bg(theme::KEYBAR_BG).fg(theme::KEYBAR_FG),
-        ));
-    }
-
-    // And the way out no terminal can take away, whenever it fits. A reader
-    // whose F10 opens their emulator's own menu - or closes the window, as
-    // one reported - has nothing else on screen telling them how to leave.
-    if width >= with_f + 7 {
-        spans.push(Span::styled(
-            " ^Q",
-            Style::default().bg(theme::BG).fg(theme::KEYNUM_FG),
-        ));
-        spans.push(Span::styled(
-            "Quit",
             Style::default().bg(theme::KEYBAR_BG).fg(theme::KEYBAR_FG),
         ));
     }
@@ -2187,7 +2185,12 @@ pub const HELP: &[(&str, &str)] = &[
     ("Ctrl-E", "a shell as administrator"),
     ("F9", "cycle sort order"),
     ("Ctrl-O", "shell screen"),
-    ("F10", "quit"),
+    (
+        "F10 / Ctrl-Q",
+        "quit - some terminals keep F10 for their own menu",
+    ),
+    ("Ctrl-C", "cancel a copy, clear the command line, or quit"),
+    ("Ctrl-Z", "suspend; fg resumes"),
     ("", ""),
     ("Ctrl-T", "another tab, here"),
     ("Ctrl-W", "close this tab"),
