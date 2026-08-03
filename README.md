@@ -34,7 +34,7 @@ whatever it looked like the day somebody typed it.
 └────────────────────────────────────────────────┘└────────────────────────────────────────────────┘
 panel.rs  28.1K  25.07.26 04:42  [2 marked, 14.6K]  (sort: name)
 ~/src/lost-commander/core> cargo test█
-1Help   2Rename 3View   4Edit   5Copy   6Move   7MkDir  8Delete 9Sort   10Quit
+F1Help   F2Rename F3View   F4Edit   F5Copy   F6Move   F7MkDir  F8Delete F9Sort   F10Quit    ^QQuit
 ```
 
 The third row from the bottom is the command line: what you type goes there
@@ -111,9 +111,22 @@ Ctrl-Q quit            Ctrl-C cancel or quit  Ctrl-Z     suspend
 Ctrl-O shell screen    Alt-T  tree            Escape     back to the tree
 ```
 
-There is more than one way to quit on purpose. Some terminals keep `F10` for
-their own menu and never pass it on — GNOME Terminal is one — so `Ctrl-Q`
-always works. `Ctrl-C` cancels a running copy, or clears the command line, or
+There is more than one way to quit on purpose, and the key bar shows both.
+
+**If `F10` does nothing, your terminal is eating it.** GTK binds F10 to
+"open the menubar" for every application, so GNOME Terminal, Terminator and
+Tilix all take it by default — some setups bind it to close the window
+instead. The keystroke is consumed by the emulator one layer above the
+pseudo-terminal, so nothing is sent and no program running inside can see it.
+Turn it off in GNOME Terminal under Preferences → General → *Enable the menu
+accelerator key*, or just use `Ctrl-Q`, which nothing intercepts.
+
+Worth knowing what happens next if you do press it: the menubar opens — it
+does so even when hidden — and the terminal is then in menu navigation, where
+plain letters are mnemonics rather than input. A `q` at that point is *File →
+Quit*, which closes the whole terminal application and every tab in it. One
+reader lost all their tabs that way, and the bar telling them "10 Quit" is
+what suggested the `q`. `Ctrl-C` cancels a running copy, or clears the command line, or
 quits when there is neither, which is what the keystroke means everywhere
 else in a terminal. Letters go to the command line, so `q` does not quit.
 

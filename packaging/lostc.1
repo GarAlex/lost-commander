@@ -55,8 +55,12 @@ does not quit.
 .B Ctrl\-Q
 Quit. There is a second way out because a terminal may keep
 .B F10
-for its own menu and never pass it on: GNOME Terminal does, and some
-emulators are configured to close the window with it instead.
+for its own menu and never pass it on. GTK binds it to the menubar for every
+application, so GNOME Terminal, Terminator and Tilix take it by default: the
+keystroke is consumed above the pseudo\-terminal and nothing running inside
+can see it. Worse, the menubar then has the keyboard, and a
+.B q
+there is File \(-> Quit \- which closes the terminal and every tab in it.
 .TP
 .B Ctrl\-C
 Cancel a running copy or move; with nothing running, clear the command line;

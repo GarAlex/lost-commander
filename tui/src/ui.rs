@@ -1805,20 +1805,51 @@ fn draw_keybar(frame: &mut Frame, area: Rect) {
         ("7", "MkDir"),
         ("8", "Delete"),
         ("9", "Sort"),
-        // Said as "10 Quit" because that is the Commander bar everybody
-        // knows, but the help and the manual both name Ctrl-Q too: a terminal
-        // that keeps F10 for itself would otherwise leave no way out.
         ("10", "Quit"),
     ];
 
-    let mut spans = Vec::with_capacity(KEYS.len() * 2);
+    // Written "F1", not "1", when there is room for it. The Commander bar
+    // has shown the bare number since 1986 and everybody who grew up with it
+    // reads that as the function key - but it was reported as "the menu says
+    // 10 will quit, but it's not clear what 10 means", which is a fair
+    // reading of the characters actually on the screen.
+    //
+    // It costs a column per key, so it is spent only where the terminal has
+    // the width. A bar that ran off the edge would lose the last keys, and
+    // the last key is the one that says how to leave.
+    const LABEL: usize = 7;
+    let bare = KEYS.len() * (1 + LABEL) + 1; // "10" is two digits
+    let with_f = bare + KEYS.len();
+    let width = area.width as usize;
+    let spell_it_out = width >= with_f;
+
+    let mut spans = Vec::with_capacity(KEYS.len() * 2 + 2);
     for (number, label) in KEYS {
+        let key = if spell_it_out {
+            format!("F{number}")
+        } else {
+            number.to_string()
+        };
         spans.push(Span::styled(
-            number.to_string(),
+            key,
             Style::default().bg(theme::BG).fg(theme::KEYNUM_FG),
         ));
         spans.push(Span::styled(
-            format!("{label:<7}"),
+            format!("{label:<LABEL$}"),
+            Style::default().bg(theme::KEYBAR_BG).fg(theme::KEYBAR_FG),
+        ));
+    }
+
+    // And the way out no terminal can take away, whenever it fits. A reader
+    // whose F10 opens their emulator's own menu - or closes the window, as
+    // one reported - has nothing else on screen telling them how to leave.
+    if width >= with_f + 7 {
+        spans.push(Span::styled(
+            " ^Q",
+            Style::default().bg(theme::BG).fg(theme::KEYNUM_FG),
+        ));
+        spans.push(Span::styled(
+            "Quit",
             Style::default().bg(theme::KEYBAR_BG).fg(theme::KEYBAR_FG),
         ));
     }
