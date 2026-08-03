@@ -176,7 +176,8 @@ terminal cannot, plus one thing not yet built:
 | Image viewing, and crop/rotate/resize | — | yes | same |
 | Built-in text editor | — | yes | `lostc` hands the file to `$EDITOR`, which already knows your settings |
 | Running commands | a command line, `Ctrl-O` for the output | a shell in a drawer, output in the window | `lostc` hands each command the real terminal; `lostc-gui` has no terminal to hand over, so it keeps one |
-| A shell that stays put, sharing the panel's directory | yes | yes | one shell per session in both; `Ctrl-O` shows it in the terminal view |
+| A shell that stays put | yes | yes | one per session in the terminal view, one per tab in the drawer |
+| The shell and the panel sharing a directory | yes, both ways | `cd here`, one way | the graphical view has several shell tabs and two panes, so which follows which is a decision not yet made |
 | Session recording (`rec`) | — | yes | it records that shell, so it needs one |
 | Named colour schemes | one | several | the terminal view uses the classic blue/cyan palette, and a terminal has its own colours anyway |
 | Markdown rendered rather than shown as markup | — | yes | not built for the terminal yet; the parse is in the engine, so it is drawing that is missing, not logic |
@@ -193,8 +194,14 @@ the directory it leaves you in is where the next command runs. It is shared
 both ways — a `cd` in the shell moves the panel when you come back to it, and
 moving the panel `cd`s the shell. The shell reports where it is through the
 same `OSC 133` hook the graphical view uses, so this is reading an answer
-rather than guessing at one; a shell with no seam to hook (`cmd`, `dash`)
-still runs, and the two simply stop following each other.
+rather than guessing at one.
+
+A shell with no seam to hook — `cmd`, `dash` — cannot be asked, so the panel
+becomes the answer instead: each command is preceded by a `cd` to the
+directory the panel is showing, which is what Far Manager does on Windows and
+for the same reason. Half-sharing a directory is worse than not sharing one.
+`Ctrl-O` opens onto a line saying which of the two you have, and `Alt-O`
+changes it.
 
 ## Testing
 

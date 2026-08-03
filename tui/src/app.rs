@@ -347,6 +347,29 @@ impl Mode {
 /// see.
 const ENTER: &[u8] = &[13];
 
+/// What to write into the shell to run `line` in `cwd`.
+///
+/// One line for a shell that reports where it is, two for one that does not.
+///
+/// The second is `cd`, and it is what Far Manager does on Windows for the
+/// same reason: `cmd` has no seam to hook, so nothing can be asked of it, and
+/// half-sharing a directory is worse than not sharing one. Without it, a `cd`
+/// typed into the shell moves it somewhere the panel never learns about, and
+/// every command afterwards runs somewhere other than the prompt on the
+/// command line says it will. The panel is the answer instead.
+///
+/// A hooked shell is left alone: it reports where it goes, both sides follow,
+/// and sending it back would undo a `cd` the reader meant.
+fn command_lines(program: &str, cwd: &std::path::Path, line: &str) -> Vec<String> {
+    if lost_commander_core::shellhook::journals(program) {
+        return vec![line.to_string()];
+    }
+    vec![
+        lost_commander_core::shell::cd_command(program, cwd),
+        line.to_string(),
+    ]
+}
+
 pub struct App {
     pub left: Tabs,
     pub right: Tabs,
@@ -2465,15 +2488,22 @@ impl App {
         if !self.shell_now() {
             return;
         }
+        let program = self.shell_choice();
+        let cwd = self.active_panel().cwd.clone();
+        let lines = command_lines(&program, &cwd, line);
         if let Some(shell) = self.shell.as_mut() {
-            shell.write(line.as_bytes());
-            shell.write(ENTER);
+            for line in &lines {
+                shell.write(line.as_bytes());
+                shell.write(ENTER);
+            }
         }
         // Onto the shell's screen, because that is where the answer will
         // appear. Watching a command run is the normal case; Ctrl-O comes
         // back to the panels.
         self.showing_shell = true;
     }
+
+    // With a shell that cannot say where it is, the panel is the answer.
 
     /// Ctrl-O: swap between the panels and the shell underneath them.
     pub fn toggle_shell_view(&mut self) {
@@ -2512,6 +2542,13 @@ impl App {
     /// sitting at a prompt with nothing half-typed for this to interrupt.
     pub fn tell_the_shell(&mut self) {
         let program = self.shell_choice();
+        // Only a shell that can answer. One that cannot is sent to the
+        // panel's directory before each command instead, and writing a `cd`
+        // into its screen every time somebody moved would fill it with
+        // commands nobody typed.
+        if !lost_commander_core::shellhook::journals(&program) {
+            return;
+        }
         let Some(shell) = self.shell.as_mut() else {
             return;
         };
@@ -6159,5 +6196,35 @@ mod tests {
         app.on_key(ctrl_key(KeyCode::Char('z')));
         assert!(app.pending_suspend);
         assert!(!app.should_quit, "suspending is not quitting");
+    }
+
+    #[test]
+    fn an_unhooked_shell_is_sent_to_the_panel_before_every_command() {
+        // `cmd` cannot say where it is, so the panel is the answer - the way
+        // Far Manager does it on Windows. Otherwise a `cd` typed into the
+        // shell moves it somewhere the panel never learns about, and every
+        // command afterwards runs somewhere other than the prompt says.
+        let lines = command_lines("cmd.exe", Path::new(r"C:\src"), "dir");
+        assert_eq!(
+            lines,
+            vec![r#"cd /d "C:\src""#.to_string(), "dir".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_hooked_shell_is_left_where_it_is() {
+        // It reports where it goes and both sides follow, so sending it back
+        // would undo a `cd` the reader meant.
+        let lines = command_lines("/bin/bash", Path::new("/home/you"), "ls");
+        assert_eq!(lines, vec!["ls".to_string()]);
+    }
+
+    #[test]
+    fn only_a_shell_that_can_answer_is_told_where_the_panel_went() {
+        let (_root, mut app) = app_fixture();
+        app.shell_program = Some("cmd.exe".to_string());
+        // Nothing to write into: the point is that it does not try.
+        app.tell_the_shell();
+        assert!(app.shell.is_none(), "and it did not start one to say it");
     }
 }

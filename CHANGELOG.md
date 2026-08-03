@@ -23,6 +23,14 @@ Notable changes, newest first. Versions follow [semantic versioning]; until
   `settings.toml` was read and then ignored there, so the setting the
   graphical view respects did nothing. It matters on Windows, where the
   machine's own answer is `cmd` and `cmd` has no seam for the hook.
+- **A shell that cannot be asked where it is gets told instead.** `cmd` and
+  `dash` have no seam to hook, so each command is now preceded by a `cd` to
+  the directory the panel is showing — Far Manager's model on Windows, and
+  for the same reason: half-sharing a directory is worse than not sharing
+  one. A hooked shell is left alone, since sending it back would undo a `cd`
+  the reader meant.
+- **`Ctrl-O` opens onto a line** naming the shell and saying whether it
+  shares the directory and is recorded, or does neither.
 - **`Alt-O` picks the shell**, and says which of them can be recorded. It
   matters most on Windows, where the machine's answer is `cmd` and `cmd` has
   no seam to hook — so without a way to choose, the shared directory was
