@@ -15,18 +15,32 @@ end owns.
 
 ## The terminal view
 
+Two panels, a status line, the command line, and the function keys. This is
+generated from the real drawing code by a test, which fails if this picture
+falls behind the program - a README's screenshot is otherwise a photograph of
+whatever it looked like the day somebody typed it.
+
 ```
-┌───────── /home/you/lost-commander/core ──────────┐┌─────────── /home/you/lost-commander ─────────────┐
-│Name                           Size Modified      ││Name                           Size Modified      │
-│ ..                            <UP>               ││ ..                            <UP>               │
-│ src                          <DIR> 25.07.26 04:43││ core                         <DIR> 25.07.26 04:43│
-│*entry.rs                     5.52K 25.07.26 04:36││ egui                         <DIR> 25.07.26 04:42│
-│*fsops.rs                     9.07K 25.07.26 04:38││ ffi                          <DIR> 25.07.26 04:42│
-│ panel.rs                     5.66K 25.07.26 04:42││ Cargo.toml                     730 25.07.26 04:36│
-└──────────────────────────────────────────────────┘└──────────────────────────────────────────────────┘
-panel.rs  5.66K  25.07.26 04:42  [2 marked, 14.6K]  (sort: name)
+┌─────────── ~/src/lost-commander/core ──────────┐┌────────────── ~/src/lost-commander ────────────┐
+│Name                         Size Modified      ││Name                         Size Modified      │
+│ ..                          <UP>               ││ ..                          <UP>               │
+│ archive                    <DIR> 25.07.26 04:43││ core                       <DIR> 25.07.26 04:43│
+│*entry.rs                   5.52K 25.07.26 04:36││                                                │
+│*fsops.rs                   9.07K 25.07.26 04:38││                                                │
+│ panel.rs                   28.1K 25.07.26 04:42││                                                │
+│ tree.rs                    14.3K 25.07.26 04:42││                                                │
+│                                                ││                                                │
+│                                                ││                                                │
+└────────────────────────────────────────────────┘└────────────────────────────────────────────────┘
+panel.rs  28.1K  25.07.26 04:42  [2 marked, 14.6K]  (sort: name)
+~/src/lost-commander/core> cargo test█
 1Help   2Rename 3View   4Edit   5Copy   6Move   7MkDir  8Delete 9Sort   10Quit
 ```
+
+The third row from the bottom is the command line: what you type goes there
+and Enter runs it in the directory being shown, exactly as in Norton
+Commander. `Ctrl-O` puts the panels away and shows what the shell has
+printed.
 
 ## The graphical view
 
@@ -140,27 +154,35 @@ terminal cannot, plus one thing not yet built:
 | File-type icons, grid of large icons | — | yes | there is no grid of icons in a terminal |
 | Image viewing, and crop/rotate/resize | — | yes | same |
 | Built-in text editor | — | yes | `lostc` hands the file to `$EDITOR`, which already knows your settings |
-| A shell, with its commands recorded | — | yes | not built for the terminal yet — see below |
+| Running commands | a command line, `Ctrl-O` for the output | a shell in a drawer, output in the window | `lostc` hands each command the real terminal; `lostc-gui` has no terminal to hand over, so it keeps one |
+| A shell that stays put, sharing the panel's directory | — | yes | see below |
 | Session recording (`rec`) | — | yes | it records that shell, so it needs one |
 | Named colour schemes | one | several | the terminal view uses the classic blue/cyan palette, and a terminal has its own colours anyway |
 | Markdown rendered rather than shown as markup | — | yes | not built for the terminal yet; the parse is in the engine, so it is drawing that is missing, not logic |
 
 Reading bytes as hex, the directory tree, tabs and the journal are in both.
 
-**On the shell**, one honest note. It is tempting to say a terminal file
-manager needs no shell of its own because it is already running in one. That
-is not what Norton Commander or Midnight Commander do: they put a command
-line along the bottom of the panels, keep a real shell running underneath,
-and toggle to its screen with `Ctrl-O` - with the current directory shared
-both ways, so `cd` on the command line moves the panel and moving the panel
-`cd`s the shell. That is a different integration from the graphical view's
-drawer, and a better one for a terminal. `lostc` has neither, and that is a
-gap rather than a decision.
+**On the shell**, where the two differ in kind rather than in degree.
+
+`lostc` has the command line along the bottom and `Ctrl-O` to the shell
+screen, which is Norton Commander's arrangement — and it works without any
+emulation, because the panels are drawn on the terminal's alternate screen
+and a command runs on the main one, where its output stays until you look.
+
+What it has not got is the other half of what Midnight Commander does: a
+shell that *stays running* between commands, with the current directory
+shared both ways, so that `cd` on the command line moves the panel and moving
+the panel `cd`s the shell. Today each command gets a fresh shell in the
+directory the panel is showing, so `cd` in one has no effect on the next.
+The engine already runs real shells on real pseudo-terminals and already
+knows how to ask one where it is — `PtySession::shell_cwd`, tested and unused
+— so this is wiring rather than invention. It is the largest thing on the
+list.
 
 ## Testing
 
 ```sh
-cargo test                     # all 1002, from the workspace root
+cargo test                     # all 1006, from the workspace root
 ```
 
 From the root that is everything, because the root is a virtual manifest and
@@ -173,7 +195,7 @@ Per crate, when you want a fast loop:
 ```sh
 cargo test -p lost-commander-core    # 611 - the engine, seconds to build
 cargo test -p lost-commander-egui    # 190 - the graphical view
-cargo test -p lost-commander-tui     #  95 - the terminal view
+cargo test -p lost-commander-tui     #  99 - the terminal view
 cargo test -p lost-commander-ffi     # 106 - the C ABI
 ```
 

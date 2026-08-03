@@ -5,10 +5,6 @@
 //! Filesystem work uses only `std::fs` / `std::path`, so no part of this
 //! program is tied to a single operating system.
 
-mod app;
-mod theme;
-mod ui;
-
 use lost_commander_core::{entry, panel};
 
 use std::io;
@@ -18,7 +14,8 @@ use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyEventKind};
 
-use app::App;
+use lostc::app::App;
+use lostc::{editor_command, ui};
 use panel::{read_entries, SortBy};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -292,24 +289,6 @@ fn shell_for_lines() -> String {
         .ok()
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "/bin/sh".to_string())
-}
-
-pub(crate) fn editor_command() -> String {
-    if let Ok(editor) = std::env::var("VISUAL") {
-        if !editor.is_empty() {
-            return editor;
-        }
-    }
-    if let Ok(editor) = std::env::var("EDITOR") {
-        if !editor.is_empty() {
-            return editor;
-        }
-    }
-    if cfg!(windows) {
-        "notepad".to_string()
-    } else {
-        "vi".to_string()
-    }
 }
 
 #[cfg(test)]

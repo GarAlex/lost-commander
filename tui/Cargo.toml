@@ -14,6 +14,12 @@ homepage.workspace = true
 keywords = ["file-manager", "tui", "norton-commander", "terminal", "ratatui"]
 categories = ["command-line-utilities", "filesystem"]
 
+# A library as well as a binary, so the panels can be drawn into a buffer and
+# checked. A binary cannot be imported by a test.
+[lib]
+name = "lostc"
+path = "src/lib.rs"
+
 [[bin]]
 name = "lostc"
 path = "src/main.rs"
