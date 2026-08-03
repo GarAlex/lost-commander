@@ -263,11 +263,6 @@ and puts no licence on that work (§3.3) — which is the reason for choosing MP
 over the GPL family, since this engine is designed to be driven through a C
 ABI by front-ends it knows nothing about.
 
-It was MIT OR Apache-2.0 for the first day. Those let a fork be closed, and
-somebody pointed that out while it was still cheap to change: there is nothing
-published, no contributors, and one copyright holder. It will not be cheap
-later.
-
 ### Contribution
 
 Unless you state otherwise, any contribution you intentionally submit for

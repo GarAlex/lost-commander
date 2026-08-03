@@ -15,12 +15,10 @@ First release.
 
 ### Licence
 
-MPL-2.0. It was MIT OR Apache-2.0 for a day before release, until somebody
-pointed out that both let a fork be taken closed. MPL asks for changes to
-*these files* to stay open, while still allowing the code to be linked from a
-larger work under whatever terms that work likes — which matters, because the
-engine is meant to be driven through a C ABI by front-ends it knows nothing
-about.
+MPL-2.0. Changes to these files stay open, so improvements to the engine come
+back; linking the code from a larger work of your own is explicitly allowed
+and puts no licence on that work, which matters because the engine is meant to
+be driven through a C ABI by front-ends it knows nothing about.
 
 ### Fixed before release
 
