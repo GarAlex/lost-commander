@@ -68,7 +68,10 @@ KEYS:
 
     Typing goes to the command line under the panels, and Enter runs it in the
     directory being shown - as in Norton and Midnight Commander. An empty
-    command line means the panels: Space marks, Backspace goes up."
+    command line means the panels: Space marks, Backspace goes up.
+
+    Ctrl-O hides the panels and shows what the shell has printed, with the
+    terminal's own scrollback. Any key brings the panels back."
     );
 }
 
@@ -143,6 +146,15 @@ fn run_tui(left: PathBuf, right: PathBuf) -> io::Result<()> {
         // A privileged command needs the terminal to itself: `sudo` has to
         // put its password prompt somewhere, and this front-end owns the
         // screen. Same suspend-and-restore as $EDITOR above.
+        if app.pending_peek {
+            app.pending_peek = false;
+            if let Err(e) = show_shell_screen(&mut terminal) {
+                app.status = format!("Failed: {e}");
+                app.status_is_error = true;
+            }
+            continue;
+        }
+
         if let Some(line) = app.pending_shell.take() {
             let cwd = app.active_panel().cwd.clone();
             if let Err(e) = run_shell_line(&mut terminal, &line, &cwd) {
@@ -231,22 +243,37 @@ fn run_shell_line(
             .status()
     };
 
-    // The output is on the screen and the screen is about to be taken back.
-    // Without this the terminal is cleared the instant the command finishes,
-    // and anything it printed is gone before it can be read.
-    press_any_key();
+    // No pause here. The panels live on the terminal's *alternate* screen and
+    // the command just ran on the main one, so its output is still sitting
+    // there afterwards - Ctrl-O flips to it. This is how Norton and Midnight
+    // Commander work, and a "press any key" after every command would be a
+    // keystroke charged for something the terminal was already keeping.
 
     *terminal = ratatui::init();
     terminal.clear()?;
     status.map(|_| ())
 }
 
-/// Hold the terminal until a key is pressed, so output can be read.
+/// Show the shell's screen until a key is pressed, then take the panels back.
+///
+/// The panels are drawn on the alternate screen; everything commands have
+/// printed is on the main one, with the terminal's own scrollback. Leaving
+/// the alternate screen reveals it exactly as the shell left it - nothing has
+/// to be captured, buffered or re-rendered, which is why this is four lines
+/// and not a screen emulator.
+fn show_shell_screen(terminal: &mut ratatui::DefaultTerminal) -> io::Result<()> {
+    ratatui::restore();
+    press_any_key();
+    *terminal = ratatui::init();
+    terminal.clear()
+}
+
+/// Hold the terminal until a key is pressed.
 fn press_any_key() {
     use crossterm::event::{self, Event, KeyEventKind};
 
     println!();
-    println!("-- press any key to return --");
+    println!("-- press any key to return to the panels --");
     let _ = crossterm::terminal::enable_raw_mode();
     loop {
         match event::read() {

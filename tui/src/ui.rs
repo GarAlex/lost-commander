@@ -2110,6 +2110,7 @@ pub const HELP: &[(&str, &str)] = &[
     ("Ctrl-P", "open with..."),
     ("Ctrl-E", "a shell as administrator"),
     ("F9", "cycle sort order"),
+    ("Ctrl-O", "shell screen"),
     ("F10", "quit"),
     ("", ""),
     ("Ctrl-T", "another tab, here"),

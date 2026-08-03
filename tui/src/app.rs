@@ -337,6 +337,10 @@ pub struct App {
     /// Set when a privileged command needs to be run with the TUI suspended,
     /// so its password prompt has the terminal to itself.
     pub pending_shell: Option<String>,
+    /// Set by Ctrl-O: hide the panels and show what the shell has printed.
+    ///
+    /// The main loop does it, because taking the terminal back is its job.
+    pub pending_peek: bool,
     /// Whether the keyboard is in a pane's tree half rather than its files.
     ///
     /// One flag per side. Two lists in one pane is two cursors, and a reader
@@ -431,6 +435,7 @@ impl App {
             command: String::new(),
             pending_edit: None,
             pending_shell: None,
+            pending_peek: false,
             bookmarks: Bookmarks::default(),
             bookmarks_path: None,
             job: None,
@@ -2532,6 +2537,10 @@ impl App {
             KeyCode::Char('+') => self.request_select_pattern(true),
             KeyCode::Char('-') => self.request_select_pattern(false),
             // J for journal: the account of what was done.
+            // Ctrl-O is what Norton and Midnight Commander both use for this,
+            // and it is the reason a command does not have to pause: the
+            // output is still on the screen underneath, whenever you want it.
+            KeyCode::Char('o') if ctrl => self.pending_peek = true,
             KeyCode::Char('j') if ctrl => self.open_journal(),
             KeyCode::Char('a') if ctrl => {
                 let panel = self.active_panel_mut();
