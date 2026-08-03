@@ -177,7 +177,7 @@ terminal cannot, plus one thing not yet built:
 | Built-in text editor | — | yes | `lostc` hands the file to `$EDITOR`, which already knows your settings |
 | Running commands | a command line, `Ctrl-O` for the output | a shell in a drawer, output in the window | `lostc` hands each command the real terminal; `lostc-gui` has no terminal to hand over, so it keeps one |
 | A shell that stays put | yes | yes | one per session in the terminal view, one per tab in the drawer |
-| The shell and the panel sharing a directory | yes, both ways | `cd here`, one way | the graphical view has several shell tabs and two panes, so which follows which is a decision not yet made |
+| The shell and the panel sharing a directory | yes, both ways | yes, both ways | `cd` in the shell moves the active pane; `cd here` sends the shell to it |
 | Session recording (`rec`) | — | yes | it records that shell, so it needs one |
 | Named colour schemes | one | several | the terminal view uses the classic blue/cyan palette, and a terminal has its own colours anyway |
 | Markdown rendered rather than shown as markup | — | yes | not built for the terminal yet; the parse is in the engine, so it is drawing that is missing, not logic |

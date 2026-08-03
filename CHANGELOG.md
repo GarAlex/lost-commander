@@ -29,6 +29,9 @@ Notable changes, newest first. Versions follow [semantic versioning]; until
   for the same reason: half-sharing a directory is worse than not sharing
   one. A hooked shell is left alone, since sending it back would undo a `cd`
   the reader meant.
+- **The graphical view follows its shell too.** A `cd` in the visible shell
+  moves the active pane, which it never did before — it had `cd here` and
+  nothing the other way.
 - **`Ctrl-O` opens onto a line** naming the shell and saying whether it
   shares the directory and is recorded, or does neither.
 - **`Alt-O` picks the shell**, and says which of them can be recorded. It

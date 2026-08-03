@@ -343,6 +343,14 @@ pub struct GuiApp {
     tree_at: [usize; 2],
     /// Where each pane's file cursor was last frame, for the same reason.
     listing_at: [usize; 2],
+    /// The directory the visible shell last said it was in, and which tab
+    /// said it.
+    ///
+    /// Kept so the pane follows a `cd` *when it happens* rather than
+    /// whenever the two disagree. Those are different rules and only the
+    /// first is usable: with the second, walking a pane somewhere the shell
+    /// is not would be undone on the next frame.
+    shell_was: Option<(usize, PathBuf)>,
     /// How much of the width the left pane gets. Dragged on the divider.
     pub split: f32,
     pub bookmarks: Bookmarks,
@@ -511,6 +519,7 @@ impl GuiApp {
             on_tree: [false, false],
             tree_at: [0, 0],
             listing_at: [0, 0],
+            shell_was: None,
             split: 0.5,
             bookmarks,
             bookmarks_path: None,
@@ -850,6 +859,39 @@ impl GuiApp {
         }
         let (program, _) = self.chosen_shell();
         self.info(format!("Commands will run with {program}"));
+    }
+
+    /// Move the active pane to wherever the visible shell has just gone.
+    ///
+    /// Only on a change, and only for the tab that reported it. A shell says
+    /// where it is through the hook, so this is reading an answer rather than
+    /// guessing at one - and a shell with no seam to hook never answers, so
+    /// nothing happens and nothing pretends to.
+    ///
+    /// Switching tabs is not a `cd`: the new tab's directory is noted without
+    /// acting on it, or every glance at another shell would drag the pane
+    /// somewhere the reader did not ask to go.
+    fn follow_the_shell(&mut self) {
+        let Some((tab, where_)) = self
+            .terminals
+            .active()
+            .and_then(|s| s.shell_cwd().map(|c| (self.terminals.active, c)))
+        else {
+            return;
+        };
+        let changed = match &self.shell_was {
+            Some((was_tab, was)) => *was_tab == tab && *was != where_,
+            None => false,
+        };
+        self.shell_was = Some((tab, where_.clone()));
+        if !changed || !where_.is_dir() {
+            return;
+        }
+        let side = self.active;
+        if self.panel(side).cwd == where_ {
+            return;
+        }
+        self.navigate(side, where_);
     }
 
     // ---- terminals ---------------------------------------------------------
@@ -1520,6 +1562,7 @@ impl eframe::App for GuiApp {
         }
 
         self.terminals.reap_finished();
+        self.follow_the_shell();
         self.terminal_input(ctx);
 
         egui::TopBottomPanel::top("toolbar")
@@ -10221,5 +10264,42 @@ mod tests {
             before,
             "Down moves the tree"
         );
+    }
+
+    #[test]
+    fn walking_a_pane_is_not_undone_by_a_shell_that_has_not_moved() {
+        // The rule that makes following usable: the pane follows a `cd` when
+        // it *happens*, not whenever the two disagree. With the second rule,
+        // walking a pane somewhere the shell is not would be undone on the
+        // very next frame, and the panes would be unusable while a shell was
+        // open anywhere.
+        let (root, mut app) = fixture();
+        let elsewhere = root.path().join("sub");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+
+        // The shell said where it was once, and has not moved since.
+        app.shell_was = Some((0, elsewhere.clone()));
+        let went = app.left.cwd().to_path_buf();
+
+        app.follow_the_shell();
+        assert_eq!(
+            app.left.cwd(),
+            went,
+            "no shell running, and nothing reported - the pane stays"
+        );
+    }
+
+    #[test]
+    fn switching_shell_tabs_is_not_a_cd() {
+        // Noted without acting on it, or every glance at another shell would
+        // drag the pane somewhere the reader never asked to go.
+        let (root, mut app) = fixture();
+        let elsewhere = root.path().join("sub");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+
+        app.shell_was = Some((3, elsewhere.clone()));
+        let went = app.left.cwd().to_path_buf();
+        app.follow_the_shell();
+        assert_eq!(app.left.cwd(), went, "a different tab is not a move");
     }
 }
