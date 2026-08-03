@@ -357,6 +357,14 @@ pub struct App {
     /// did. Started on first use, because most of what this program does
     /// needs no shell at all and a pty costs a process.
     pub shell: Option<lost_commander_core::pty::PtySession>,
+    /// Which shell to run, when the reader has chosen one.
+    ///
+    /// `None` takes the machine's own answer. That answer is `cmd` on
+    /// Windows whatever `$SHELL` says, and `cmd` has no seam for the hook -
+    /// so the directory the panels and the shell share is a thing a Windows
+    /// reader has to opt into by naming a shell that does. It is in
+    /// `settings.toml` as `shell`.
+    pub shell_program: Option<String>,
     /// Whether the shell's screen is what is on show, rather than the panels.
     pub showing_shell: bool,
     /// Set by Ctrl-Z: give the terminal back and stop, until resumed.
@@ -417,6 +425,9 @@ impl App {
         // middle of writing to it.
         let settings = lost_commander_core::config::Settings::load();
         app.journal = settings.journal();
+        // A chosen shell was being read from the file and then ignored here,
+        // so the setting the graphical view honours did nothing in this one.
+        app.shell_program = settings.shell.clone();
         if let Some(journal) = &app.journal {
             journal.sweep(journal::Day::today());
         }
@@ -461,6 +472,7 @@ impl App {
             pending_edit: None,
             pending_shell: None,
             shell: None,
+            shell_program: None,
             showing_shell: false,
             pending_suspend: false,
             bookmarks: Bookmarks::default(),
@@ -2419,7 +2431,10 @@ impl App {
         if self.shell.is_some() {
             return true;
         }
-        let program = lost_commander_core::shell::current_shell().0;
+        let program = self
+            .shell_program
+            .clone()
+            .unwrap_or_else(|| lost_commander_core::shell::current_shell().0);
         let cwd = self.active_panel().cwd.clone();
         match lost_commander_core::pty::PtySession::spawn(&program, &cwd, 24, 80) {
             Ok(session) => {

@@ -336,7 +336,30 @@ fn cwd_from_url(url: &str) -> Option<PathBuf> {
     if decoded.is_empty() {
         return None;
     }
-    Some(PathBuf::from(decoded))
+    Some(PathBuf::from(drive_letters_lose_the_slash(&decoded)))
+}
+
+/// `/C:/src` is `C:/src`.
+///
+/// A `file://` URI always begins its path with a slash, so a Windows path
+/// arrives as `file:///C:/src` and the naive answer is `/C:/src` - which
+/// looks like a path, is not one, and fails every test that matters by
+/// silently not existing. PowerShell reports exactly this, which is how it
+/// was found: the panel refused to follow the shell and said nothing,
+/// because a directory that is not there is not a directory to move to.
+///
+/// Only where a drive letter and a colon actually follow the slash. A Unix
+/// path is `/home/you` and must keep its leading slash.
+fn drive_letters_lose_the_slash(path: &str) -> &str {
+    let mut chars = path.chars();
+    if chars.next() != Some('/') {
+        return path;
+    }
+    let letter = chars.next().filter(|c| c.is_ascii_alphabetic());
+    if letter.is_some() && chars.next() == Some(':') {
+        return &path[1..];
+    }
+    path
 }
 
 fn percent_decode(text: &str) -> String {
@@ -1428,5 +1451,40 @@ mod tests {
         let two = nonce();
         assert_ne!(one, two);
         assert!(!one.is_empty());
+    }
+
+    #[test]
+    fn a_windows_path_loses_the_uri_slash_and_a_unix_one_keeps_it() {
+        // Found by driving PowerShell: a `file://` URI always starts its path
+        // with a slash, so a Windows directory arrives as `file:///C:/src`
+        // and the naive answer is `/C:/src` - which looks like a path, is not
+        // one, and fails by silently not existing. The panel then refused to
+        // follow the shell and said nothing, because there was nowhere to go.
+        assert_eq!(
+            cwd_from_url("file:///C:/Users/you/src"),
+            Some(PathBuf::from("C:/Users/you/src"))
+        );
+        assert_eq!(
+            cwd_from_url("file:///c:/tmp"),
+            Some(PathBuf::from("c:/tmp"))
+        );
+
+        // A Unix path is not a drive letter and keeps its leading slash.
+        assert_eq!(
+            cwd_from_url("file:///home/you/src"),
+            Some(PathBuf::from("/home/you/src"))
+        );
+        assert_eq!(cwd_from_url("file:///"), Some(PathBuf::from("/")));
+
+        // Nor is a single letter followed by anything else.
+        assert_eq!(cwd_from_url("file:///c/tmp"), Some(PathBuf::from("/c/tmp")));
+    }
+
+    #[test]
+    fn the_host_is_skipped_and_escapes_are_undone() {
+        assert_eq!(
+            cwd_from_url("file://somewhere/home/you/my%20files"),
+            Some(PathBuf::from("/home/you/my files"))
+        );
     }
 }

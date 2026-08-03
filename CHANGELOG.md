@@ -14,6 +14,15 @@ Notable changes, newest first. Versions follow [semantic versioning]; until
   it leaves you in is where the next command runs. `Ctrl-O` swaps between the
   panels and the shell's own screen, and keys go straight to it while it is
   showing.
+- **A Windows directory reported by a shell is usable.** A `file://` URI
+  always begins its path with a slash, so `C:\src` arrived as `/C:/src` —
+  which looks like a path, is not one, and fails by silently not existing.
+  PowerShell reports exactly that, so the panel refused to follow it and said
+  nothing. Found by driving a real PowerShell rather than by reading code.
+- **The terminal view honours the configured shell.** `shell` in
+  `settings.toml` was read and then ignored there, so the setting the
+  graphical view respects did nothing. It matters on Windows, where the
+  machine's own answer is `cmd` and `cmd` has no seam for the hook.
 - **The directory is shared both ways.** A `cd` in the shell moves the panel;
   moving the panel `cd`s the shell. The shell reports where it is through the
   `OSC 133` hook the graphical view already used — read rather than guessed
