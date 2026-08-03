@@ -1,3 +1,7 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 //! Handing a file to the desktop - the "open" that `Enter` means.
 //!
 //! Two things get confused under one word, and this module keeps them apart:

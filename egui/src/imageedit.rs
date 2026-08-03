@@ -1,3 +1,7 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 //! The picture editor: turn it, mirror it, crop it, resize it, write it back.
 //!
 //! The arithmetic is all in [`lost_commander_core::imageops`] and tested without pixels.

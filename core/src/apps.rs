@@ -1,3 +1,7 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 //! Which applications could open a file - the list behind "Open with...".
 //!
 //! [`open`](crate::open) answers "what does the desktop do with this by

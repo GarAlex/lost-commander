@@ -7,6 +7,15 @@ Notable changes, newest first. Versions follow [semantic versioning]; until
 
 ## Unreleased
 
+### Changed
+
+- **The licence is now MPL-2.0**, replacing MIT OR Apache-2.0. Both of those
+  let a fork be closed; this one requires changes to these files to stay
+  open, while still allowing the code to be linked from a larger work of
+  somebody else's — which matters because the engine is meant to be driven
+  through a C ABI. Every source file carries the notice, since MPL defines
+  what it covers by that notice rather than by the repository.
+
 ### Fixed
 
 - **There is more than one way to quit the terminal view.** `F10` is the

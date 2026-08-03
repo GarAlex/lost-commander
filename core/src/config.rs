@@ -1,3 +1,7 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 //! User preferences that outlive a session.
 //!
 //! Kept apart from the bookmark file: bookmarks are data the user builds up,

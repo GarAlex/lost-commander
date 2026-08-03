@@ -1,3 +1,7 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 //! Deleting to the system's trash, so a wrong keystroke is recoverable.
 //!
 //! Every platform already has one, with its own rules about where it lives and

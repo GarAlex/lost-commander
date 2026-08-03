@@ -1,3 +1,7 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 //! Markdown, parsed into something a front-end can draw without interpreting.
 //!
 //! A `.md` file is text, so the text viewer already shows it. What it is not

@@ -1,3 +1,7 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 //! Network locations: parsing, and the on-disk bookmark store ("remember").
 //!
 //! Passwords are deliberately **never** stored. Only the user name is kept, and

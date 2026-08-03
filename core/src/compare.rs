@@ -1,3 +1,7 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 //! Telling two directories apart, and making them agree.
 //!
 //! Two things, one underneath the other. **Compare folders** is the cheap one:

@@ -10,7 +10,7 @@
 <component type="desktop-application">
   <id>io.github.garalex.lost-commander</id>
   <metadata_license>CC0-1.0</metadata_license>
-  <project_license>MIT OR Apache-2.0</project_license>
+  <project_license>MPL-2.0</project_license>
 
   <name>lost-commander</name>
   <summary>Dual-pane file manager in the Norton Commander tradition</summary>

@@ -254,24 +254,22 @@ Settings, saved locations and the journal live in one directory per platform:
 
 ## License
 
-Licensed under either of
+Mozilla Public License 2.0 — see [LICENSE](LICENSE).
 
-- MIT ([LICENSE-MIT](LICENSE-MIT))
-- Apache License 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+Copyleft, per file. Changes to *these* files must be published under the same
+licence, so improvements to the engine come back rather than disappearing into
+a fork. Linking this code from a larger work of your own is explicitly allowed
+and puts no licence on that work (§3.3) — which is the reason for choosing MPL
+over the GPL family, since this engine is designed to be driven through a C
+ABI by front-ends it knows nothing about.
 
-at your option. This is the usual arrangement for Rust projects, and the
-choice is the user's rather than mine: MIT is the shorter one most people
-already know, and Apache-2.0 carries an explicit patent grant that some
-organisations' policies look for.
+It was MIT OR Apache-2.0 for the first day. Those let a fork be closed, and
+somebody pointed that out while it was still cheap to change: there is nothing
+published, no contributors, and one copyright holder. It will not be cheap
+later.
 
 ### Contribution
 
 Unless you state otherwise, any contribution you intentionally submit for
-inclusion in this work, as defined in the Apache-2.0 license, shall be dual
-licensed as above, without any additional terms or conditions.
-
-That sentence is the point of offering both. Under Apache-2.0 a contributor
-licenses the patent claims their contribution reads on — including any their
-employer holds — to everyone downstream. MIT says nothing about patents, so
-without this a contribution could be accepted in good faith and still leave a
-problem for the people using it.
+inclusion in this work shall be licensed as above, without any additional
+terms or conditions.

@@ -1,3 +1,7 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 //! Showing a file as bytes, for the files that are not text.
 //!
 //! Every viewer in this program has so far assumed its file could be read.

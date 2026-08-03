@@ -1,3 +1,7 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 //! Reading a text file by line number without holding it in memory.
 //!
 //! A viewer that caps at a quarter of a megabyte is a viewer that cannot open

@@ -1,3 +1,7 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 //! Working out what a text file's bytes mean, and turning text back into them.
 //!
 //! Rust strings are UTF-8, and a file on disk is bytes. Most of the time those

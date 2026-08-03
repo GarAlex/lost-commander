@@ -1,3 +1,7 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 //! What quick view should show for a file, and how to get the system to help.
 //!
 //! Two halves. The first is ours: text is read through a line index (see
