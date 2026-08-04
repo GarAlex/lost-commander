@@ -9,6 +9,17 @@ Notable changes, newest first. Versions follow [semantic versioning]; until
 
 ### Changed
 
+- **The window is four sectors and two seams.** The places list moved to the
+  right, and the shell now sits directly under the panes and exactly as wide
+  as them - it was a panel of its own running the full width, so it was wider
+  than the panes by exactly the sidebar, and the two things that belong
+  together were the two that did not line up. What was run here moved out of
+  the shell drawer and under the places list, to that list's width. One seam
+  runs the whole height and one the whole width, and both are remembered;
+  before, each panel had an edge of its own. The second pane splits the
+  top-left sector and nothing else, and a tree splits a pane inside that, so
+  no arrangement of the panes moves the shell.
+
 - **It opens with one panel now**, in both front-ends, which is XTree's
   arrangement rather than Norton's: a tree and its files with the whole width
   to show them in. Two panels is the right shape for a copy and the wrong one

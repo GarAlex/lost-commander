@@ -355,8 +355,12 @@ pub fn draw_tool(painter: &Painter, rect: Rect, tool: Tool, colour: Color32) {
                 line,
                 eframe::egui::StrokeKind::Inside,
             );
+            // The filled edge is the side the column is actually on. It was
+            // on the left, and the column moved to the right - an icon that
+            // shows the mirror image of what the button does is worse than a
+            // plain square.
             painter.rect_filled(
-                Rect::from_min_max(p(0.14, 0.20), p(0.40, 0.80)),
+                Rect::from_min_max(p(0.60, 0.20), p(0.86, 0.80)),
                 CornerRadius::same(2),
                 colour,
             );

@@ -58,6 +58,16 @@ pub struct Settings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tree_split: Option<f32>,
 
+    /// How wide the right-hand column is: the places list, with what was run
+    /// in the shell's directory under it.
+    ///
+    /// Points rather than a fraction, unlike the split between the panes: a
+    /// list of place names has a natural width and it is the same width on a
+    /// laptop and on a large monitor, where a fraction would grow it into the
+    /// middle of the window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub column_width: Option<f32>,
+
     /// How tall the shell drawer is, in the front-end's own units.
     ///
     /// Points here, because a drawer's useful height is "eight lines of

@@ -11,8 +11,11 @@ asks for it, `F12` folds it away.
 
 - **`lostc`** — a terminal UI. Function keys, no mouse required.
 - **`lostc-gui`** — a graphical view laid out for a pointer rather than a
-  teletype: a sidebar, a breadcrumb trail, per-pane list/grid/tree views, and
-  a real shell in a drawer along the bottom.
+  teletype: four sectors with two seams. The panes are top left, the places
+  list top right, the shell directly under the panes and exactly as wide as
+  them, and what was run in that directory under the places list and to its
+  width. One seam runs the whole height and one the whole width, so the
+  things that belong together stay the same size as each other.
 
 Everything underneath — listing, sorting, marking, copy/move/delete with
 progress and cancel, archives, bookmarks, network locations, the directory
@@ -158,6 +161,31 @@ cargo run --bin lostc-gui -- --history           # second pane shows what was do
 cargo run --bin lostc-gui -- --help
 ```
 
+The window is four sectors and two seams:
+
+```
++------------------------+---------------+
+|  panes                 |  places       |
+|  (the second pane and  |  drives,      |
+|   a tree split this    |  folders,     |
+|   sector, and only     |  bookmarks    |
+|   this one)            |               |
++------------------------+---------------+
+|  F1 Help  F2 Rename ...                |
++------------------------+---------------+
+|  shell                 |  run here     |
++------------------------+---------------+
+```
+
+The vertical seam runs the whole height and the horizontal one the whole
+width, so a shell is exactly as wide as the panes it belongs to, and the list
+of what was run here is exactly as wide as the places list above it. Both
+seams remember where you left them.
+
+The second pane splits the top-left sector and nothing else; a tree splits a
+pane the other way, inside it. That is what keeps the arrangement stable: no
+matter how the panes are divided, the shell under them does not move.
+
 `Tab` opens the second pane and `F12` folds it away. A folder comparison
 opens it, since it has two directories to show.
 
@@ -231,8 +259,11 @@ terminal cannot, plus one thing not yet built:
 
 Reading bytes as hex, the directory tree, tabs and the journal are in both.
 
-**Beside the shell** — in both front-ends — is what has been run *in that
-directory*, newest first, `hist` in the graphical view turns the column off.
+**What was run here** — in both front-ends — sits beside the shell: the
+commands from *that directory*, newest first. In the window it is the
+bottom-right sector, under the places list; `hist` turns it off, and hiding
+the places list takes the column with it, since that column is what it is
+drawn in.
 A shell's own history is one list with no idea where you were standing, and
 the half that is about here is the half worth having in front of you. Clicking
 a line puts it on the command line without running it; the terminal view walks
@@ -260,7 +291,7 @@ changes it.
 ## Testing
 
 ```sh
-cargo test                     # all 1072, from the workspace root
+cargo test                     # all 1077, from the workspace root
 ```
 
 From the root that is everything, because the root is a virtual manifest and
@@ -272,7 +303,7 @@ Per crate, when you want a fast loop:
 
 ```sh
 cargo test -p lost-commander-core    # 642 - the engine, seconds to build
-cargo test -p lost-commander-egui    # 202 - the graphical view
+cargo test -p lost-commander-egui    # 207 - the graphical view
 cargo test -p lost-commander-tui     # 122 - the terminal view
 cargo test -p lost-commander-ffi     # 106 - the C ABI
 ```

@@ -361,6 +361,11 @@ pub struct GuiApp {
     /// Norton, had no way to discover that F5 copies here too. The keys work
     /// either way; the bar is what says so.
     pub show_keys: bool,
+    /// How wide the right-hand column is: the places list, and what was run
+    /// here under it. Points, not a fraction - see [`Showing::column`].
+    pub column_width: f32,
+    /// How tall the bottom row is: the shell, and the history beside it.
+    pub row_height: f32,
     /// The folder the history view last read, what it read, and when.
     ///
     /// The account is on disk and a pane redraws sixty times a second, so it
@@ -553,6 +558,14 @@ impl GuiApp {
         if let Some(split) = app.settings.tree_split {
             app.tree_split = split.clamp(0.15, 0.85);
         }
+        if let Some(width) = app.settings.column_width {
+            app.column_width = width.clamp(COLUMN_MIN, COLUMN_MAX);
+        }
+        if let Some(height) = app.settings.shell_height {
+            // Only a floor here: the ceiling depends on the window, which is
+            // not known until it is drawn, and `sectors` clamps it there.
+            app.row_height = height.max(ROW_MIN);
+        }
         // The account, and a sweep of whatever has aged out of it. Once at
         // startup is the right moment: it is the only time the program is
         // certainly not in the middle of writing to it.
@@ -587,6 +600,8 @@ impl GuiApp {
             right_view: ViewMode::Details,
             show_sidebar: true,
             show_keys: true,
+            column_width: 210.0,
+            row_height: 280.0,
             history_of: None,
             history_rows: Vec::new(),
             history_read_at: 0.0,
@@ -945,6 +960,8 @@ impl GuiApp {
     fn layout_into_settings(&mut self) {
         self.settings.pane_split = Some(self.split);
         self.settings.tree_split = Some(self.tree_split);
+        self.settings.column_width = Some(self.column_width);
+        self.settings.shell_height = Some(self.row_height);
     }
 
     /// Remember a different shell for future commands.
@@ -1709,102 +1726,85 @@ impl eframe::App for GuiApp {
             .frame(chrome_frame(theme::surface()))
             .show(ctx, |ui| self.status_bar(ui));
 
-        // Under the panes, as the original had it: either the real terminal
-        // panel or the one-shot command line.
-        if self.show_terminal {
-            egui::TopBottomPanel::bottom("terminal")
-                .frame(chrome_frame(theme::surface()))
-                .resizable(true)
-                // A terminal needs room to be a terminal: enough rows that a
-                // command and its output are both visible without dragging.
-                .height_range(140.0..=640.0)
-                .default_height(280.0)
-                .show(ctx, |ui| self.terminal_panel(ui));
-        } else {
-            egui::TopBottomPanel::bottom("console")
-                .frame(chrome_frame(theme::surface()))
-                .resizable(self.show_output)
-                .default_height(if self.show_output { 150.0 } else { 34.0 })
-                .min_height(34.0)
-                .show(ctx, |ui| self.console_panel(ui));
-        }
-
-        // Above the shell and below the panes, which is where a commander
-        // has always put it and where it reads as belonging to the files.
-        if self.show_keys {
-            egui::TopBottomPanel::bottom("keys")
-                .exact_height(26.0)
-                .frame(chrome_frame(theme::surface()))
-                .show(ctx, |ui| self.key_bar(ui));
-        }
-
-        if self.show_sidebar {
-            egui::SidePanel::left("sidebar")
-                .exact_width(210.0)
-                .resizable(false)
-                .frame(chrome_frame(theme::sidebar()))
-                .show(ctx, |ui| self.sidebar(ui));
-        }
-
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(theme::bg()))
             .show(ctx, |ui| {
                 let full = ui.available_rect_before_wrap();
-                if !self.show_right {
-                    // One pane, the whole width - the active one, as every
-                    // dual-pane manager does it, so folding the other away
-                    // never moves you somewhere you were not looking. The
-                    // hidden Panel is untouched, which is what makes its
-                    // directory, cursor and marks still be there afterwards.
-                    let side = self.active;
-                    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(full));
-                    self.pane(&mut child, side);
-                    return;
+                let cut = sectors(
+                    full,
+                    Showing {
+                        places: self.show_sidebar,
+                        history: self.show_shell_history,
+                        keys: self.show_keys,
+                        column: self.column_width,
+                        // The one-shot command line is a line, not a drawer:
+                        // it gets the height it needs rather than the height
+                        // the shell was left at, and its seam does not drag.
+                        row: if self.show_terminal {
+                            self.row_height
+                        } else if self.show_output {
+                            150.0
+                        } else {
+                            ROW_MIN
+                        },
+                    },
+                );
+
+                // Each sector paints its own background, which being a panel
+                // used to do for it.
+                let painter = ui.painter().clone();
+                painter.rect_filled(cut.shell, 0.0, theme::surface());
+                if let Some(keys) = cut.keys {
+                    painter.rect_filled(keys, 0.0, theme::surface());
+                }
+                for rect in [cut.places, cut.history].into_iter().flatten() {
+                    painter.rect_filled(rect, 0.0, theme::sidebar());
                 }
 
-                let (left, divider, right) = pane_rects(full, self.split);
+                self.panes_in(ui, cut.panes);
 
-                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(left));
-                self.pane(&mut child, Side::Left);
-                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(right));
-                self.pane(&mut child, Side::Right);
+                if let Some(rect) = cut.keys {
+                    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+                    self.key_bar(&mut child);
+                }
 
-                // The divider goes last so it takes the pointer before the
-                // panes do, and its grab area is wider than the line it draws
-                // - a three-pixel target is a target you miss.
-                let grab = divider.expand2(Vec2::new(GRAB - GUTTER * 0.5, 0.0));
-                let response =
-                    ui.interact(grab, ui.id().with("pane_divider"), Sense::click_and_drag());
-                if response.dragged() {
-                    if let Some(pointer) = response.interact_pointer_pos() {
-                        self.split = split_from_pointer(full, pointer.x);
+                let mut child =
+                    ui.new_child(egui::UiBuilder::new().max_rect(cut.shell.shrink2(CHROME_PAD)));
+                if self.show_terminal {
+                    self.terminal_panel(&mut child);
+                } else {
+                    self.console_panel(&mut child);
+                }
+
+                if let Some(rect) = cut.places {
+                    let mut child =
+                        ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink2(CHROME_PAD)));
+                    self.sidebar(&mut child);
+                }
+                if let Some(rect) = cut.history {
+                    self.shell_history_column(ui, rect.shrink2(CHROME_PAD));
+                }
+
+                // The seams go last, so they take the pointer before whatever
+                // is drawn under them.
+                if let Some(seam) = cut.vertical {
+                    if let Some(pointer) = self.drag_seam(ui, "column_seam", seam, true) {
+                        self.column_width = (full.max.x - pointer.x).clamp(COLUMN_MIN, COLUMN_MAX);
                     }
                 }
-                // Back to even, without hunting for the middle by hand.
-                if response.double_clicked() {
-                    self.split = 0.5;
-                }
-                // Written when the drag ends rather than while it runs: the
-                // other way is a file write every frame the pointer moves.
-                if response.drag_stopped() || response.double_clicked() {
-                    self.remember_layout();
-                }
-                if response.hovered() || response.dragged() {
-                    ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
-                }
-
-                let colour = if response.dragged() {
-                    theme::accent()
-                } else if response.hovered() {
-                    theme::accent_dim()
+                // Only a drawer can be dragged taller; the one-shot command
+                // line is one line and there is nothing to give it.
+                if self.show_terminal {
+                    if let Some(pointer) = self.drag_seam(ui, "row_seam", cut.horizontal, false) {
+                        self.row_height = (full.max.y - pointer.y).max(ROW_MIN);
+                    }
                 } else {
-                    theme::border()
-                };
-                ui.painter().vline(
-                    divider.center().x,
-                    full.y_range(),
-                    egui::Stroke::new(1.0, colour),
-                );
+                    ui.painter().hline(
+                        full.x_range(),
+                        cut.horizontal.center().y,
+                        egui::Stroke::new(1.0, theme::border()),
+                    );
+                }
             });
 
         // Whatever the quick view asked for while it was drawing, now that
@@ -1839,6 +1839,9 @@ impl eframe::App for GuiApp {
 /// The gap drawn between the panes, and the width of the target you can
 /// actually grab. They differ on purpose: a hairline is what looks right and
 /// a hairline is what you cannot hit.
+/// The breathing room a sector's contents get inside it, now that a sector
+/// is a rectangle this draws rather than a panel with a frame of its own.
+pub const CHROME_PAD: Vec2 = Vec2::new(8.0, 6.0);
 pub const GUTTER: f32 = 6.0;
 pub const GRAB: f32 = 6.0;
 
@@ -1848,6 +1851,134 @@ pub const GRAB: f32 = 6.0;
 /// grabbed back. Folding one away entirely is what the toolbar toggle is for.
 pub const SPLIT_MIN: f32 = 0.12;
 pub const SPLIT_MAX: f32 = 0.88;
+
+/// What the window is showing, for [`sectors`] to lay out.
+#[derive(Debug, Clone, Copy)]
+pub struct Showing {
+    /// The places list, which owns the right-hand column.
+    pub places: bool,
+    /// What was run here, under the places list and the same width as it.
+    pub history: bool,
+    /// The function keys, under the panes.
+    pub keys: bool,
+    /// The width of the right-hand column, in points.
+    ///
+    /// Points rather than a fraction, unlike the split between the panes: a
+    /// list of place names has a natural width - about twenty characters -
+    /// and it is the same width on a laptop and on a large monitor. A
+    /// fraction would make it grow into the middle of a wide window.
+    pub column: f32,
+    /// The height of the bottom row, in points, for the same reason: a
+    /// drawer's useful height is "eight lines of output".
+    pub row: f32,
+}
+
+/// The four sectors of the window, and the two lines between them.
+///
+/// Two splitters rather than four: the vertical one runs the whole height, so
+/// the shell is exactly as wide as the panes above it, and the horizontal one
+/// runs the whole width, so what was run here lines up with the shell that
+/// ran it. Each was previously its own panel with its own edge, which is how
+/// the drawer came to be a different width from the panes it belonged to.
+#[derive(Debug, Clone, Copy)]
+pub struct Sectors {
+    /// Top left: the panes. Split again by the second pane, and by a tree.
+    pub panes: Rect,
+    /// The strip under the panes, when the key bar is on.
+    pub keys: Option<Rect>,
+    /// Bottom left: the shell, or the one-shot command line.
+    pub shell: Rect,
+    /// Top right: the places list.
+    pub places: Option<Rect>,
+    /// Bottom right: what was run in the shell's directory.
+    pub history: Option<Rect>,
+    /// The full-height line between the columns.
+    pub vertical: Option<Rect>,
+    /// The full-width line between the rows.
+    pub horizontal: Rect,
+}
+
+/// How short either row may be dragged, and how narrow the column.
+pub const ROW_MIN: f32 = 34.0;
+pub const PANES_MIN: f32 = 120.0;
+pub const COLUMN_MIN: f32 = 140.0;
+pub const COLUMN_MAX: f32 = 420.0;
+/// The strip the function keys get, when they are on.
+pub const KEYS_HEIGHT: f32 = 26.0;
+
+/// Cut the window into its four sectors.
+pub fn sectors(full: Rect, showing: Showing) -> Sectors {
+    let half = GUTTER * 0.5;
+
+    // The right column only exists if the places list does: what was run here
+    // is drawn under that list and to its width, so with no list there is no
+    // column for it to be in. The shell takes the whole width instead.
+    let column = if showing.places {
+        showing
+            .column
+            .clamp(COLUMN_MIN, (full.width() * 0.5).max(COLUMN_MIN))
+            .min(COLUMN_MAX)
+    } else {
+        0.0
+    };
+    let seam_x = full.max.x - column;
+
+    // The bottom row keeps enough of the window for the panes to still be
+    // panes: a drawer dragged to the top is a drawer nobody can get back.
+    let row = showing
+        .row
+        .clamp(ROW_MIN, (full.height() - PANES_MIN).max(ROW_MIN));
+    let seam_y = full.max.y - row;
+
+    let left = Rect::from_min_max(
+        full.min,
+        egui::pos2(
+            if showing.places {
+                seam_x - half
+            } else {
+                full.max.x
+            },
+            full.max.y,
+        ),
+    );
+
+    let top = Rect::from_min_max(left.min, egui::pos2(left.max.x, seam_y - half));
+    let (panes, keys) = if showing.keys && top.height() > KEYS_HEIGHT * 2.0 {
+        (
+            Rect::from_min_max(top.min, egui::pos2(top.max.x, top.max.y - KEYS_HEIGHT)),
+            Some(Rect::from_min_max(
+                egui::pos2(top.min.x, top.max.y - KEYS_HEIGHT),
+                top.max,
+            )),
+        )
+    } else {
+        (top, None)
+    };
+
+    Sectors {
+        panes,
+        keys,
+        shell: Rect::from_min_max(egui::pos2(left.min.x, seam_y + half), left.max),
+        places: showing.places.then(|| {
+            Rect::from_min_max(
+                egui::pos2(seam_x + half, full.min.y),
+                egui::pos2(full.max.x, seam_y - half),
+            )
+        }),
+        history: (showing.places && showing.history)
+            .then(|| Rect::from_min_max(egui::pos2(seam_x + half, seam_y + half), full.max)),
+        vertical: showing.places.then(|| {
+            Rect::from_min_max(
+                egui::pos2(seam_x - half, full.min.y),
+                egui::pos2(seam_x + half, full.max.y),
+            )
+        }),
+        horizontal: Rect::from_min_max(
+            egui::pos2(full.min.x, seam_y - half),
+            egui::pos2(full.max.x, seam_y + half),
+        ),
+    }
+}
 
 /// The left pane, the divider, and the right pane, for a given split.
 pub fn pane_rects(full: Rect, split: f32) -> (Rect, Rect, Rect) {
@@ -2218,7 +2349,14 @@ impl GuiApp {
             self.breadcrumbs(ui);
 
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if tool_button(ui, icons::Tool::Sidebar, "Sidebar", self.show_sidebar).clicked() {
+                if tool_button(
+                    ui,
+                    icons::Tool::Sidebar,
+                    "Places, and what was run here, in the right-hand column",
+                    self.show_sidebar,
+                )
+                .clicked()
+                {
                     self.show_sidebar = !self.show_sidebar;
                 }
                 if tool_button(
@@ -6993,7 +7131,9 @@ impl GuiApp {
                         .fill(fill)
                         .corner_radius(CornerRadius::same(4)),
                     )
-                    .on_hover_text("What was run in this directory, beside the shell")
+                    .on_hover_text(
+                        "What was run in this directory, under the places list",
+                    )
                     .clicked()
                 {
                     self.show_shell_history = !self.show_shell_history;
@@ -7060,20 +7200,9 @@ impl GuiApp {
 
         ui.add_space(4.0);
 
-        let mut area = ui.available_rect_before_wrap();
+        let area = ui.available_rect_before_wrap();
         if area.height() < 20.0 {
             return;
-        }
-
-        // The list beside the shell, when the drawer is wide enough that
-        // taking a column from it still leaves a usable terminal. Narrower
-        // than that and the shell wraps its own output to nothing, which is a
-        // worse trade than not showing the list.
-        if self.show_shell_history && area.width() >= 620.0 {
-            let column = (area.width() * 0.28).clamp(180.0, 320.0);
-            let beside = Rect::from_min_max(egui::pos2(area.max.x - column, area.min.y), area.max);
-            area = Rect::from_min_max(area.min, egui::pos2(beside.min.x - 8.0, area.max.y));
-            self.shell_history_column(ui, beside);
         }
 
         if self.terminals.is_empty() {
@@ -7370,6 +7499,124 @@ impl GuiApp {
     }
 
     // ---- status strip ------------------------------------------------------
+
+    /// The top-left sector: one pane, or two with a draggable line between.
+    ///
+    /// The second pane splits this sector and nothing else, which is what
+    /// keeps the shell below exactly as wide as the panes however they are
+    /// arranged. A tree splits a pane the other way, inside it.
+    fn panes_in(&mut self, ui: &mut egui::Ui, full: Rect) {
+        if !self.show_right {
+            // One pane, the whole sector - the active one, as every
+            // dual-pane manager does it, so folding the other away never
+            // moves you somewhere you were not looking. The hidden Panel is
+            // untouched, which is what makes its directory, cursor and marks
+            // still be there afterwards.
+            let side = self.active;
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(full));
+            self.pane(&mut child, side);
+            return;
+        }
+
+        let (left, divider, right) = pane_rects(full, self.split);
+
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(left));
+        self.pane(&mut child, Side::Left);
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(right));
+        self.pane(&mut child, Side::Right);
+
+        // The divider goes last so it takes the pointer before the panes do,
+        // and its grab area is wider than the line it draws - a three-pixel
+        // target is a target you miss.
+        let grab = divider.expand2(Vec2::new(GRAB - GUTTER * 0.5, 0.0));
+        let response = ui.interact(grab, ui.id().with("pane_divider"), Sense::click_and_drag());
+        if response.dragged() {
+            if let Some(pointer) = response.interact_pointer_pos() {
+                self.split = split_from_pointer(full, pointer.x);
+            }
+        }
+        // Back to even, without hunting for the middle by hand.
+        if response.double_clicked() {
+            self.split = 0.5;
+        }
+        // Written when the drag ends rather than while it runs: the other way
+        // is a file write every frame the pointer moves.
+        if response.drag_stopped() || response.double_clicked() {
+            self.remember_layout();
+        }
+        if response.hovered() || response.dragged() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+        }
+
+        let colour = if response.dragged() {
+            theme::accent()
+        } else if response.hovered() {
+            theme::accent_dim()
+        } else {
+            theme::border()
+        };
+        ui.painter().vline(
+            divider.center().x,
+            full.y_range(),
+            egui::Stroke::new(1.0, colour),
+        );
+    }
+
+    /// One of the two seams of the window: draw it, drag it, remember it.
+    ///
+    /// Returns where the pointer is while it is being dragged. Both seams go
+    /// through this, because a seam that behaved slightly differently from
+    /// the other is a seam somebody has to learn twice.
+    fn drag_seam(
+        &mut self,
+        ui: &mut egui::Ui,
+        id: &str,
+        seam: Rect,
+        vertical: bool,
+    ) -> Option<egui::Pos2> {
+        let grab = if vertical {
+            seam.expand2(Vec2::new(GRAB - GUTTER * 0.5, 0.0))
+        } else {
+            seam.expand2(Vec2::new(0.0, GRAB - GUTTER * 0.5))
+        };
+        let response = ui.interact(grab, ui.id().with(id), Sense::click_and_drag());
+        if response.hovered() || response.dragged() {
+            ui.ctx().set_cursor_icon(if vertical {
+                egui::CursorIcon::ResizeHorizontal
+            } else {
+                egui::CursorIcon::ResizeVertical
+            });
+        }
+        if response.drag_stopped() {
+            self.remember_layout();
+        }
+
+        let colour = if response.dragged() {
+            theme::accent()
+        } else if response.hovered() {
+            theme::accent_dim()
+        } else {
+            theme::border()
+        };
+        if vertical {
+            ui.painter().vline(
+                seam.center().x,
+                seam.y_range(),
+                egui::Stroke::new(1.0, colour),
+            );
+        } else {
+            ui.painter().hline(
+                seam.x_range(),
+                seam.center().y,
+                egui::Stroke::new(1.0, colour),
+            );
+        }
+
+        response
+            .dragged()
+            .then(|| response.interact_pointer_pos())
+            .flatten()
+    }
 
     /// What has been run in the shell's own directory, beside it.
     ///
@@ -10059,6 +10306,130 @@ mod tests {
         assert_ne!(second, first);
         assert!(first.exists() && second.exists());
         app.toggle_recording("stamp");
+    }
+
+    fn window() -> Rect {
+        Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1200.0, 800.0))
+    }
+
+    fn showing() -> Showing {
+        Showing {
+            places: true,
+            history: true,
+            keys: true,
+            column: 210.0,
+            row: 280.0,
+        }
+    }
+
+    #[test]
+    fn the_shell_is_exactly_as_wide_as_the_panes_above_it() {
+        // The point of the whole arrangement. The drawer used to be a panel
+        // of its own running the full width of the window, so it was wider
+        // than the panes by exactly the sidebar - and the two things that
+        // belong together, a shell and the directory it is standing in, were
+        // the two things that did not line up.
+        let cut = sectors(window(), showing());
+        assert_eq!(cut.shell.min.x, cut.panes.min.x);
+        assert_eq!(cut.shell.max.x, cut.panes.max.x);
+
+        let places = cut.places.expect("the places list");
+        let history = cut.history.expect("what was run here");
+        assert_eq!(history.min.x, places.min.x);
+        assert_eq!(history.max.x, places.max.x);
+    }
+
+    #[test]
+    fn one_seam_between_the_columns_and_one_between_the_rows() {
+        let cut = sectors(window(), showing());
+        let places = cut.places.expect("the places list");
+        let history = cut.history.expect("what was run here");
+
+        // The vertical seam runs the whole height, so there is one line to
+        // drag rather than one per row.
+        let vertical = cut.vertical.expect("a seam between the columns");
+        assert_eq!(vertical.min.y, window().min.y);
+        assert_eq!(vertical.max.y, window().max.y);
+
+        // The horizontal seam runs the whole width, and the two rows are the
+        // same height on both sides of it.
+        assert_eq!(cut.horizontal.min.x, window().min.x);
+        assert_eq!(cut.horizontal.max.x, window().max.x);
+        assert_eq!(cut.shell.min.y, history.min.y);
+        assert_eq!(cut.shell.max.y, history.max.y);
+        assert_eq!(places.max.y, cut.keys.expect("the key bar").max.y);
+    }
+
+    #[test]
+    fn the_keys_are_a_strip_under_the_panes_inside_their_own_column() {
+        let cut = sectors(window(), showing());
+        let keys = cut.keys.expect("the key bar");
+        assert_eq!(
+            keys.min.x, cut.panes.min.x,
+            "as wide as the panes, not the window"
+        );
+        assert_eq!(keys.max.x, cut.panes.max.x);
+        assert_eq!(keys.min.y, cut.panes.max.y, "directly under them");
+        assert!((keys.height() - KEYS_HEIGHT).abs() < 0.01);
+
+        let without = sectors(
+            window(),
+            Showing {
+                keys: false,
+                ..showing()
+            },
+        );
+        assert!(without.keys.is_none());
+        assert!(
+            without.panes.height() > cut.panes.height(),
+            "the strip goes back to the panes"
+        );
+    }
+
+    #[test]
+    fn with_no_places_list_there_is_no_column_and_the_shell_takes_the_width() {
+        let cut = sectors(
+            window(),
+            Showing {
+                places: false,
+                ..showing()
+            },
+        );
+        assert!(cut.places.is_none());
+        assert!(cut.vertical.is_none());
+        assert!(
+            cut.history.is_none(),
+            "what was run here lives in that column, so it goes with it"
+        );
+        assert_eq!(cut.panes.max.x, window().max.x);
+        assert_eq!(cut.shell.max.x, window().max.x);
+    }
+
+    #[test]
+    fn neither_seam_can_be_dragged_far_enough_to_lose_a_sector() {
+        // A drawer dragged to the top of the window, or a column dragged over
+        // the panes, is one nobody can get back.
+        let squashed = sectors(
+            window(),
+            Showing {
+                row: 5_000.0,
+                column: 5_000.0,
+                ..showing()
+            },
+        );
+        assert!(squashed.panes.height() >= 1.0);
+        assert!(squashed.panes.width() >= window().width() * 0.4);
+
+        let flattened = sectors(
+            window(),
+            Showing {
+                row: 0.0,
+                column: 0.0,
+                ..showing()
+            },
+        );
+        assert!(flattened.shell.height() >= ROW_MIN - GUTTER);
+        assert!(flattened.places.expect("places").width() >= COLUMN_MIN - GUTTER);
     }
 
     #[test]
