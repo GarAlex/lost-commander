@@ -436,6 +436,14 @@ pub struct App {
     /// One flag per side. Two lists in one pane is two cursors, and a reader
     /// who cannot tell which one an arrow key moves will not trust either.
     pub on_tree: [bool; 2],
+    /// Commands offered back, and how far up them the reader has walked.
+    ///
+    /// Read when the walk starts rather than kept in step with the journal:
+    /// the file on disk is what the account is, and re-reading it once per
+    /// keystroke to catch a command run half a second ago would be work for
+    /// a case nobody is in.
+    pub history: Vec<lost_commander_core::journal::Past>,
+    pub at_in_history: Option<usize>,
     /// The command being typed, along the bottom of the panels.
     ///
     /// Norton Commander's arrangement, and Midnight Commander's after it: the
@@ -528,6 +536,8 @@ impl App {
             status_is_error: false,
             should_quit: false,
             on_tree: [false, false],
+            history: Vec::new(),
+            at_in_history: None,
             command: String::new(),
             pending_edit: None,
             pending_shell: None,
@@ -2591,6 +2601,9 @@ impl App {
             return;
         }
         self.showing_shell = !self.showing_shell;
+        if self.showing_shell {
+            self.refresh_history();
+        }
         if !self.showing_shell {
             self.follow_the_shell();
             self.info("Panels. Ctrl-O returns to the shell.");
@@ -2846,6 +2859,9 @@ impl App {
             KeyCode::Char(' ') if empty => false,
             KeyCode::Char('+') | KeyCode::Char('-') | KeyCode::Char('*') if empty => false,
             KeyCode::Char(character) => {
+                // Editing a recalled line makes it yours: walking on from
+                // here would throw away what you just typed.
+                self.at_in_history = None;
                 self.command.push(character);
                 true
             }
@@ -2865,6 +2881,102 @@ impl App {
             }
             _ => false,
         }
+    }
+
+    /// Alt-P and Alt-N: walk back and forward through what has been run.
+    ///
+    /// Midnight Commander's keys for this. Not the arrows: an empty command
+    /// line means the panels here, and up and down are how a reader moves the
+    /// cursor - taking them for history would cost the thing they do all day
+    /// to serve the thing they do occasionally.
+    ///
+    /// What was run *here* comes first. That is the whole point of recording
+    /// where a command ran, and it works whatever shell is running: the line
+    /// is known before it is handed over, so no hook is needed - which
+    /// matters, because the machine's own shell on Windows has none.
+    pub fn walk_history(&mut self, back: bool) {
+        if self.at_in_history.is_none() {
+            if self.history.is_empty() {
+                self.history = self.read_history();
+            }
+            if self.history.is_empty() {
+                self.info("Nothing has been run yet");
+                return;
+            }
+        }
+        let last = self.history.len().saturating_sub(1);
+        let at = match (self.at_in_history, back) {
+            (None, true) => 0,
+            (None, false) => return,
+            (Some(at), true) => (at + 1).min(last),
+            // Forward past the newest is back to what you were typing, which
+            // is the empty line you started from.
+            (Some(0), false) => {
+                self.at_in_history = None;
+                self.command.clear();
+                return;
+            }
+            (Some(at), false) => at - 1,
+        };
+        self.at_in_history = Some(at);
+        let Some(past) = self.history.get(at) else {
+            return;
+        };
+        self.command = past.line.clone();
+        let here = self.active_panel().cwd.clone();
+        if past.cwd == here {
+            self.info(format!("{} of {}", at + 1, self.history.len()));
+        } else {
+            // Where it ran is part of what it means, and the reader is one
+            // keystroke from running it again.
+            self.info(format!(
+                "{} of {} - ran in {}",
+                at + 1,
+                self.history.len(),
+                past.cwd.display()
+            ));
+        }
+    }
+
+    /// Re-read what has been run, for showing beside the shell.
+    ///
+    /// On opening the shell and after each command, rather than every frame:
+    /// the account is a file on disk, and a list that is a moment out of date
+    /// is worth more than a disk read per repaint.
+    pub fn refresh_history(&mut self) {
+        self.history = self.read_history();
+        self.at_in_history = None;
+    }
+
+    /// What was run in the directory the panel is showing, newest first.
+    ///
+    /// The half of the history that is *about here* - which is the half a
+    /// reader wants when they are standing here, and the reason this program
+    /// records where a command ran at all.
+    pub fn history_here(&self) -> Vec<&lost_commander_core::journal::Past> {
+        let here = self.active_panel().cwd.clone();
+        self.history
+            .iter()
+            .filter(|past| past.cwd == here)
+            .collect()
+    }
+
+    fn read_history(&self) -> Vec<lost_commander_core::journal::Past> {
+        use lost_commander_core::journal;
+        let Some(journal) = &self.journal else {
+            return Vec::new();
+        };
+        let here = self.active_panel().cwd.clone();
+        let mut records = Vec::new();
+        // The last few days, newest last, so the ordering below sees the
+        // newest first when it walks backwards. Far enough to be useful and
+        // not so far that opening the command line reads a year of files.
+        let mut days = journal.days(journal::Stream::Shell);
+        days.truncate(7);
+        for day in days.into_iter().rev() {
+            records.extend(journal.read(journal::Stream::Shell, day));
+        }
+        journal::commands_before(&records, &here)
     }
 
     /// Hand the typed line to a shell, in the directory being shown.
@@ -2887,6 +2999,7 @@ impl App {
             let where_ = self.active_panel().cwd.display().to_string();
             journal.record(journal::Event::new(journal::Kind::Command, where_).note(&line));
         }
+        self.refresh_history();
         // Into the shell that is already running, not a fresh one. A new
         // shell per command starts wherever it is put and forgets everything
         // the last one did, which makes `cd` a command that appears to work
@@ -3033,6 +3146,11 @@ impl App {
             // Pairs with Ctrl-O, which shows the shell: one letter for
             // looking at it and for choosing which one it is.
             KeyCode::Char('o') if alt => self.open_shell_picker(),
+            // Midnight Commander's keys for walking the history. Not the
+            // arrows: those move the cursor, which is what a reader does all
+            // day.
+            KeyCode::Char('p') if alt => self.walk_history(true),
+            KeyCode::Char('n') if alt => self.walk_history(false),
             KeyCode::Char('w') if ctrl => self.close_tab(),
             KeyCode::Char('w') if alt => self.close_other_tabs(),
             // F10 is the Commander key for this and stays, but a terminal
@@ -6494,5 +6612,81 @@ mod tests {
             Opened::FromRecord,
             "this one arrived on the reader's behalf, and is coloured for it"
         );
+    }
+
+    #[test]
+    fn walking_the_history_puts_a_line_back_and_then_gives_it_up() {
+        let (_root, mut app) = app_fixture();
+        let here = app.active_panel().cwd.clone();
+        app.history = vec![
+            journal::Past {
+                line: "cargo test".into(),
+                cwd: here.clone(),
+            },
+            journal::Past {
+                line: "make".into(),
+                cwd: PathBuf::from("/elsewhere"),
+            },
+        ];
+        app.at_in_history = Some(0);
+        app.command = "cargo test".to_string();
+
+        app.walk_history(true);
+        assert_eq!(app.command, "make");
+        assert!(
+            app.status.contains("/elsewhere"),
+            "says where it ran: {}",
+            app.status
+        );
+
+        app.walk_history(false);
+        assert_eq!(app.command, "cargo test");
+
+        // Forward past the newest is back to the empty line you started on,
+        // not a wrap round to the oldest.
+        app.walk_history(false);
+        assert!(app.command.is_empty());
+        assert!(app.at_in_history.is_none());
+    }
+
+    #[test]
+    fn typing_makes_a_recalled_line_your_own() {
+        // Walking on from an edited line would throw away what was typed.
+        let (_root, mut app) = app_fixture();
+        app.history = vec![journal::Past {
+            line: "cargo test".into(),
+            cwd: app.active_panel().cwd.clone(),
+        }];
+        app.at_in_history = Some(0);
+        app.command = "cargo test".to_string();
+
+        app.on_key(key(KeyCode::Char('!')));
+        assert_eq!(app.command, "cargo test!");
+        assert!(app.at_in_history.is_none());
+    }
+
+    #[test]
+    fn the_list_beside_the_shell_is_only_about_here() {
+        // A shell's own history is one list with no idea where you were. The
+        // question in front of somebody standing in a directory is what they
+        // ran in *this* one, and that is the only reason to record where.
+        let (_root, mut app) = app_fixture();
+        let here = app.active_panel().cwd.clone();
+        app.history = vec![
+            journal::Past {
+                line: "cargo test".into(),
+                cwd: here.clone(),
+            },
+            journal::Past {
+                line: "make".into(),
+                cwd: PathBuf::from("/elsewhere"),
+            },
+            journal::Past {
+                line: "git status".into(),
+                cwd: here,
+            },
+        ];
+        let shown: Vec<&str> = app.history_here().iter().map(|p| p.line.as_str()).collect();
+        assert_eq!(shown, vec!["cargo test", "git status"]);
     }
 }

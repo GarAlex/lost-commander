@@ -9,6 +9,14 @@ Notable changes, newest first. Versions follow [semantic versioning]; until
 
 ### Added
 
+- **The shell screen lists what was run in this directory**, beside it, with
+  the one `Alt-P` is offering marked. A shell's own history is one list with
+  no idea where you were; this is the half that is about here.
+- **`Alt-P` and `Alt-N` walk what has been run**, offering what was run here
+  before what was run anywhere else, and saying where when it differs. This
+  works with any shell — the line is known before it is handed over, so it
+  needs no hook, which is what makes it the first shell feature that is not
+  poorer on `cmd`.
 - **A tab says who opened it, by colour.** One the program opened on your
   behalf is drawn in the colour marks use, in both front-ends — so finding
   three of them later, you can tell which you asked for.

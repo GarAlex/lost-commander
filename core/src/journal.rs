@@ -975,6 +975,70 @@ impl Line {
 }
 
 /// Flatten rows into lines, headings and all.
+/// A command that was run, as much as is needed to offer it again.
+///
+/// Deliberately not [`crate::shellhook::Ran`], which carries an exit code and
+/// a duration: those come from the hook, and a shell without one - `cmd`,
+/// which is the machine's own answer on Windows - reports neither. Filling
+/// them with zeroes would say every command succeeded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Past {
+    pub line: String,
+    /// Where it ran. The same words in another directory are about other
+    /// work.
+    pub cwd: PathBuf,
+}
+
+/// Commands run before now, newest first, ready to be offered back.
+///
+/// Ordered by what a reader is most likely to want: the ones run *here*
+/// before the ones run anywhere else. That ordering is the whole point of
+/// recording where a command ran - `cargo test` in this directory and
+/// `cargo test` in another are the same words about different work, and the
+/// one you want is nearly always the one from where you are standing.
+///
+/// Deduplicated by line, keeping the newest, because a history that offers
+/// the same command four times makes you press the key four times to get
+/// past it.
+///
+/// Works whatever shell is running. The line is known before it is handed
+/// over, so this needs no hook - which matters, because the machine's own
+/// shell on Windows has none.
+pub fn commands_before(records: &[Record], here: &Path) -> Vec<Past> {
+    let mut here_first: Vec<Past> = Vec::new();
+    let mut elsewhere: Vec<Past> = Vec::new();
+
+    for record in records.iter().rev() {
+        let Record::Event(event) = record else {
+            continue;
+        };
+        if event.kind != Kind::Command || event.note.trim().is_empty() {
+            continue;
+        }
+        let ran = Past {
+            line: event.note.clone(),
+            cwd: PathBuf::from(&event.path),
+        };
+        if Path::new(&event.path) == here {
+            &mut here_first
+        } else {
+            &mut elsewhere
+        }
+        .push(ran);
+    }
+
+    here_first.append(&mut elsewhere);
+    let mut seen: Vec<String> = Vec::new();
+    here_first.retain(|ran| {
+        if seen.contains(&ran.line) {
+            return false;
+        }
+        seen.push(ran.line.clone());
+        true
+    });
+    here_first
+}
+
 /// Where the panels would have to be to see what an entry describes.
 ///
 /// A record says what happened and to what; this says where to stand to look
@@ -1803,5 +1867,42 @@ mod tests {
     fn a_record_with_no_path_has_nowhere_to_send_anybody() {
         let event = Event::new(Kind::Command, "");
         assert!(scene_of(&event).is_none());
+    }
+
+    #[test]
+    fn what_was_run_here_is_offered_first() {
+        // The point of recording where a command ran: `cargo test` here and
+        // `cargo test` somewhere else are the same words about different
+        // work, and the one you want is nearly always the one from where you
+        // are standing.
+        let records = vec![
+            Record::Event(Event::new(Kind::Command, "/elsewhere").note("make")),
+            Record::Event(Event::new(Kind::Command, "/work").note("cargo build")),
+            Record::Event(Event::new(Kind::Command, "/work").note("cargo test")),
+        ];
+        let past = commands_before(&records, Path::new("/work"));
+        let lines: Vec<&str> = past.iter().map(|p| p.line.as_str()).collect();
+        assert_eq!(lines, vec!["cargo test", "cargo build", "make"]);
+    }
+
+    #[test]
+    fn the_same_command_is_offered_once() {
+        // A history that offers the same line four times makes you press the
+        // key four times to get past it.
+        let records = vec![
+            Record::Event(Event::new(Kind::Command, "/work").note("ls")),
+            Record::Event(Event::new(Kind::Command, "/work").note("ls")),
+            Record::Event(Event::new(Kind::Command, "/work").note("ls")),
+        ];
+        assert_eq!(commands_before(&records, Path::new("/work")).len(), 1);
+    }
+
+    #[test]
+    fn only_commands_and_only_ones_with_a_line() {
+        let records = vec![
+            Record::Event(Event::new(Kind::Copy, "/a").to("/b")),
+            Record::Event(Event::new(Kind::Command, "/work")),
+        ];
+        assert!(commands_before(&records, Path::new("/work")).is_empty());
     }
 }

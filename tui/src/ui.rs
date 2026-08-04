@@ -2238,6 +2238,7 @@ pub const HELP: &[(&str, &str)] = &[
     ("F9", "cycle sort order"),
     ("Ctrl-O", "the shell underneath, and back"),
     ("Alt-O", "which shell that is"),
+    ("Alt-P / Alt-N", "what was run before - here first"),
     (
         "F10 / Ctrl-Q",
         "quit - some terminals keep F10 for their own menu",
@@ -2361,7 +2362,24 @@ fn draw_shell(frame: &mut Frame, area: Rect, app: &App) {
         .style(theme::base()),
         split[0],
     );
-    let area = split[1];
+    // What was run *here*, beside the shell. This is what makes a recorded
+    // history worth more than the shell's own: a shell remembers what you
+    // typed, in one list, with no idea where you were - and the question in
+    // front of anybody standing in a directory is what they ran in *this*
+    // one. Shown rather than recalled blind, because a list you can read is a
+    // list you can choose from.
+    //
+    // Only where the window is wide enough for both. A shell squeezed to half
+    // a screen to make room for a list is a worse shell.
+    let here = app.history_here();
+    let area = if split[1].width >= 100 && !here.is_empty() {
+        let beside =
+            Layout::horizontal([Constraint::Min(60), Constraint::Length(34)]).split(split[1]);
+        draw_history_here(frame, beside[1], app, &here);
+        beside[0]
+    } else {
+        split[1]
+    };
 
     let Some(shell) = app.shell.as_ref() else {
         frame.render_widget(
@@ -2496,4 +2514,55 @@ fn draw_shells(frame: &mut Frame, area: Rect, app: &App, shells: &[String], curs
         .style(Style::default().bg(theme::DIALOG_BG)),
         split[1],
     );
+}
+
+/// The commands run in the directory the panel is showing, newest first.
+///
+/// The one the history walk is currently offering is marked, so `Alt-P` is
+/// something you can watch rather than guess at.
+fn draw_history_here(
+    frame: &mut Frame,
+    area: Rect,
+    app: &App,
+    here: &[&lost_commander_core::journal::Past],
+) {
+    let split = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(area);
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            " run here   Alt-P/N walks",
+            Style::default().bg(theme::BG).fg(theme::TITLE_FG),
+        )))
+        .style(theme::base()),
+        split[0],
+    );
+
+    // Which of them the walk is on, if it is on one of these at all: the walk
+    // runs over everything and this list is only the part about here.
+    let offered = app
+        .at_in_history
+        .and_then(|at| app.history.get(at))
+        .map(|past| past.line.clone());
+
+    let items: Vec<ListItem> = here
+        .iter()
+        .map(|past| {
+            let current = offered.as_deref() == Some(past.line.as_str());
+            let text = format!(
+                " {}",
+                fit(&past.line, area.width.saturating_sub(2) as usize)
+            );
+            ListItem::new(Line::from(Span::styled(
+                text,
+                if current {
+                    Style::default()
+                        .bg(theme::CURSOR_BG)
+                        .fg(theme::CURSOR_FG)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().bg(theme::BG).fg(theme::FILE_FG)
+                },
+            )))
+        })
+        .collect();
+    frame.render_widget(List::new(items).style(theme::base()), split[1]);
 }
