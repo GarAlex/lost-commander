@@ -9,6 +9,9 @@ Notable changes, newest first. Versions follow [semantic versioning]; until
 
 ### Added
 
+- **A tab says who opened it, by colour.** One the program opened on your
+  behalf is drawn in the colour marks use, in both front-ends — so finding
+  three of them later, you can tell which you asked for.
 - **`Alt-Enter` opens where an entry happened**, as new tabs rather than by
   moving the panels — so looking at what a command did costs you nothing. A
   copy opens *both* ends, which is the question anybody asks afterwards: what

@@ -1542,7 +1542,13 @@ fn draw_tab_strip(frame: &mut Frame, area: Rect, tabs: &Tabs, active: bool) {
         shown += 1;
         spans.push(Span::styled(
             label,
-            theme::tab_style(index == tabs.active(), active),
+            theme::tab_style_for(
+                index == tabs.active(),
+                active,
+                tabs.get(index)
+                    .map(|panel| panel.opened)
+                    .unwrap_or_default(),
+            ),
         ));
     }
     if shown < names.len() {

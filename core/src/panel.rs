@@ -386,6 +386,15 @@ pub struct Panel {
     /// When present the panel shows a directory tree instead of a listing.
     pub tree: Option<crate::tree::Tree>,
 
+    /// Who opened this tab.
+    ///
+    /// A tab the program opened on the reader's behalf - to show where
+    /// something in the account happened - is not one they chose, and finding
+    /// three of them later with no idea why is worse than not opening them.
+    /// A front-end colours the strip by this rather than writing a reason
+    /// into the title, which would cost the width the name needs.
+    pub opened: Opened,
+
     /// Files tagged while walking a tree, by full path.
     ///
     /// `Entry::marked` is a fact about a row, and a row only exists while its
@@ -405,10 +414,22 @@ pub struct Panel {
     watching: Signature,
 }
 
+/// Who opened a tab.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Opened {
+    /// The reader asked for it.
+    #[default]
+    ByHand,
+    /// The program opened it to show where something in the account
+    /// happened.
+    FromRecord,
+}
+
 impl Panel {
     pub fn new(path: PathBuf) -> Self {
         let mut panel = Panel {
             cwd: path,
+            opened: Opened::default(),
             entries: Vec::new(),
             tagged: std::collections::BTreeSet::new(),
             cursor: 0,

@@ -72,6 +72,26 @@ pub fn entry_style(is_dir: bool, marked: bool, under_cursor: bool, panel_active:
 /// not have the keyboard underlines its tab instead of filling it, for the
 /// same reason its cursor bar is not filled either.
 pub fn tab_style(current: bool, panel_active: bool) -> Style {
+    tab_style_for(
+        current,
+        panel_active,
+        lost_commander_core::panel::Opened::ByHand,
+    )
+}
+
+/// As [`tab_style`], coloured by who opened the tab.
+///
+/// A tab the program opened - to show where something in the account
+/// happened - is drawn in the colour marks use, so a reader can tell at a
+/// glance which tabs they asked for and which arrived on their behalf. The
+/// colour rather than a word in the title, because the title is where the
+/// directory's name goes and it is already short.
+pub fn tab_style_for(
+    current: bool,
+    panel_active: bool,
+    opened: lost_commander_core::panel::Opened,
+) -> Style {
+    let mine = opened == lost_commander_core::panel::Opened::ByHand;
     if current && panel_active {
         Style::default()
             .bg(CURSOR_BG)
@@ -80,10 +100,12 @@ pub fn tab_style(current: bool, panel_active: bool) -> Style {
     } else if current {
         Style::default()
             .bg(BG)
-            .fg(DIR_FG)
+            .fg(if mine { DIR_FG } else { MARK_FG })
             .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
     } else {
-        Style::default().bg(BG).fg(FILE_FG)
+        Style::default()
+            .bg(BG)
+            .fg(if mine { FILE_FG } else { MARK_FG })
     }
 }
 

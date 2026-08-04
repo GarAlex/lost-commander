@@ -905,6 +905,9 @@ impl App {
                 Side::Right => self.right.duplicate(),
             };
             panel.chdir(path);
+            // Marked as the program's doing, so the strip can colour it and
+            // the reader can tell at a glance which tabs they asked for.
+            panel.opened = lost_commander_core::panel::Opened::FromRecord;
             match side {
                 Side::Left => self.left.open(panel),
                 Side::Right => self.right.open(panel),
@@ -6458,5 +6461,38 @@ mod tests {
         });
         assert_eq!(app.left.len(), before + 1);
         assert!(app.status.contains("gone"), "{}", app.status);
+    }
+
+    #[test]
+    fn a_tab_says_who_opened_it() {
+        use lost_commander_core::panel::Opened;
+
+        let root = tempfile::tempdir().unwrap();
+        let from = root.path().join("from");
+        std::fs::create_dir_all(&from).unwrap();
+
+        let (_root, mut app) = app_fixture();
+        assert_eq!(
+            app.left.current().opened,
+            Opened::ByHand,
+            "the tab you started in is yours"
+        );
+
+        app.new_tab();
+        assert_eq!(
+            app.left.current().opened,
+            Opened::ByHand,
+            "and so is Ctrl-T"
+        );
+
+        app.open_scene(&journal::Scene {
+            left: from,
+            right: None,
+        });
+        assert_eq!(
+            app.left.current().opened,
+            Opened::FromRecord,
+            "this one arrived on the reader's behalf, and is coloured for it"
+        );
     }
 }

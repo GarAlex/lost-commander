@@ -1881,8 +1881,20 @@ fn diff_cell(ui: &mut egui::Ui, side: Option<(usize, &str)>, numbers: usize, ink
 /// have the keyboard wears the muted one - the same distinction the cursor bar
 /// makes, so at a glance the tab you are in and the row you are on are marked
 /// the same way and the idle pane recedes.
-fn tab_chip(ui: &mut egui::Ui, text: &str, current: bool, focused: bool) -> egui::Response {
+fn tab_chip(
+    ui: &mut egui::Ui,
+    text: &str,
+    current: bool,
+    focused: bool,
+    opened: lost_commander_core::panel::Opened,
+) -> egui::Response {
+    // A tab the program opened - to show where something in the account
+    // happened - is written in the colour marks use, so a reader can tell at
+    // a glance which tabs they asked for. The colour rather than a word in
+    // the title, because the title is where the directory's name goes.
+    let mine = opened == lost_commander_core::panel::Opened::ByHand;
     let ink = match (current, focused) {
+        _ if !mine => theme::marked_text(),
         (true, true) => theme::text(),
         (true, false) => theme::text_dim(),
         (false, _) => theme::text_faint(),
@@ -2515,8 +2527,17 @@ impl GuiApp {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 3.0;
                     for (index, name) in names.iter().enumerate() {
-                        let chip = tab_chip(ui, name, index == current, focused)
-                            .on_hover_text(paths[index].display().to_string());
+                        let chip = tab_chip(
+                            ui,
+                            name,
+                            index == current,
+                            focused,
+                            self.tabs(side)
+                                .get(index)
+                                .map(|panel| panel.opened)
+                                .unwrap_or_default(),
+                        )
+                        .on_hover_text(paths[index].display().to_string());
                         if chip.clicked() {
                             go = Some(index);
                         }
