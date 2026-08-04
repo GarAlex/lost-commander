@@ -206,7 +206,7 @@ changes it.
 ## Testing
 
 ```sh
-cargo test                     # all 1009, from the workspace root
+cargo test                     # all 1039, from the workspace root
 ```
 
 From the root that is everything, because the root is a virtual manifest and
@@ -217,9 +217,9 @@ say `cargo test --workspace` there if you meant all of it.
 Per crate, when you want a fast loop:
 
 ```sh
-cargo test -p lost-commander-core    # 611 - the engine, seconds to build
-cargo test -p lost-commander-egui    # 190 - the graphical view
-cargo test -p lost-commander-tui     # 102 - the terminal view
+cargo test -p lost-commander-core    # 629 - the engine, seconds to build
+cargo test -p lost-commander-egui    # 194 - the graphical view
+cargo test -p lost-commander-tui     # 110 - the terminal view
 cargo test -p lost-commander-ffi     # 106 - the C ABI
 ```
 

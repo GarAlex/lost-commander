@@ -2187,7 +2187,10 @@ impl GuiApp {
                     places::Kind::Home => icons::Kind::Folder,
                     places::Kind::Folder => icons::Kind::Folder,
                 };
-                if sidebar_row(ui, &place.name, icon, false) {
+                let free = place
+                    .free
+                    .map(|bytes| format!("{} free", human_size(bytes)));
+                if sidebar_row_with(ui, &place.name, icon, false, free) {
                     target = Some(place.path.clone());
                 }
             }
@@ -7154,6 +7157,20 @@ fn section_label(ui: &mut egui::Ui, text: &str) {
 }
 
 fn sidebar_row(ui: &mut egui::Ui, label: &str, kind: icons::Kind, dim: bool) -> bool {
+    sidebar_row_with(ui, label, kind, dim, None)
+}
+
+/// As [`sidebar_row`], with something written along the right-hand edge.
+///
+/// Used for how much room is left on a drive - the first thing anybody wants
+/// to know of one, and shown since there were floppies to run out of.
+fn sidebar_row_with(
+    ui: &mut egui::Ui,
+    label: &str,
+    kind: icons::Kind,
+    dim: bool,
+    trailing: Option<String>,
+) -> bool {
     let (rect, response) =
         ui.allocate_exact_size(Vec2::new(ui.available_width(), 22.0), Sense::click());
     if response.hovered() {
@@ -7176,6 +7193,15 @@ fn sidebar_row(ui: &mut egui::Ui, label: &str, kind: icons::Kind, dim: bool) -> 
             theme::text_dim()
         },
     );
+    if let Some(trailing) = trailing {
+        ui.painter().text(
+            egui::pos2(rect.right() - 6.0, rect.center().y),
+            Align2_RIGHT_CENTER,
+            trailing,
+            FontId::proportional(10.0),
+            theme::text_faint(),
+        );
+    }
     response.clicked()
 }
 

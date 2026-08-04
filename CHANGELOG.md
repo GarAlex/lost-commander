@@ -9,6 +9,9 @@ Notable changes, newest first. Versions follow [semantic versioning]; until
 
 ### Added
 
+- **Both front-ends can find the machine's drives.** The graphical one lists
+  them in the sidebar; the terminal one has a third tab in `Ctrl-B`, beside
+  Saved and Recent. Drives say how much room is left.
 - **The sidebar shows what the machine has**: drives and volumes, then Home,
   Desktop, Documents, Downloads, Pictures, Music and Videos. Without them the
   only route to a second drive was typing its letter — and on Windows there is

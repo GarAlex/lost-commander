@@ -143,13 +143,21 @@ impl RenameField {
 pub enum ConnTab {
     Saved,
     Recent,
+    /// The drives and folders this machine already has.
+    ///
+    /// Without them there is no way to reach a second drive except to know
+    /// its letter and type it - and on Windows there is no root to walk up to
+    /// that would reveal one, since `C:` and `D:` are two trees rather than
+    /// two directories.
+    System,
 }
 
 impl ConnTab {
     pub fn other(self) -> ConnTab {
         match self {
             ConnTab::Saved => ConnTab::Recent,
-            ConnTab::Recent => ConnTab::Saved,
+            ConnTab::Recent => ConnTab::System,
+            ConnTab::System => ConnTab::Saved,
         }
     }
 }
@@ -390,6 +398,12 @@ pub struct App {
     /// whatever directory it is given and forgets everything the last one
     /// did. Started on first use, because most of what this program does
     /// needs no shell at all and a pty costs a process.
+    /// The drives and folders this machine offers.
+    ///
+    /// Read once at startup: finding them asks each drive letter whether it
+    /// answers, and doing that on every keystroke is a thing you would hear a
+    /// spinning disk doing.
+    pub system_places: Vec<lost_commander_core::places::Place>,
     pub shell: Option<lost_commander_core::pty::PtySession>,
     /// Which shell to run, when the reader has chosen one.
     ///
@@ -505,6 +519,7 @@ impl App {
             command: String::new(),
             pending_edit: None,
             pending_shell: None,
+            system_places: lost_commander_core::places::system_places(),
             shell: None,
             shell_program: None,
             showing_shell: false,
@@ -3032,6 +3047,7 @@ impl App {
         let count = match tab_value {
             ConnTab::Saved => self.bookmarks.len(),
             ConnTab::Recent => self.bookmarks.recent.len(),
+            ConnTab::System => self.system_places.len(),
         };
 
         match key.code {
@@ -3057,6 +3073,16 @@ impl App {
                         self.error("No saved locations - press 'a' to add one");
                     } else {
                         self.connect_bookmark(cursor_value);
+                    }
+                }
+                ConnTab::System => {
+                    if let Some(place) = self.system_places.get(cursor_value) {
+                        let path = place.path.clone();
+                        self.mode = Mode::Normal;
+                        self.active_panel_mut().chdir(path.clone());
+                        if let Some(error) = self.active_panel().error.clone() {
+                            self.error(format!("{}: {error}", path.display()));
+                        }
                     }
                 }
                 ConnTab::Recent => {
@@ -3128,10 +3154,13 @@ impl App {
                         ConnTab::Recent => {
                             self.bookmarks.remove_recent(cursor_value);
                         }
+                        // A drive is not ours to forget.
+                        ConnTab::System => {}
                     }
                     let remaining = match tab_value {
                         ConnTab::Saved => self.bookmarks.len(),
                         ConnTab::Recent => self.bookmarks.recent.len(),
+                        ConnTab::System => self.system_places.len(),
                     };
                     self.mode = Mode::Connections {
                         tab: tab_value,
@@ -5516,7 +5545,7 @@ mod tests {
     }
 
     #[test]
-    fn tab_switches_between_saved_and_recent() {
+    fn tab_walks_the_three_lists_and_comes_back_round() {
         let (_root, mut app) = app_fixture();
         app.on_key(key(KeyCode::F(11)));
         match app.mode {
@@ -5533,11 +5562,29 @@ mod tests {
             _ => panic!("expected the connections screen"),
         }
 
+        // Three now: the machine's own drives and folders are the third,
+        // and are the only way to reach a second drive without knowing its
+        // letter and typing it.
+        app.on_key(key(KeyCode::Tab));
+        match app.mode {
+            Mode::Connections { tab, .. } => assert_eq!(tab, ConnTab::System),
+            _ => panic!("expected the connections screen"),
+        }
+
         app.on_key(key(KeyCode::Tab));
         match app.mode {
             Mode::Connections { tab, .. } => assert_eq!(tab, ConnTab::Saved),
             _ => panic!("expected the connections screen"),
         }
+    }
+
+    #[test]
+    fn the_machine_offers_at_least_one_place_to_go() {
+        // A drive is always there - the root on Unix, at least one letter on
+        // Windows - so an empty list means discovery is broken rather than
+        // that the machine has no disks.
+        let (_root, app) = app_fixture();
+        assert!(!app.system_places.is_empty());
     }
 
     #[test]

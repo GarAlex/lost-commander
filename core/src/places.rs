@@ -37,6 +37,13 @@ pub struct Place {
     pub name: String,
     pub path: PathBuf,
     pub kind: Kind,
+    /// Bytes free on the disk this sits on, where that could be asked.
+    ///
+    /// How much room is left is the first thing anybody wants to know of a
+    /// drive, and the Commanders have shown it since there were floppies.
+    /// `None` for a folder - repeating the same figure under Documents,
+    /// Downloads and Pictures says nothing, since they are all the same disk.
+    pub free: Option<u64>,
 }
 
 /// The user's home and the well-known folders inside it.
@@ -51,6 +58,7 @@ pub fn user_places(home: Option<PathBuf>, folders: &[(&str, Option<PathBuf>)]) -
             name: "Home".to_string(),
             path: home,
             kind: Kind::Home,
+            free: None,
         });
     }
     for (name, path) in folders {
@@ -64,6 +72,7 @@ pub fn user_places(home: Option<PathBuf>, folders: &[(&str, Option<PathBuf>)]) -
             name: (*name).to_string(),
             path: path.clone(),
             kind: Kind::Folder,
+            free: None,
         });
     }
     out
@@ -91,6 +100,7 @@ pub fn drives(
                 if exists(&path) {
                     out.push(Place {
                         name: format!("{}:", letter as char),
+                        free: free_on(&path),
                         path,
                         kind: Kind::Drive,
                     });
@@ -100,6 +110,7 @@ pub fn drives(
         platform => {
             out.push(Place {
                 name: "/".to_string(),
+                free: free_on(Path::new("/")),
                 path: PathBuf::from("/"),
                 kind: Kind::Drive,
             });
@@ -132,6 +143,7 @@ pub fn drives(
                     }
                     out.push(Place {
                         name,
+                        free: free_on(&path),
                         path,
                         kind: Kind::Drive,
                     });
@@ -140,6 +152,16 @@ pub fn drives(
         }
     }
     out
+}
+
+/// Bytes free on the disk holding `path`, or `None` if it will not say.
+///
+/// A drive that is not ready - an empty optical drive, a card reader with no
+/// card - answers with an error rather than a number, and asking again will
+/// not help. `None` is the honest result, and a front-end showing nothing
+/// beats one showing zero, which reads as a full disk.
+pub fn free_on(path: &Path) -> Option<u64> {
+    fs4::available_space(path).ok()
 }
 
 /// Everything this machine offers, for a sidebar.
@@ -226,5 +248,31 @@ mod tests {
         // A service account may have none, and a sidebar with only drives is
         // still a useful sidebar.
         assert!(user_places(None, &[("Downloads", None)]).is_empty());
+    }
+
+    #[test]
+    fn a_drive_says_how_much_room_is_left_and_a_folder_does_not() {
+        // Repeating the same figure under Documents, Downloads and Pictures
+        // says nothing: they are all the same disk.
+        let places = system_places();
+        let drive = places.iter().find(|p| p.kind == Kind::Drive);
+        if let Some(drive) = drive {
+            assert!(
+                drive.free.is_some(),
+                "a mounted drive knows: {}",
+                drive.path.display()
+            );
+        }
+        assert!(places
+            .iter()
+            .filter(|p| p.kind == Kind::Folder)
+            .all(|p| p.free.is_none()));
+    }
+
+    #[test]
+    fn a_drive_that_will_not_say_is_not_reported_as_empty() {
+        // An optical drive with no disc in it answers with an error, and
+        // showing zero would read as a full disk rather than an unknown one.
+        assert_eq!(free_on(Path::new("Z:\no-such-drive")), None);
     }
 }

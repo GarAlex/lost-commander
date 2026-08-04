@@ -37,6 +37,11 @@ serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true
 dirs.workspace = true
+# Free space on a disk, which needs `statvfs` on Unix and
+# `GetDiskFreeSpaceEx` on Windows. The one platform-API dependency here, and
+# it earns it: how much room is left is the first thing anybody wants of a
+# drive and there is no portable way to ask.
+fs4 = "0.13.1"
 toml = "0.9.6"
 # Real shells on real ptys, and the emulator that makes sense of what comes
 # back. Not drawing: what a terminal *is* rather than how it looks.

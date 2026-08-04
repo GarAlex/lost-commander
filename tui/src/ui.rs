@@ -2062,9 +2062,39 @@ fn shorten_path(path: &str, width: usize) -> String {
 }
 
 fn draw_connections(frame: &mut Frame, area: Rect, app: &App, tab: ConnTab, cursor: usize) {
-    let entries: &[lost_commander_core::netloc::Location] = match tab {
-        ConnTab::Saved => &app.bookmarks.locations,
-        ConnTab::Recent => &app.bookmarks.recent,
+    // Name and description, whatever the tab is made of: saved locations and
+    // recent ones are `netloc::Location`, the machine's own drives are
+    // `places::Place`, and the dialog draws rows rather than types.
+    let entries: Vec<(String, String)> = match tab {
+        ConnTab::Saved => app
+            .bookmarks
+            .locations
+            .iter()
+            .map(|l| (l.name.clone(), l.summary()))
+            .collect(),
+        ConnTab::Recent => app
+            .bookmarks
+            .recent
+            .iter()
+            .map(|l| (l.name.clone(), l.summary()))
+            .collect(),
+        ConnTab::System => app
+            .system_places
+            .iter()
+            .map(|place| {
+                let where_ = place.path.display().to_string();
+                match place.free {
+                    // How much room is left is the first thing anybody wants
+                    // of a drive, and there is nowhere else in this dialog to
+                    // put it.
+                    Some(free) => (
+                        place.name.clone(),
+                        format!("{where_}   {} free", human_size(free)),
+                    ),
+                    None => (place.name.clone(), where_),
+                }
+            })
+            .collect(),
     };
 
     let rows = entries.len().max(1);
@@ -2104,6 +2134,11 @@ fn draw_connections(frame: &mut Frame, area: Rect, app: &App, tab: ConnTab, curs
                 format!(" Recent ({}) ", app.bookmarks.recent.len()),
                 tab_style(tab == ConnTab::Recent),
             ),
+            Span::styled("  ", Style::default().bg(theme::DIALOG_BG)),
+            Span::styled(
+                format!(" This computer ({}) ", app.system_places.len()),
+                tab_style(tab == ConnTab::System),
+            ),
             Span::styled(
                 "   Tab switches",
                 Style::default().bg(theme::DIALOG_BG).fg(theme::TITLE_FG),
@@ -2116,6 +2151,7 @@ fn draw_connections(frame: &mut Frame, area: Rect, app: &App, tab: ConnTab, curs
         let message = match tab {
             ConnTab::Saved => "No saved locations yet - press 'a' to add one.",
             ConnTab::Recent => "Nowhere visited yet.",
+            ConnTab::System => "No drives found, which should not happen.",
         };
         frame.render_widget(
             Paragraph::new(message).style(Style::default().bg(theme::DIALOG_BG).fg(theme::FILE_FG)),
@@ -2125,14 +2161,11 @@ fn draw_connections(frame: &mut Frame, area: Rect, app: &App, tab: ConnTab, curs
         let items: Vec<ListItem> = entries
             .iter()
             .enumerate()
-            .map(|(index, location)| {
+            .map(|(index, (name, about))| {
                 let text = format!(
                     " {:<18} {}",
-                    fit(&location.name, 18),
-                    fit(
-                        &location.summary(),
-                        split[1].width.saturating_sub(21) as usize
-                    )
+                    fit(name, 18),
+                    fit(about, split[1].width.saturating_sub(21) as usize)
                 );
                 let style = if index == cursor {
                     Style::default()
@@ -2158,6 +2191,7 @@ fn draw_connections(frame: &mut Frame, area: Rect, app: &App, tab: ConnTab, curs
     let hints = match tab {
         ConnTab::Saved => "Enter go  a add  c add cwd  u unmount  d delete  Esc close",
         ConnTab::Recent => "Enter go  s save  d forget  C forget all  Esc close",
+        ConnTab::System => "Enter go  Tab next tab  Esc close",
     };
     frame.render_widget(
         Paragraph::new(Span::styled(
