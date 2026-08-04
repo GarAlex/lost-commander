@@ -49,6 +49,13 @@ Notable changes, newest first. Versions follow [semantic versioning]; until
   as by the one that worked. The journal screen answers "what did I do today";
   this answers "why does this folder look like this", which is the question
   you have while looking at it.
+- **A here/all filter on the history column**, which is what makes it a
+  history rather than a list of five things. It opens on `here` - the
+  commands from the directory the shell is standing in - and `all` is the
+  rest, this directory first, with the ones from elsewhere drawn dimmer and
+  naming their folder on hover. Reading the account is not repeated when the
+  filter changes: the column holds all of it and shows the half you asked
+  for.
 - **What was run here, beside the shell in the graphical view.** The terminal
   view has had this column since it got a shell screen; the drawer now has it
   too, on by default and off with `hist`. Clicking a line puts it on the

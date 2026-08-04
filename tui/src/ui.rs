@@ -2547,7 +2547,7 @@ fn draw_history_here(
     let split = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(area);
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            " run here   Alt-P/N walks",
+            " history: here   Alt-P/N walks",
             Style::default().bg(theme::BG).fg(theme::TITLE_FG),
         )))
         .style(theme::base()),

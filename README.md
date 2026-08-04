@@ -173,7 +173,7 @@ The window is four sectors and two seams:
 +------------------------+---------------+
 |  F1 Help  F2 Rename ...                |
 +------------------------+---------------+
-|  shell                 |  run here     |
+|  shell                 |  history      |
 +------------------------+---------------+
 ```
 
@@ -259,11 +259,17 @@ terminal cannot, plus one thing not yet built:
 
 Reading bytes as hex, the directory tree, tabs and the journal are in both.
 
-**What was run here** — in both front-ends — sits beside the shell: the
-commands from *that directory*, newest first. In the window it is the
-bottom-right sector, under the places list; `hist` turns it off, and hiding
-the places list takes the column with it, since that column is what it is
-drawn in.
+**History** — in both front-ends — sits beside the shell: what was run,
+newest first. It opens on `here`, meaning the commands from the directory the
+shell is standing in, which is the half of a history worth having in front of
+you; `all` is the rest of it, this directory first, with the ones from
+somewhere else drawn dimmer and naming their folder when you hover. Clicking
+a line puts it on the command line without running it.
+
+In the window it is the bottom-right sector, under the places list; `hist`
+turns it off, and hiding the places list takes the column with it, since that
+column is what it is drawn in. In the terminal view it is beside the shell
+screen, and `Alt-P` / `Alt-N` walk the same list.
 A shell's own history is one list with no idea where you were standing, and
 the half that is about here is the half worth having in front of you. Clicking
 a line puts it on the command line without running it; the terminal view walks

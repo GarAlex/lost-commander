@@ -383,6 +383,13 @@ pub struct GuiApp {
     /// worth having in front of you. `Alt-P` in the terminal view offers the
     /// same list one line at a time; a window has room to show it.
     pub show_shell_history: bool,
+    /// Whether the history column is showing only this directory's commands.
+    ///
+    /// On to begin with, which is the half worth having in front of you: a
+    /// shell's own history is one list with no idea where you were standing.
+    /// The other half is a keystroke away, because "what was that command"
+    /// is sometimes about a directory you have since left.
+    pub history_here_only: bool,
     shell_history_of: Option<PathBuf>,
     shell_history: Vec<journal::Past>,
     shell_history_read_at: f64,
@@ -606,6 +613,7 @@ impl GuiApp {
             history_rows: Vec::new(),
             history_read_at: 0.0,
             show_shell_history: true,
+            history_here_only: true,
             shell_history_of: None,
             shell_history: Vec::new(),
             shell_history_read_at: 0.0,
@@ -7640,42 +7648,110 @@ impl GuiApp {
         }
 
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(area));
-        child.label(
-            RichText::new("Run here")
-                .size(10.5)
-                .color(theme::text_faint()),
-        );
-        if self.shell_history.is_empty() {
-            child.label(
-                RichText::new("nothing yet")
-                    .size(11.0)
+        let mut here_only = self.history_here_only;
+        child.horizontal(|ui| {
+            ui.label(
+                RichText::new("History")
+                    .size(10.5)
                     .color(theme::text_faint()),
+            );
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                // Which half of the account this is showing. Two words rather
+                // than a checkbox: "here" and "all" say what you will get,
+                // where a tickbox labelled "filter" says only that there is
+                // one.
+                for (only, label) in [(false, "all"), (true, "here")] {
+                    let chosen = here_only == only;
+                    let colour = if chosen {
+                        theme::text()
+                    } else {
+                        theme::text_faint()
+                    };
+                    let fill = if chosen {
+                        theme::surface_hi()
+                    } else {
+                        Color32::TRANSPARENT
+                    };
+                    if ui
+                        .add(
+                            egui::Button::new(RichText::new(label).size(10.5).color(colour))
+                                .fill(fill)
+                                .corner_radius(CornerRadius::same(3))
+                                .min_size(Vec2::new(0.0, 16.0)),
+                        )
+                        .on_hover_text(if only {
+                            "Only what was run in this directory"
+                        } else {
+                            "Everything, this directory first"
+                        })
+                        .clicked()
+                    {
+                        here_only = only;
+                    }
+                }
+            });
+        });
+        self.history_here_only = here_only;
+
+        let shown = self.history_shown();
+        if shown.is_empty() {
+            child.label(
+                RichText::new(if self.history_here_only {
+                    "nothing run here yet"
+                } else {
+                    "nothing yet"
+                })
+                .size(11.0)
+                .color(theme::text_faint()),
             );
             return;
         }
+
+        // Cloned out of `self` so the closure below is not holding a borrow
+        // of it while the reuse needs one.
+        let rows: Vec<(String, Option<String>)> = shown
+            .into_iter()
+            .map(|past| {
+                let elsewhere = (Some(past.cwd.as_path()) != self.shell_history_of.as_deref())
+                    .then(|| {
+                        past.cwd
+                            .file_name()
+                            .map(|name| name.to_string_lossy().to_string())
+                            .unwrap_or_else(|| past.cwd.display().to_string())
+                    });
+                (past.line.clone(), elsewhere)
+            })
+            .collect();
 
         let mut reuse: Option<String> = None;
         egui::ScrollArea::vertical()
             .id_salt("shell_history")
             .auto_shrink([false, false])
             .show(&mut child, |ui| {
-                for past in &self.shell_history {
-                    let line = past.line.clone();
-                    if ui
-                        .add(
-                            egui::Label::new(
-                                RichText::new(&line)
-                                    .monospace()
-                                    .size(11.0)
-                                    .color(theme::text_dim()),
-                            )
-                            .truncate()
-                            .sense(Sense::click()),
-                        )
-                        .on_hover_text("Click to put this on the command line")
-                        .clicked()
-                    {
-                        reuse = Some(line);
+                for (line, elsewhere) in &rows {
+                    // Where it ran, when that is not where you are. The same
+                    // words in another directory are about other work, and a
+                    // list that did not say so would offer them as if they
+                    // were the same command.
+                    let hint = match elsewhere {
+                        Some(folder) => {
+                            format!("Ran in {folder} - click to put it on the command line")
+                        }
+                        None => "Click to put this on the command line".to_string(),
+                    };
+                    let response = ui.add(
+                        egui::Label::new(RichText::new(line).monospace().size(11.0).color(
+                            if elsewhere.is_some() {
+                                theme::text_faint()
+                            } else {
+                                theme::text_dim()
+                            },
+                        ))
+                        .truncate()
+                        .sense(Sense::click()),
+                    );
+                    if response.on_hover_text(hint).clicked() {
+                        reuse = Some(line.clone());
                     }
                 }
             });
@@ -7683,6 +7759,15 @@ impl GuiApp {
             self.type_into_command_line(&line);
             self.terminal_focused = true;
         }
+    }
+
+    /// The lines the history column is showing, after the here/all filter.
+    fn history_shown(&self) -> Vec<&journal::Past> {
+        let here = self.shell_history_of.as_deref();
+        self.shell_history
+            .iter()
+            .filter(|past| !self.history_here_only || Some(past.cwd.as_path()) == here)
+            .collect()
     }
 
     /// The last week of the shell stream, as what was run in one directory.
@@ -7696,12 +7781,9 @@ impl GuiApp {
         for day in days.into_iter().rev() {
             records.extend(journal.read(journal::Stream::Shell, day));
         }
-        // Only what was run *here*: the rest is another directory's work, and
-        // the whole reason this program records where a command ran.
+        // Everything, here first - the filter is applied when it is drawn, so
+        // switching between "here" and "all" does not re-read the account.
         journal::commands_before(&records, here)
-            .into_iter()
-            .filter(|past| past.cwd == here)
-            .collect()
     }
 
     /// What was done to the things in the other pane's folder.
@@ -10537,7 +10619,7 @@ mod tests {
     }
 
     #[test]
-    fn the_shell_column_lists_only_what_was_run_in_that_directory() {
+    fn the_history_column_shows_here_or_everything() {
         let (_root, mut app) = fixture();
         let _dir = with_a_journal(&mut app);
         let here = app.left.cwd().to_path_buf();
@@ -10545,15 +10627,28 @@ mod tests {
         app.note(journal::Event::new(journal::Kind::Command, &here).note("cargo test"));
         app.note(journal::Event::new(journal::Kind::Command, "/elsewhere").note("make"));
 
-        let lines: Vec<String> = app
-            .commands_in(&here)
-            .into_iter()
-            .map(|past| past.line)
-            .collect();
-        // `commands_before` offers everything, here first; the column keeps
-        // only the here half, because it is a list about this directory and
-        // there is no room to explain that half of it is not.
-        assert_eq!(lines, vec!["cargo test"]);
+        // What the column caches, which is everything - the filter is applied
+        // when it draws, so switching between the two does not re-read the
+        // account.
+        app.shell_history = app.commands_in(&here);
+        app.shell_history_of = Some(here.clone());
+
+        let lines = |app: &GuiApp| -> Vec<String> {
+            app.history_shown()
+                .into_iter()
+                .map(|past| past.line.clone())
+                .collect()
+        };
+
+        // "here" to begin with: a shell's own history is one list with no
+        // idea where you were standing, and this is the half that is about
+        // where you are.
+        assert!(app.history_here_only);
+        assert_eq!(lines(&app), vec!["cargo test"]);
+
+        // "all" is the rest of it, this directory first.
+        app.history_here_only = false;
+        assert_eq!(lines(&app), vec!["cargo test", "make"]);
     }
 
     /// An app with an account, kept in a directory of its own.
