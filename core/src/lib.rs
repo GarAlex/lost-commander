@@ -30,6 +30,7 @@ pub mod open;
 pub mod panel;
 pub mod paths;
 pub mod perms;
+pub mod places;
 pub mod preview;
 pub mod progress;
 pub mod pty;

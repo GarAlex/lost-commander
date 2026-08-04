@@ -9,6 +9,12 @@ Notable changes, newest first. Versions follow [semantic versioning]; until
 
 ### Added
 
+- **The sidebar shows what the machine has**: drives and volumes, then Home,
+  Desktop, Documents, Downloads, Pictures, Music and Videos. Without them the
+  only route to a second drive was typing its letter — and on Windows there is
+  no root to walk up to that would reveal one, since `C:` and `D:` are two
+  trees rather than two directories.
+
 - **A shell that stays running under the terminal view.** One shell for the
   session rather than one per command, so `cd` means something: the directory
   it leaves you in is where the next command runs. `Ctrl-O` swaps between the

@@ -44,6 +44,7 @@ use lost_commander_core::netloc::{Bookmarks, Location};
 use lost_commander_core::open;
 use lost_commander_core::panel::Panel;
 use lost_commander_core::perms::{self, Mode, What, Who};
+use lost_commander_core::places;
 use lost_commander_core::progress::{self, Answer, Job, Operation};
 use lost_commander_core::pty::{self, Terminals};
 use lost_commander_core::rename;
@@ -351,6 +352,12 @@ pub struct GuiApp {
     /// first is usable: with the second, walking a pane somewhere the shell
     /// is not would be undone on the next frame.
     shell_was: Option<(usize, PathBuf)>,
+    /// The drives and folders this machine offers.
+    ///
+    /// Read once at startup: finding them looks in `/media` and asks each
+    /// drive letter whether it answers, and a spinning disk asked that on
+    /// every frame would be heard doing it.
+    system_places: Vec<places::Place>,
     /// How much of the width the left pane gets. Dragged on the divider.
     pub split: f32,
     pub bookmarks: Bookmarks,
@@ -520,6 +527,7 @@ impl GuiApp {
             tree_at: [0, 0],
             listing_at: [0, 0],
             shell_was: None,
+            system_places: places::system_places(),
             split: 0.5,
             bookmarks,
             bookmarks_path: None,
@@ -2167,6 +2175,24 @@ impl GuiApp {
         let mut target: Option<PathBuf> = None;
 
         egui::ScrollArea::vertical().show(ui, |ui| {
+            // The machine's own places come first, and they are the ones a
+            // reader cannot discover any other way. Without them the only
+            // route to a second drive is typing its letter, and on Windows
+            // there is no root to walk up to that would reveal one: `C:` and
+            // `D:` are two trees, not two directories.
+            section_label(ui, "THIS COMPUTER");
+            for place in &self.system_places {
+                let icon = match place.kind {
+                    places::Kind::Drive => icons::Kind::Binary,
+                    places::Kind::Home => icons::Kind::Folder,
+                    places::Kind::Folder => icons::Kind::Folder,
+                };
+                if sidebar_row(ui, &place.name, icon, false) {
+                    target = Some(place.path.clone());
+                }
+            }
+
+            ui.add_space(10.0);
             section_label(ui, "PLACES");
             if self.bookmarks.locations.is_empty() {
                 ui.label(
