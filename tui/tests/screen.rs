@@ -35,9 +35,14 @@ fn render(width: u16, height: u16) -> Vec<String> {
     app.active_panel_mut().toggle_mark();
     app.command.push_str("cargo test");
 
+    drawn(&app, width, height)
+}
+
+/// Draw an app that is already set up.
+fn drawn(app: &lostc::app::App, width: u16, height: u16) -> Vec<String> {
     let backend = ratatui::backend::TestBackend::new(width, height);
     let mut terminal = ratatui::Terminal::new(backend).expect("a terminal");
-    terminal.draw(|frame| lostc::ui::draw(frame, &app)).unwrap();
+    terminal.draw(|frame| lostc::ui::draw(frame, app)).unwrap();
 
     let buffer = terminal.backend().buffer();
     (0..height)
@@ -48,6 +53,48 @@ fn render(width: u16, height: u16) -> Vec<String> {
             line.trim_end().to_string()
         })
         .collect()
+}
+
+/// One panel, then two, then one again - and it is drawn each time.
+///
+/// The field says which panels are showing; only drawing says what the reader
+/// sees. This is the test that would catch a fold leaving the window on a
+/// directory nobody asked for.
+#[test]
+fn folding_the_second_panel_leaves_the_one_you_were_reading() {
+    let root = tempfile::tempdir().expect("a temporary directory");
+    let ours = root.path().join("ours");
+    let theirs = root.path().join("theirs");
+    std::fs::create_dir_all(&ours).unwrap();
+    std::fs::create_dir_all(&theirs).unwrap();
+
+    let mut app = lostc::app::App::detached(ours.clone(), theirs.clone());
+    let headings = |lines: &[String]| lines[0].matches('\u{250c}').count();
+
+    // As it opens: one panel, the whole width, on the left directory.
+    // Wide enough that a heading shows the whole path in either half:
+    // a truncated one would say nothing about which directory it is.
+    let one = drawn(&app, 160, 14);
+    assert_eq!(headings(&one), 1, "one panel means one heading");
+    assert!(one[0].contains("ours"), "{}", one[0]);
+    assert!(!one[0].contains("theirs"), "{}", one[0]);
+
+    // Tab asks for the second, and both are drawn.
+    app.switch_panel();
+    let two = drawn(&app, 160, 14);
+    assert_eq!(headings(&two), 2);
+    assert!(
+        two[0].contains("ours") && two[0].contains("theirs"),
+        "{}",
+        two[0]
+    );
+
+    // F12 folds one away, and the one left is the one being read - not the
+    // left panel by default, which would move the reader somewhere else.
+    app.toggle_second_panel();
+    let back = drawn(&app, 160, 14);
+    assert_eq!(headings(&back), 1);
+    assert!(back[0].contains("theirs"), "{}", back[0]);
 }
 
 /// Replace what changes between one run and the next.

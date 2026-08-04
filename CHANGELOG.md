@@ -7,6 +7,23 @@ Notable changes, newest first. Versions follow [semantic versioning]; until
 
 ## Unreleased
 
+### Changed
+
+- **It opens with one panel now**, in both front-ends, which is XTree's
+  arrangement rather than Norton's: a tree and its files with the whole width
+  to show them in. Two panels is the right shape for a copy and the wrong one
+  for the rest of the time. `Tab` asks for the second — it used to do nothing
+  when there was only one — and `F12` folds it away, leaving whichever panel
+  you were reading.
+- **`F5` and `F6` in the graphical view ask where, in a field**, prefilled
+  with the other pane's directory when there is one. It used to copy straight
+  to wherever the other pane happened to be, with nothing shown and nothing to
+  change; with one pane that would have been a copy into a directory the
+  reader never saw. The terminal view has always asked. Extracting from an
+  archive goes through the same field.
+- **A folder comparison opens the second panel** rather than reading one that
+  is not on screen. It changes nothing on disk, so it does not ask first.
+
 ### Added
 
 - **The shell screen lists what was run in this directory**, beside it, with

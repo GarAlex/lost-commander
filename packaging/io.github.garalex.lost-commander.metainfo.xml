@@ -17,10 +17,11 @@
 
   <description>
     <p>
-      A file manager with two directory panels side by side: one where things
-      are, one where they are going. Copy, move, delete and compare run with
-      live progress and can be cancelled; archives open as directories; and an
-      account is kept of what was done.
+      A file manager that opens on one directory panel with the whole window
+      to show it in, and puts a second one beside it - one where things are,
+      one where they are going - the moment something needs two. Copy, move,
+      delete and compare run with live progress and can be cancelled;
+      archives open as directories; and an account is kept of what was done.
     </p>
     <p>
       Each pane can be a dense detail list, a grid of large icons, the

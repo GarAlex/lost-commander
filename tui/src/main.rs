@@ -2,7 +2,8 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-//! lostc - a Norton Commander-style dual-pane file manager.
+//! lostc - a file manager in the Norton Commander tradition, opening on
+//! one panel with a second a keystroke away.
 //!
 //! Portability note: every terminal interaction goes through crossterm, which
 //! supports the Windows console (ConPTY), macOS and Linux with the same code.
@@ -54,7 +55,7 @@ fn main() -> io::Result<()> {
 
 fn print_usage() {
     println!(
-        "lostc {VERSION} - dual-pane terminal file manager
+        "lostc {VERSION} - terminal file manager
 
 USAGE:
     lostc [LEFT_DIR] [RIGHT_DIR]
@@ -62,7 +63,8 @@ USAGE:
     lostc --help | --version
 
 KEYS:
-    Tab switch panel      Enter open      Backspace parent
+    Tab other panel       Enter open      Backspace parent
+    F12 second panel on/off
     F1 help    F2 rename  F3 view         F4 edit
     F5 copy    F6 move    F7 mkdir        F8 delete
     F9 sort    F10 quit   Space mark      Ctrl-H hidden files
@@ -70,6 +72,12 @@ KEYS:
     Ctrl-Q also quits, and Ctrl-C quits when there is nothing to interrupt.
     Some terminals keep F10 for their own menu and never pass it on, which is
     why there is more than one way out. Ctrl-Z suspends, as anywhere else.
+
+    It opens with one panel, which is XTree's arrangement rather than Norton's:
+    a tree and its files with the whole width to show them in. Tab asks for a
+    second one and F12 folds it away; a copy, a move or a folder comparison
+    brings it up by itself. F5 and F6 ask where in a field, so a single panel
+    costs nothing - and nothing is copied into a directory that is off screen.
 
     Typing goes to the command line under the panels, and Enter runs it in the
     directory being shown - as in Norton and Midnight Commander. An empty

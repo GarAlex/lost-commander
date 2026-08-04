@@ -22,7 +22,7 @@ fn main() -> eframe::Result<()> {
         Some("-h") | Some("--help")
     ) {
         println!(
-            "lostc-gui {VERSION} - graphical dual-pane file manager
+            "lostc-gui {VERSION} - graphical file manager
 
 USAGE:
     lostc-gui [--grid] [--tree] [--preview] [LEFT_DIR] [RIGHT_DIR]

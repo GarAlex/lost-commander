@@ -44,23 +44,40 @@ pub fn draw(frame: &mut Frame, app: &App) {
         return;
     }
 
-    let panes =
-        Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(rows[0]);
-
-    draw_pane(
-        frame,
-        panes[0],
-        &app.left,
-        app.active == Side::Left,
-        app.on_tree[0],
-    );
-    draw_pane(
-        frame,
-        panes[1],
-        &app.right,
-        app.active == Side::Right,
-        app.on_tree[1],
-    );
+    // One pane unless a second was asked for. That is XTree's shape, and it
+    // is what most of the work actually wants: a tree and its files with the
+    // whole width to show them in, rather than two halves of one job. The
+    // second pane is for the few things that are about two places at once -
+    // a copy, a move, a comparison - and each of those brings it up itself.
+    if app.show_right {
+        let panes = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(rows[0]);
+        draw_pane(
+            frame,
+            panes[0],
+            &app.left,
+            app.active == Side::Left,
+            app.on_tree[0],
+        );
+        draw_pane(
+            frame,
+            panes[1],
+            &app.right,
+            app.active == Side::Right,
+            app.on_tree[1],
+        );
+    } else {
+        // Whichever panel was active, given the whole width - so folding the
+        // second away never moves the reader somewhere they were not looking.
+        // The other Tabs is untouched, which is what makes its directory,
+        // cursor and marks still be there when it comes back.
+        let side = app.active;
+        let on_tree = match side {
+            Side::Left => app.on_tree[0],
+            Side::Right => app.on_tree[1],
+        };
+        draw_pane(frame, rows[0], app.tabs(side), true, on_tree);
+    }
     draw_status(frame, rows[1], app);
     draw_command_line(frame, rows[2], app);
     draw_keybar(frame, rows[3]);
@@ -2211,7 +2228,7 @@ fn draw_connections(frame: &mut Frame, area: Rect, app: &App, tab: ConnTab, curs
 /// The key list. Public so the key handler can keep the scroll in range
 /// without having to know how it is laid out.
 pub const HELP: &[(&str, &str)] = &[
-    ("Tab", "switch panel"),
+    ("Tab", "the other panel - opens it if there is only one"),
     ("Up / Down / PgUp / PgDn", "move cursor"),
     ("Home / End", "first / last entry"),
     ("Enter / Right", "enter directory, or view a file"),
@@ -2258,6 +2275,7 @@ pub const HELP: &[(&str, &str)] = &[
     ("Alt-S", "synchronize the two directories"),
     ("Ctrl-J", "what was done - the account"),
     ("Alt-T", "directory tree (Enter opens, +/- expand)"),
+    ("F12", "show or hide the second panel"),
     ("F11 / Ctrl-B", "network locations & bookmarks"),
     ("Ctrl-D", "bookmark the current directory"),
     ("Ctrl-H", "toggle hidden files"),

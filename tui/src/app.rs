@@ -436,6 +436,14 @@ pub struct App {
     /// One flag per side. Two lists in one pane is two cursors, and a reader
     /// who cannot tell which one an arrow key moves will not trust either.
     pub on_tree: [bool; 2],
+    /// Whether the second panel is on screen.
+    ///
+    /// Off to begin with. Two panels is the Norton arrangement and it is the
+    /// right one for a copy, but most of what anybody does here is about one
+    /// directory, and giving it the whole width shows a third again as much
+    /// of every name. The second panel is a keystroke away and several
+    /// things bring it up by themselves.
+    pub show_right: bool,
     /// Commands offered back, and how far up them the reader has walked.
     ///
     /// Read when the walk starts rather than kept in step with the journal:
@@ -532,10 +540,11 @@ impl App {
             // The first thing on screen, and until now the first thing never
             // shown. It names Ctrl-Q as well as F10 because F10 is the one
             // key here that a terminal may keep for itself.
-            status: String::from("F1 help   Tab switches panels   F10 or Ctrl-Q quits"),
+            status: String::from("F1 help   Tab opens a second panel   F10 or Ctrl-Q quits"),
             status_is_error: false,
             should_quit: false,
             on_tree: [false, false],
+            show_right: false,
             history: Vec::new(),
             at_in_history: None,
             command: String::new(),
@@ -847,10 +856,27 @@ impl App {
     // ---- entry points for the function keys -------------------------------
 
     pub fn switch_panel(&mut self) {
+        // "The other panel" only means something if there is one, so Tab
+        // with a single panel is how you ask for the second - the cheapest
+        // key there is, and the one a reader already presses to change
+        // panel. F12 folds it away again.
+        self.show_right = true;
         self.active = match self.active {
             Side::Left => Side::Right,
             Side::Right => Side::Left,
         };
+    }
+
+    /// `F12`: show or hide the second panel.
+    pub fn toggle_second_panel(&mut self) {
+        self.show_right = !self.show_right;
+        if !self.show_right {
+            // The panel left on screen is the one that was active, so there
+            // is nothing to move the cursor off.
+            self.info("One panel. F12 or Tab brings the second back.");
+        } else {
+            self.info("Two panels. F12 folds the second away.");
+        }
     }
 
     pub fn swap_panels(&mut self) {
@@ -984,6 +1010,9 @@ impl App {
             Side::Right => Side::Left,
         };
         self.tabs_mut(other).accept(panel);
+        // It has to be on screen to have been moved anywhere: following it
+        // across onto a folded-away panel would look like the tab was lost.
+        self.show_right = true;
         // Following it across is what you meant by moving it: the tab is the
         // thing you were working in, and it is now over there.
         self.active = other;
@@ -1477,6 +1506,11 @@ impl App {
     /// which is what makes it instant and what makes it stop at the top level.
     /// The recursive question is what `Alt-S` is for.
     pub fn compare_folders(&mut self) {
+        // Both of these are about two directories at once, so bring the
+        // second panel up rather than reading one nobody can see. Neither
+        // changes anything on disk by itself, so there is nothing here to
+        // make the reader confirm.
+        self.show_right = true;
         let case = compare::case_sensitive(mount::Platform::current());
         let (marked_left, marked_right) =
             compare::mark_differences(self.left.current_mut(), self.right.current_mut(), case);
@@ -1491,6 +1525,11 @@ impl App {
 
     /// `Alt-S`: what differs between the two trees, and which way it would go.
     pub fn open_sync(&mut self) {
+        // Both of these are about two directories at once, so bring the
+        // second panel up rather than reading one nobody can see. Neither
+        // changes anything on disk by itself, so there is nothing here to
+        // make the reader confirm.
+        self.show_right = true;
         let left = self.left.cwd().to_path_buf();
         let right = self.right.cwd().to_path_buf();
         if left == right {
@@ -2135,7 +2174,15 @@ impl App {
             self.error("Nothing selected");
             return;
         }
-        let destination = self.other_panel().cwd.display().to_string();
+        // With one panel there is no other panel to guess at, so it offers
+        // this one: somewhere to edit rather than somewhere to accept. The
+        // field is where the destination has always been named here, which
+        // is why one panel costs nothing.
+        let destination = if self.show_right {
+            self.other_panel().cwd.display().to_string()
+        } else {
+            self.active_panel().cwd.display().to_string()
+        };
         self.mode = Mode::Input(InputDialog {
             title: format!("Copy {}", describe(&targets)),
             prompt: "to directory:".into(),
@@ -2150,7 +2197,15 @@ impl App {
             self.error("Nothing selected");
             return;
         }
-        let destination = self.other_panel().cwd.display().to_string();
+        // With one panel there is no other panel to guess at, so it offers
+        // this one: somewhere to edit rather than somewhere to accept. The
+        // field is where the destination has always been named here, which
+        // is why one panel costs nothing.
+        let destination = if self.show_right {
+            self.other_panel().cwd.display().to_string()
+        } else {
+            self.active_panel().cwd.display().to_string()
+        };
         self.mode = Mode::Input(InputDialog {
             title: format!("Move {}", describe(&targets)),
             prompt: "to directory:".into(),
@@ -3123,6 +3178,7 @@ impl App {
             KeyCode::F(9) => self.cycle_sort(),
             // Not every terminal sends F11, so Ctrl-B is offered as an alias.
             KeyCode::F(11) => self.open_connections(),
+            KeyCode::F(12) => self.toggle_second_panel(),
             KeyCode::Char('b') if ctrl => self.open_connections(),
             KeyCode::Char('d') if ctrl => self.bookmark_current_dir(),
             // The comparison family, on one modifier: C marks what differs
@@ -3836,6 +3892,11 @@ mod tests {
         fs::write(left.join("two.txt"), "second").unwrap();
         fs::create_dir(left.join("sub")).unwrap();
         let mut app = App::detached(left, right);
+        // Two panels: most of these tests are about a left and a right, and
+        // the second panel is a keystroke away in the program. The tests
+        // that are about the one-panel default open with it folded, which is
+        // what `App::detached` gives them.
+        app.show_right = true;
         app.bookmarks_path = Some(root.path().join("bookmarks.toml"));
         (root, app)
     }
@@ -5401,6 +5462,56 @@ mod tests {
 
         assert!(app.status_is_error);
         assert!(app.status.contains("already exists"), "{}", app.status);
+    }
+
+    #[test]
+    fn one_panel_to_begin_with_and_tab_asks_for_the_second() {
+        let (_root, mut app) = app_fixture();
+        // What the program actually opens with; the fixture opens two.
+        app.show_right = false;
+
+        app.on_key(key(KeyCode::Tab));
+        assert!(app.show_right, "Tab is how you ask for the other panel");
+        assert_eq!(app.active, Side::Right);
+
+        app.on_key(key(KeyCode::F(12)));
+        assert!(!app.show_right);
+        assert_eq!(
+            app.active,
+            Side::Right,
+            "the panel left showing is the one you were on, not the other one"
+        );
+    }
+
+    #[test]
+    fn with_one_panel_a_copy_offers_here_and_takes_anywhere() {
+        let (_root, mut app) = app_fixture();
+        app.show_right = false;
+        let destination = app.other_panel().cwd.clone();
+        select(&mut app, "one.txt");
+
+        app.on_key(key(KeyCode::F(5)));
+        match &mut app.mode {
+            // No second panel to guess at, so it offers this directory -
+            // which is not a destination anybody wants, and that is the
+            // point: it is a starting point for typing, not an Enter to lean
+            // on. The hidden panel's directory would have been a copy into
+            // somewhere the reader never saw.
+            Mode::Input(d) => {
+                assert_eq!(d.value, app.left.current().cwd.display().to_string());
+                d.value = destination.display().to_string();
+            }
+            other => panic!("expected input dialog, got {other:?}"),
+        }
+        app.on_key(key(KeyCode::Enter));
+        app.finish_job();
+
+        assert!(!app.status_is_error, "status was: {}", app.status);
+        assert_eq!(
+            fs::read_to_string(destination.join("one.txt")).unwrap(),
+            "first",
+            "one panel copies just as well - the field is where the              destination always was"
+        );
     }
 
     #[test]

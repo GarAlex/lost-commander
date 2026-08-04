@@ -1,6 +1,6 @@
 .TH LOSTC 1 "2026-08-01" "lost-commander 0.1.0" "User Commands"
 .SH NAME
-lostc \- dual-pane terminal file manager
+lostc \- terminal file manager
 .SH SYNOPSIS
 .B lostc
 .RI [ LEFT_DIR ]
@@ -14,14 +14,16 @@ lostc \- dual-pane terminal file manager
 .RB [ \-\-help | \-\-version ]
 .SH DESCRIPTION
 .B lostc
-is a file manager in the Norton Commander tradition: two directory panels
-side by side, function keys along the bottom, and a command line under the
-panels. Everything it does to the filesystem is shared with
+is a file manager in the Norton Commander tradition: a directory panel,
+function keys along the bottom, and a command line under it. It opens with
+one panel, which is XTree's arrangement rather than Norton's, and a second is
+a keystroke away when something needs two directories at once. Everything it does to the filesystem is shared with
 .BR lostc\-gui (1),
 which is the same program drawn in a window.
 .PP
 With no arguments both panels open on the current directory. One argument
-sets the left panel, two set both.
+sets the left panel, two set both - the second is used when the second panel
+is opened.
 .SH OPTIONS
 .TP
 .B \-\-list " " [\fIDIR\fR]
@@ -37,7 +39,10 @@ Print the version and exit.
 .SH KEYS
 .TP
 .B Tab
-The other panel.
+The other panel, opening it when only one is showing.
+.TP
+.B F12
+Show or hide the second panel.
 .TP
 .B Enter
 Open: descend into a directory, walk into an archive, or hand a file to the

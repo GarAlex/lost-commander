@@ -1,9 +1,15 @@
 # lost-commander
 
-A dual-pane file manager in Rust, in the Norton Commander tradition, with two
-front-ends over one engine. It runs unchanged on **Linux, macOS and Windows**.
+A file manager in Rust, in the Norton Commander tradition, with two front-ends
+over one engine. It runs unchanged on **Linux, macOS and Windows**.
 
-- **`lostc`** — a terminal UI. Two panes, function keys, no mouse required.
+It opens with **one pane**, which is XTree's arrangement rather than Norton's:
+a tree and its files with the whole width to show them in. The second pane is
+for the things that are actually about two places at once — a copy, a move, a
+comparison, a preview — and every one of those brings it up by itself. `Tab`
+asks for it, `F12` folds it away.
+
+- **`lostc`** — a terminal UI. Function keys, no mouse required.
 - **`lostc-gui`** — a graphical view laid out for a pointer rather than a
   teletype: a sidebar, a breadcrumb trail, per-pane list/grid/tree views, and
   a real shell in a drawer along the bottom.
@@ -15,27 +21,29 @@ end owns.
 
 ## The terminal view
 
-Two panels, a status line, the command line, and the function keys. This is
+One panel, a status line, the command line, and the function keys. This is
 generated from the real drawing code by a test, which fails if this picture
 falls behind the program - a README's screenshot is otherwise a photograph of
 whatever it looked like the day somebody typed it.
 
 ```
-┌─────────── ~/src/lost-commander/core ──────────┐┌────────────── ~/src/lost-commander ────────────┐
-│Name                         Size Modified      ││Name                         Size Modified      │
-│ ..                          <UP>               ││ ..                          <UP>               │
-│ archive                    <DIR> 25.07.26 04:43││ core                       <DIR> 25.07.26 04:43│
-│*entry.rs                   5.52K 25.07.26 04:36││                                                │
-│*fsops.rs                   9.07K 25.07.26 04:38││                                                │
-│ panel.rs                   28.1K 25.07.26 04:42││                                                │
-│ tree.rs                    14.3K 25.07.26 04:42││                                                │
-│                                                ││                                                │
-│                                                ││                                                │
-└────────────────────────────────────────────────┘└────────────────────────────────────────────────┘
-F1 help   Tab switches panels   F10 or Ctrl-Q quits
+┌──────────────────────────────── ~/src/lost-commander/core ───────────────────────────────────────┐
+│Name                                                                           Size Modified      │
+│ ..                                                                            <UP>               │
+│ archive                                                                      <DIR> 04.08.26 11:29│
+│*entry.rs                                                                     5.52K 04.08.26 11:29│
+│*fsops.rs                                                                     9.07K 04.08.26 11:29│
+│ panel.rs                                                                     28.1K 04.08.26 11:29│
+│ tree.rs                                                                      14.3K 04.08.26 11:29│
+│                                                                                                  │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+F1 help   Tab opens a second panel   F10 or Ctrl-Q quits
 ~/src/lost-commander/core> cargo test█
 F1Help   F2Rename F3View   F4Edit   F5Copy   F6Move   F7MkDir  F8Delete F9Sort   F10Quit
 ```
+
+`Tab` opens a second panel beside this one, and `F12` puts it away again.
 
 The third row from the bottom is the command line: what you type goes there
 and Enter runs it in the directory being shown, exactly as in Norton
@@ -95,21 +103,26 @@ cargo build --release -p lost-commander-egui   # lostc-gui alone
 ## Running the terminal front-end
 
 ```sh
-cargo run --bin lostc                      # the current directory in both panes
-cargo run --bin lostc -- ~/src ~/documents # explicit left and right
+cargo run --bin lostc                      # the current directory
+cargo run --bin lostc -- ~/src ~/documents # left, and the second when it opens
 cargo run --bin lostc -- --list ~/src      # print a listing and exit
 cargo run --bin lostc -- --help
 ```
 
 ```
-Tab   switch panel     Enter  open           Backspace  parent
+Tab   other panel      Enter  open           Backspace  parent
 F1    help             F2     rename         F3         view
 F4    edit             F5     copy           F6         move
 F7    mkdir            F8     delete         F9         sort
 F10   quit             Space  mark           Ctrl-H     hidden files
-Ctrl-Q quit            Ctrl-C cancel or quit  Ctrl-Z     suspend
-Ctrl-O shell screen    Alt-T  tree            Escape     back to the tree
+F11   saved places     F12    second panel   Alt-T      tree
+Ctrl-Q quit            Ctrl-C cancel or quit  Ctrl-Z    suspend
+Ctrl-O shell screen    Escape back to the tree
 ```
+
+`Tab` opens the second panel when only one is showing, so it is never a key
+that does nothing. `F12` folds it away again, leaving whichever panel you were
+reading — not the left one by default, which would move you somewhere else.
 
 There is more than one way to quit on purpose, and the key bar shows both.
 
@@ -137,16 +150,19 @@ it useful for a quick check that a build works, and for scripting.
 
 ```sh
 cargo run --bin lostc-gui                        # current directory
-cargo run --bin lostc-gui -- ~/src ~/documents   # explicit left and right
+cargo run --bin lostc-gui -- ~/src ~/documents   # left, and the second when it opens
 cargo run --bin lostc-gui -- --grid              # start both panes in the icon grid
 cargo run --bin lostc-gui -- --tree              # tree above the files, XTree's arrangement
 cargo run --bin lostc-gui -- --preview           # right pane follows the left, as F3 does
 cargo run --bin lostc-gui -- --help
 ```
 
-Each pane carries its own view switch in its header — a dense detail list, a
-grid of large icons, the directory tree, or a preview of whatever the *other*
-pane is pointing at. The function keys do what they do in the terminal view.
+`Tab` opens the second pane and `F12` folds it away. `F3` borrows it for a
+preview and gives it back when the preview closes; a folder comparison opens
+it, since it has two directories to show. Each pane carries its own view
+switch in its header — a dense detail list, a grid of large icons, the
+directory tree, or a preview of whatever the *other* pane is pointing at. The
+function keys do what they do in the terminal view.
 
 There is one more argument, and it is how the view gets checked without a
 human at the screen:
@@ -157,6 +173,13 @@ cargo run --bin lostc-gui -- --screenshot shot.png ~/src ~/documents
 
 It renders a few frames, writes a PNG and exits. The picture above was made
 with it.
+
+**Where a copy goes.** `F5` and `F6` ask, in a field, with the other pane's
+directory already in it when there is one — one Enter, as in every commander
+since Norton. With a single pane there is nothing to guess at, so the field
+offers the current directory instead: a starting point to edit rather than an
+Enter to lean on. Nothing is ever copied into a directory that is not on
+screen.
 
 ## What each front-end does
 
@@ -206,7 +229,7 @@ changes it.
 ## Testing
 
 ```sh
-cargo test                     # all 1039, from the workspace root
+cargo test                     # all 1061, from the workspace root
 ```
 
 From the root that is everything, because the root is a virtual manifest and
@@ -217,9 +240,9 @@ say `cargo test --workspace` there if you meant all of it.
 Per crate, when you want a fast loop:
 
 ```sh
-cargo test -p lost-commander-core    # 629 - the engine, seconds to build
-cargo test -p lost-commander-egui    # 194 - the graphical view
-cargo test -p lost-commander-tui     # 110 - the terminal view
+cargo test -p lost-commander-core    # 637 - the engine, seconds to build
+cargo test -p lost-commander-egui    # 196 - the graphical view
+cargo test -p lost-commander-tui     # 122 - the terminal view
 cargo test -p lost-commander-ffi     # 106 - the C ABI
 ```
 

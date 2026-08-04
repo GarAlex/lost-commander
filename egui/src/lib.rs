@@ -87,6 +87,18 @@ pub enum ViewMode {
     Preview,
 }
 
+/// A job with everywhere but its destination worked out.
+pub enum Pending {
+    Copy(Vec<PathBuf>),
+    Move(Vec<PathBuf>),
+    Extract {
+        archive: PathBuf,
+        members: Vec<String>,
+        from: String,
+        password: Option<String>,
+    },
+}
+
 /// A modal the panes are waiting on.
 ///
 /// The graphical view had none of these: rename, make-directory and the
@@ -94,6 +106,24 @@ pub enum ViewMode {
 /// went ahead without asking at all.
 pub enum Dialog {
     Help,
+    /// Where a copy, a move or an extraction is going - typed, not implied.
+    ///
+    /// The destination used to be wherever the other pane happened to be,
+    /// with nothing shown and nothing to change. That reads as a shortcut
+    /// until the other pane is not on screen, and then it is a copy into a
+    /// directory the reader never saw and did not choose. Naming it in a
+    /// field costs one Enter, is what every commander from Norton on has
+    /// done, and is the terminal front-end's behaviour already.
+    CopyTo {
+        /// What is being sent, for the title.
+        what: String,
+        /// The other pane when there is one, this pane when there is not.
+        /// The second is deliberately a destination nobody wants: with one
+        /// pane there is nothing sensible to guess, so the field is prefilled
+        /// with somewhere to edit rather than somewhere to accept.
+        destination: String,
+        job: Pending,
+    },
     /// An archive, or a file in one, that will not open without a password.
     Password {
         archive: PathBuf,
@@ -520,7 +550,12 @@ impl GuiApp {
             left_view: ViewMode::Details,
             right_view: ViewMode::Details,
             show_sidebar: true,
-            show_right: true,
+            // One pane to begin with, which is XTree's shape and the one
+            // most work actually needs: a tree and its files, with the whole
+            // width to show them in. The second is for the few things that
+            // are about two places at once - a copy, a move, a comparison, a
+            // quick view - and every one of those opens it itself.
+            show_right: false,
             pane_opened_to_view: false,
             tree_split: 0.45,
             on_tree: [false, false],
@@ -1830,6 +1865,25 @@ pub fn split_from_pointer(full: Rect, x: f32) -> f32 {
 ///
 /// `accept_enter` is false on the frame the dialog opened, so a dialog reached
 /// by an Enter-family key is not answered by the press that opened it.
+/// "report.txt", or "3 items" - what goes in the title of the box.
+fn describe_targets(paths: &[PathBuf]) -> String {
+    match paths {
+        [one] => one
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| one.display().to_string()),
+        many => format!("{} items", many.len()),
+    }
+}
+
+/// The same, for members named by their path inside an archive.
+fn describe_members(members: &[String]) -> String {
+    match members {
+        [one] => one.rsplit('/').next().unwrap_or(one).to_string(),
+        many => format!("{} items", many.len()),
+    }
+}
+
 fn dialog_field(ui: &mut egui::Ui, text: &mut String, hint: &str, accept_enter: bool) -> bool {
     dialog_field_focused(ui, text, hint, accept_enter, true)
 }
@@ -3159,6 +3213,22 @@ impl GuiApp {
 
     // ---- operations --------------------------------------------------------
 
+    /// Bring the other pane on screen, for something that is about to use it.
+    ///
+    /// A comparison reads both panes and marks what differs, so it needs two
+    /// of them and it changes nothing on disk - there is nothing here worth
+    /// making the reader confirm. It just opens, and both sides are visible
+    /// when the marks land. Anything that *writes* asks where instead, in a
+    /// field: see [`GuiApp::ask_where`].
+    fn need_other_pane(&mut self) {
+        if !self.show_right {
+            self.show_right = true;
+            // Theirs now, not borrowed: a preview closing later must not fold
+            // away a pane that was opened to be looked at alongside this one.
+            self.pane_opened_to_view = false;
+        }
+    }
+
     fn copy_to_other(&mut self) {
         // F5 out of an archive is an extraction, which is a copy whose source
         // happens to be inside a file.
@@ -3171,14 +3241,74 @@ impl GuiApp {
             self.error("Nothing selected");
             return;
         }
-        let destination = match self.active {
-            Side::Left => self.right.cwd().to_path_buf(),
-            Side::Right => self.left.cwd().to_path_buf(),
+        self.ask_where(describe_targets(&sources), Pending::Copy(sources));
+    }
+
+    /// Put up the destination field, focused, with somewhere to start from.
+    fn ask_where(&mut self, what: String, job: Pending) {
+        let start = if self.show_right {
+            self.panel(self.active.other()).cwd.clone()
+        } else {
+            self.panel(self.active).cwd.clone()
         };
-        self.start(Operation::Copy {
-            sources,
-            destination,
+        self.dialog = Some(Dialog::CopyTo {
+            what,
+            destination: start.display().to_string(),
+            job,
         });
+    }
+
+    /// Start the job the destination box was holding.
+    ///
+    /// `false` if what was typed is not a directory - the box closes and the
+    /// reason is on the status line, rather than a copy going somewhere that
+    /// does not exist.
+    fn send_to(&mut self, job: Pending, destination: &str) -> bool {
+        let into = match self.resolve_dir(destination) {
+            Ok(into) => into,
+            Err(message) => {
+                self.error(message);
+                return false;
+            }
+        };
+        self.start(match job {
+            Pending::Copy(sources) => Operation::Copy {
+                sources,
+                destination: into,
+            },
+            Pending::Move(sources) => Operation::Move {
+                sources,
+                destination: into,
+            },
+            Pending::Extract {
+                archive,
+                members,
+                from,
+                password,
+            } => Operation::Extract {
+                archive,
+                members,
+                from,
+                destination: into,
+                password,
+            },
+        });
+        true
+    }
+
+    /// A typed destination, made absolute against the pane it was typed in.
+    fn resolve_dir(&self, raw: &str) -> Result<PathBuf, String> {
+        let typed = PathBuf::from(raw.trim());
+        let path = if typed.is_absolute() {
+            typed
+        } else {
+            self.panel(self.active).cwd.join(typed)
+        };
+        if path.is_dir() {
+            Ok(path)
+        } else {
+            Err(format!("Not a directory: {}", path.display()))
+        }
     }
 
     /// F5, inside an archive: pull the selection out into the other pane.
@@ -3187,14 +3317,6 @@ impl GuiApp {
         let Some(inside) = self.panel(side).inside.clone() else {
             return;
         };
-        let other = match side {
-            Side::Left => self.right.cwd().to_path_buf(),
-            Side::Right => self.left.cwd().to_path_buf(),
-        };
-        if self.panel(side.other()).in_archive() {
-            self.error("The other pane is inside an archive - there is nowhere to put them");
-            return;
-        }
 
         // A directory selected means everything under it, worked out from the
         // index rather than by walking anything.
@@ -3233,13 +3355,15 @@ impl GuiApp {
             return;
         }
 
-        self.start(Operation::Extract {
-            archive: inside.archive.clone(),
-            members,
-            from: inside.at.clone(),
-            destination: other,
-            password,
-        });
+        self.ask_where(
+            describe_members(&members),
+            Pending::Extract {
+                archive: inside.archive.clone(),
+                members,
+                from: inside.at.clone(),
+                password,
+            },
+        );
     }
 
     /// Move, rather than copy, into the other pane.
@@ -3253,14 +3377,7 @@ impl GuiApp {
             self.error("Nothing selected");
             return;
         }
-        let destination = match self.active {
-            Side::Left => self.right.cwd().to_path_buf(),
-            Side::Right => self.left.cwd().to_path_buf(),
-        };
-        self.start(Operation::Move {
-            sources,
-            destination,
-        });
+        self.ask_where(describe_targets(&sources), Pending::Move(sources));
     }
 
     fn delete_selection(&mut self, to_trash: bool) {
@@ -3464,6 +3581,16 @@ impl GuiApp {
                 // into the files, Escape comes back up.
                 if self.show_right {
                     self.active = side.other();
+                } else {
+                    // Tab with one pane is a request for the other one:
+                    // "switch to the other pane" only means anything if there
+                    // is one, and this is the cheapest way to ask. It opens
+                    // and the cursor lands on it - the cursor never goes onto
+                    // a pane nobody can see, which is the thing worth
+                    // avoiding. F12 folds it away again.
+                    self.show_right = true;
+                    self.pane_opened_to_view = false;
+                    self.active = side.other();
                 }
             }
             A::SwapPanes => {
@@ -3574,7 +3701,8 @@ impl GuiApp {
                 self.pane_opened_to_view = false;
                 self.show_right = !self.show_right;
                 if !self.show_right {
-                    // The visible pane is the active one, so nothing is lost.
+                    // The one pane left on screen is whichever was active, so
+                    // folding never moves you somewhere you were not looking.
                     self.active = side;
                 }
             }
@@ -3786,6 +3914,7 @@ impl GuiApp {
     /// which is what makes it instant and what makes it stop at the top level.
     /// The recursive question is what `Alt-S` is for.
     fn compare_folders(&mut self) {
+        self.need_other_pane();
         let case = compare::case_sensitive(mount::Platform::current());
         let (marked_left, marked_right) =
             compare::mark_differences(self.left.current_mut(), self.right.current_mut(), case);
@@ -5538,6 +5667,39 @@ impl GuiApp {
                 if confirmed {
                     let plan = std::mem::take(changes);
                     self.run_multi_rename(&plan);
+                }
+                still_open = !escaped && !cancelled && !confirmed;
+            }
+            Dialog::CopyTo {
+                what,
+                destination,
+                job,
+            } => {
+                let (mut confirmed, mut cancelled) = (false, false);
+                let verb = match job {
+                    Pending::Copy(_) => "Copy",
+                    Pending::Move(_) => "Move",
+                    Pending::Extract { .. } => "Extract",
+                };
+                let escaped = modal(ctx, &format!("{verb} {what}"), |ui| {
+                    ui.label(
+                        RichText::new("to directory")
+                            .size(11.0)
+                            .color(theme::text_faint()),
+                    );
+                    // Focused on arrival, so a destination that needs typing
+                    // can just be typed - which is the only way to name one
+                    // when the other pane is not on screen.
+                    confirmed = dialog_field(ui, destination, "destination", accept_enter);
+                    ui.horizontal(|ui| {
+                        confirmed |= ui.button(verb).clicked();
+                        cancelled |= ui.button("Cancel").clicked();
+                    });
+                });
+                if confirmed {
+                    let job = std::mem::replace(job, Pending::Copy(Vec::new()));
+                    let into = destination.clone();
+                    cancelled = !self.send_to(job, &into);
                 }
                 still_open = !escaped && !cancelled && !confirmed;
             }
@@ -7441,13 +7603,32 @@ mod tests {
     }
 
     #[test]
-    fn copying_to_the_other_pane_runs_a_job_and_lands_the_files() {
+    fn copying_asks_where_and_lands_the_files() {
         let (_root, mut app) = fixture();
         let destination = app.right.cwd().to_path_buf();
         let a = index_of(&app, Side::Left, "a.txt");
         app.apply_click(Side::Left, Some((a, Click::Plain)), None);
 
         app.copy_to_other();
+        // Nothing has moved yet: it asks where first.
+        assert!(
+            app.job.is_none(),
+            "nothing runs until the destination is in"
+        );
+        let Some(Dialog::CopyTo {
+            what,
+            destination: offered,
+            job,
+        }) = app.dialog.take()
+        else {
+            panic!("F5 should ask where it is going");
+        };
+        assert_eq!(what, "a.txt");
+        // One pane, so there is no other pane to guess at, and it offers this
+        // one - somewhere to edit rather than somewhere to accept.
+        assert_eq!(offered, app.left.cwd().display().to_string());
+
+        assert!(app.send_to(job, &destination.display().to_string()));
         assert!(app.job.is_some(), "a copy should be running");
 
         // Drain the worker the way the frame loop would.
@@ -7459,6 +7640,37 @@ mod tests {
         assert!(app.job.is_none());
         assert!(destination.join("a.txt").exists());
         assert!(!app.status_is_error, "{}", app.status);
+    }
+
+    #[test]
+    fn the_destination_offered_is_the_other_pane_when_there_is_one() {
+        let (_root, mut app) = fixture();
+        app.show_right = true;
+        let a = index_of(&app, Side::Left, "a.txt");
+        app.apply_click(Side::Left, Some((a, Click::Plain)), None);
+
+        app.copy_to_other();
+        let Some(Dialog::CopyTo { destination, .. }) = app.dialog.take() else {
+            panic!("F5 should ask where it is going");
+        };
+        // Two panes: the other one is the answer nearly every time, so Enter
+        // alone is the whole interaction.
+        assert_eq!(destination, app.right.cwd().display().to_string());
+    }
+
+    #[test]
+    fn a_destination_that_is_not_a_directory_starts_nothing() {
+        let (_root, mut app) = fixture();
+        let a = index_of(&app, Side::Left, "a.txt");
+        app.apply_click(Side::Left, Some((a, Click::Plain)), None);
+        app.copy_to_other();
+        let Some(Dialog::CopyTo { job, .. }) = app.dialog.take() else {
+            panic!("asks where");
+        };
+
+        assert!(!app.send_to(job, "no/such/place"));
+        assert!(app.job.is_none(), "nothing runs");
+        assert!(app.status_is_error);
     }
 
     #[test]
@@ -7711,6 +7923,7 @@ mod tests {
         assert_eq!(app.left.cwd(), was);
 
         // Tab crosses to the other pane, and back.
+        app.show_right = true;
         assert_eq!(app.active, Side::Left);
         app.run_action(A::SwitchPane);
         assert_eq!(app.active, Side::Right);
@@ -7719,14 +7932,23 @@ mod tests {
     }
 
     #[test]
-    fn tab_does_not_move_onto_a_pane_that_is_folded_away() {
+    fn tab_opens_the_second_pane_rather_than_moving_onto_nothing() {
         use keys::Action as A;
         let (_root, mut app) = fixture();
+        assert!(!app.show_right, "one pane to begin with");
+
+        app.run_action(A::SwitchPane);
+        // "The other pane" only means something if there is one, so asking
+        // for it is how you get it - the cursor still never lands on a pane
+        // nobody can see.
+        assert!(app.show_right);
+        assert_eq!(app.active, Side::Right);
+
+        // And F12 folds it away. The pane left showing is the one that was
+        // active, so folding never moves you off what you were reading.
         app.run_action(A::ToggleSecondPane);
         assert!(!app.show_right);
-        app.run_action(A::SwitchPane);
-        // The cursor would otherwise vanish into a pane nobody can see.
-        assert_eq!(app.active, Side::Left);
+        assert_eq!(app.active, Side::Right);
     }
 
     #[test]
@@ -10176,7 +10398,8 @@ mod tests {
     #[test]
     fn a_pane_that_was_already_open_is_not_folded_away_by_the_viewer() {
         let (_root, mut app) = fixture();
-        assert!(app.show_right, "two panes to begin with");
+        // The reader opened it themselves, which is what makes it theirs.
+        app.show_right = true;
         app.left.current_mut().cursor_to(1);
 
         app.view_selected();
@@ -10290,6 +10513,7 @@ mod tests {
 
         // It briefly walked the halves too, which made it mean two things
         // depending on state.
+        app.show_right = true;
         app.run_action(A::SwitchPane);
         assert_eq!(app.active, Side::Right);
         app.run_action(A::SwitchPane);
