@@ -85,6 +85,14 @@ pub enum ViewMode {
     Tree,
     /// Quick view: what the *other* pane's cursor is on.
     Preview,
+    /// What has been done to the things in the *other* pane's directory.
+    ///
+    /// Follows the other pane the way quick view does, and for the same
+    /// reason: you stand in a folder on one side and read it on the other.
+    /// The journal screen answers "what did I do today"; this answers "why
+    /// does this folder look like this", which is the question you actually
+    /// have while looking at it.
+    History,
 }
 
 /// A job with everywhere but its destination worked out.
@@ -330,7 +338,7 @@ fn selection_summary(
     if panel.marked_count() > 0 {
         return format!("{} of {count} selected", panel.marked_count());
     }
-    if matches!(view, ViewMode::Tree | ViewMode::Preview) {
+    if matches!(view, ViewMode::Tree | ViewMode::Preview | ViewMode::History) {
         return String::new();
     }
     format!("{count} items")
@@ -345,6 +353,34 @@ pub struct GuiApp {
     pub left_view: ViewMode,
     pub right_view: ViewMode,
     pub show_sidebar: bool,
+    /// The row of function keys under the panes.
+    ///
+    /// A pointer can reach everything through the toolbar and the menus, so
+    /// this was left out of the graphical view - which quietly meant that a
+    /// reader coming from the terminal view, or from any commander since
+    /// Norton, had no way to discover that F5 copies here too. The keys work
+    /// either way; the bar is what says so.
+    pub show_keys: bool,
+    /// The folder the history view last read, what it read, and when.
+    ///
+    /// The account is on disk and a pane redraws sixty times a second, so it
+    /// is read when the folder changes and at most once a second after that.
+    /// Something else may be writing to it - the other front-end, or a shell
+    /// hook - which is why it is re-read at all rather than only on a change
+    /// this program made.
+    history_of: Option<PathBuf>,
+    history_rows: Vec<journal::Happening>,
+    history_read_at: f64,
+    /// The list of what was run here, beside the shell.
+    ///
+    /// On by default: a shell's own history is one list with no idea where
+    /// you were standing, and the half that is about *here* is the half
+    /// worth having in front of you. `Alt-P` in the terminal view offers the
+    /// same list one line at a time; a window has room to show it.
+    pub show_shell_history: bool,
+    shell_history_of: Option<PathBuf>,
+    shell_history: Vec<journal::Past>,
+    shell_history_read_at: f64,
     /// Whether both panes are shown. With one, it is the active pane that
     /// fills the window; the other keeps its directory and cursor for when it
     /// comes back.
@@ -550,6 +586,14 @@ impl GuiApp {
             left_view: ViewMode::Details,
             right_view: ViewMode::Details,
             show_sidebar: true,
+            show_keys: true,
+            history_of: None,
+            history_rows: Vec::new(),
+            history_read_at: 0.0,
+            show_shell_history: true,
+            shell_history_of: None,
+            shell_history: Vec::new(),
+            shell_history_read_at: 0.0,
             // One pane to begin with, which is XTree's shape and the one
             // most work actually needs: a tree and its files, with the whole
             // width to show them in. The second is for the few things that
@@ -770,8 +814,12 @@ impl GuiApp {
         // pane's own header. They all arrive through this one function, and a
         // pane handed back by three of the four would be worse than one never
         // handed back at all.
-        let was_previewing = self.view(side) == ViewMode::Preview;
-        if was_previewing && mode != ViewMode::Preview && self.pane_opened_to_view {
+        // Either of the two views that answer about somewhere else: a pane
+        // borrowed to show one has to be given back when it stops, whichever
+        // it was.
+        let was_borrowed = matches!(self.view(side), ViewMode::Preview | ViewMode::History);
+        let still_borrowed = matches!(mode, ViewMode::Preview | ViewMode::History);
+        if was_borrowed && !still_borrowed && self.pane_opened_to_view {
             self.pane_opened_to_view = false;
             if side == Side::Right {
                 self.show_right = false;
@@ -779,9 +827,15 @@ impl GuiApp {
                 self.active = Side::Left;
             }
         }
-        // Two quick-view panes would have nothing to look at: each follows the
-        // other's cursor, and neither would be a listing to move a cursor in.
-        if mode == ViewMode::Preview && self.view(side.other()) == ViewMode::Preview {
+        // Two panes that both follow the other would have nothing to follow:
+        // neither would be a listing with a cursor in it.
+        let follows_the_other = matches!(mode, ViewMode::Preview | ViewMode::History);
+        if follows_the_other
+            && matches!(
+                self.view(side.other()),
+                ViewMode::Preview | ViewMode::History
+            )
+        {
             let other = side.other();
             match other {
                 Side::Left => self.left_view = ViewMode::Details,
@@ -1675,6 +1729,15 @@ impl eframe::App for GuiApp {
                 .show(ctx, |ui| self.console_panel(ui));
         }
 
+        // Above the shell and below the panes, which is where a commander
+        // has always put it and where it reads as belonging to the files.
+        if self.show_keys {
+            egui::TopBottomPanel::bottom("keys")
+                .exact_height(26.0)
+                .frame(chrome_frame(theme::surface()))
+                .show(ctx, |ui| self.key_bar(ui));
+        }
+
         if self.show_sidebar {
             egui::SidePanel::left("sidebar")
                 .exact_width(210.0)
@@ -2168,6 +2231,48 @@ impl GuiApp {
                 {
                     self.show_right = !self.show_right;
                 }
+                // The two views that answer about the folder you are
+                // standing in, drawn in the pane you are not. They came off
+                // the panes' own switch, so this and the two keys are where
+                // they live - a feature reachable only by a key nobody has
+                // been told about is not reachable.
+                let looking = self.view(self.active.other());
+                let views = tool_button(
+                    ui,
+                    icons::Tool::QuickView,
+                    "Look at this folder in the other pane",
+                    matches!(looking, ViewMode::Preview | ViewMode::History),
+                );
+                let mut want: Option<keys::Action> = None;
+                egui::Popup::menu(&views).show(|ui| {
+                    ui.set_min_width(220.0);
+                    if ui
+                        .selectable_label(looking == ViewMode::Preview, "Quick view    F3")
+                        .clicked()
+                    {
+                        want = Some(keys::Action::QuickView);
+                    }
+                    if ui
+                        .selectable_label(looking == ViewMode::History, "Folder history    Alt-H")
+                        .clicked()
+                    {
+                        want = Some(keys::Action::ViewHistory);
+                    }
+                });
+                if let Some(action) = want {
+                    self.run_action(action);
+                }
+
+                if tool_button(
+                    ui,
+                    icons::Tool::Keys,
+                    "Function keys under the panes",
+                    self.show_keys,
+                )
+                .clicked()
+                {
+                    self.show_keys = !self.show_keys;
+                }
                 if tool_button(
                     ui,
                     icons::Tool::ListView,
@@ -2324,11 +2429,33 @@ impl GuiApp {
         // Pane header: where you are, and how much is here.
         let current = self.view(side);
         let panel = self.panel(side);
-        let name = panel
-            .cwd
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| panel.cwd.display().to_string());
+        let folder_name = |panel: &Panel| {
+            panel
+                .cwd
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| panel.cwd.display().to_string())
+        };
+        // A pane answering about somewhere else says where that is. It used
+        // to show its own directory's name, which with two panes both called
+        // `src` read as a pane describing itself and was plainly wrong: what
+        // is on screen is the *other* pane's folder, and the header is the
+        // only thing that can say so.
+        let answers_elsewhere = matches!(current, ViewMode::Preview | ViewMode::History);
+        let name = match current {
+            ViewMode::History => format!(
+                "History of {}",
+                lost_commander_core::paths::undecorated(&self.panel(side.other()).cwd).display()
+            ),
+            ViewMode::Preview => match self.panel(side.other()).selected() {
+                Some(entry) => format!(
+                    "Quick view: {}",
+                    lost_commander_core::paths::undecorated(&entry.path).display()
+                ),
+                None => "Quick view".to_string(),
+            },
+            _ => folder_name(panel),
+        };
         let count = panel.entries.len().saturating_sub(1);
         // Worked out here rather than in the closure below, which needs
         // unique access to `self` and so cannot hold a borrow of the panel.
@@ -2347,24 +2474,27 @@ impl GuiApp {
             );
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 // The view switch lives here rather than on the toolbar,
-                // because it belongs to this pane and not to the window.
-                for (mode, tool, hint) in [
-                    (
-                        ViewMode::Preview,
-                        icons::Tool::QuickView,
-                        "Quick view - the other pane's selected file",
-                    ),
-                    (
-                        ViewMode::Tree,
-                        icons::Tool::TreeView,
-                        "Tree - where this pane is",
-                    ),
-                    (ViewMode::Grid, icons::Tool::GridView, "Icon grid"),
-                    (ViewMode::Details, icons::Tool::ListView, "Detail list"),
-                ] {
-                    if tool_button(ui, tool, hint, current == mode).clicked() {
-                        self.set_view(side, mode);
-                        self.active = side;
+                // because it belongs to this pane and not to the window. It
+                // is how *this* pane draws its own directory, and nothing
+                // else - so a pane that is not showing its own directory has
+                // no use for it, and drawing three inert-looking buttons
+                // beside somebody else's folder only invites the question of
+                // which folder they would apply to. F3 and Alt-H are the way
+                // back, and the toolbar menu says so.
+                if !answers_elsewhere {
+                    for (mode, tool, hint) in [
+                        (
+                            ViewMode::Tree,
+                            icons::Tool::TreeView,
+                            "Tree - where this pane is",
+                        ),
+                        (ViewMode::Grid, icons::Tool::GridView, "Icon grid"),
+                        (ViewMode::Details, icons::Tool::ListView, "Detail list"),
+                    ] {
+                        if tool_button(ui, tool, hint, current == mode).clicked() {
+                            self.set_view(side, mode);
+                            self.active = side;
+                        }
                     }
                 }
 
@@ -2379,6 +2509,11 @@ impl GuiApp {
         // not - so it is drawn instead of the pane's ScrollArea, not inside it.
         if self.view(side) == ViewMode::Preview {
             self.pane_preview(&mut inner, side);
+            return;
+        }
+
+        if self.view(side) == ViewMode::History {
+            self.pane_history(&mut inner, side);
             return;
         }
 
@@ -2409,8 +2544,8 @@ impl GuiApp {
                     ViewMode::Grid => self.grid_view(ui, side, focused),
                     // Drawn as halves above, and never inside this one.
                     ViewMode::Tree => false,
-                    // Handled above; it does not belong in a ScrollArea.
-                    ViewMode::Preview => false,
+                    // Handled above; they do not belong in a ScrollArea.
+                    ViewMode::Preview | ViewMode::History => false,
                 };
                 clicked_side |= hit;
             });
@@ -3685,6 +3820,7 @@ impl GuiApp {
                 self.set_view(other, mode);
                 self.active = side;
             }
+            A::ViewHistory => self.history_of_here(),
             A::ToggleHidden => {
                 self.panel_mut(side).toggle_hidden();
                 let showing = self.panel(side).show_hidden;
@@ -4392,6 +4528,29 @@ impl GuiApp {
     }
 
     /// F3: show the file in the other pane's quick view.
+    /// `Alt-H`: what has been done to the things in this folder, next door.
+    ///
+    /// The same shape as [`GuiApp::view_selected`], and for the same reason:
+    /// the answer is about the folder you are standing in, so it cannot be
+    /// drawn in the pane that is showing it. A second press stops, and a pane
+    /// opened only to answer is folded away again when it does.
+    fn history_of_here(&mut self) {
+        let side = self.active;
+        if self.view(side.other()) == ViewMode::History {
+            self.set_view(side.other(), ViewMode::Details);
+            self.active = side;
+            self.info("History off.");
+            return;
+        }
+        if !self.show_right {
+            self.show_right = true;
+            self.pane_opened_to_view = true;
+        }
+        self.set_view(side.other(), ViewMode::History);
+        self.active = side;
+        self.info("History of this folder, in the other pane. Alt-H again to stop.");
+    }
+
     fn view_selected(&mut self) {
         let side = self.active;
         if self.panel(side).selected().is_none() {
@@ -6819,6 +6978,27 @@ impl GuiApp {
                 }
 
                 ui.add_space(6.0);
+                // On by default, and turned off here rather than in the
+                // toolbar: it belongs to the shell, not to the window.
+                let fill = if self.show_shell_history {
+                    theme::accent()
+                } else {
+                    theme::surface_hi()
+                };
+                if ui
+                    .add(
+                        egui::Button::new(
+                            RichText::new("hist").size(11.0).color(theme::text()),
+                        )
+                        .fill(fill)
+                        .corner_radius(CornerRadius::same(4)),
+                    )
+                    .on_hover_text("What was run in this directory, beside the shell")
+                    .clicked()
+                {
+                    self.show_shell_history = !self.show_shell_history;
+                }
+
                 self.output_buttons(ui, any_open, true);
 
                 // Recording belongs to a live terminal, so it is here and not
@@ -6880,9 +7060,20 @@ impl GuiApp {
 
         ui.add_space(4.0);
 
-        let area = ui.available_rect_before_wrap();
+        let mut area = ui.available_rect_before_wrap();
         if area.height() < 20.0 {
             return;
+        }
+
+        // The list beside the shell, when the drawer is wide enough that
+        // taking a column from it still leaves a usable terminal. Narrower
+        // than that and the shell wraps its own output to nothing, which is a
+        // worse trade than not showing the list.
+        if self.show_shell_history && area.width() >= 620.0 {
+            let column = (area.width() * 0.28).clamp(180.0, 320.0);
+            let beside = Rect::from_min_max(egui::pos2(area.max.x - column, area.min.y), area.max);
+            area = Rect::from_min_max(area.min, egui::pos2(beside.min.x - 8.0, area.max.y));
+            self.shell_history_column(ui, beside);
         }
 
         if self.terminals.is_empty() {
@@ -7179,6 +7370,232 @@ impl GuiApp {
     }
 
     // ---- status strip ------------------------------------------------------
+
+    /// What has been run in the shell's own directory, beside it.
+    ///
+    /// Clicking a line types it into the shell without running it, which is
+    /// the same bargain `Enter` on a journal entry makes: a command from
+    /// yesterday may want a different flag today, and running it on one click
+    /// would be a keystroke that deletes something.
+    fn shell_history_column(&mut self, ui: &mut egui::Ui, area: Rect) {
+        let here = self
+            .terminals
+            .active()
+            .map(|session| session.cwd.clone())
+            .unwrap_or_else(|| self.panel(self.active).cwd.clone());
+        let now = ui.input(|input| input.time);
+        if self.shell_history_of.as_deref() != Some(here.as_path())
+            || now - self.shell_history_read_at > 1.0
+        {
+            self.shell_history = self.commands_in(&here);
+            self.shell_history_of = Some(here.clone());
+            self.shell_history_read_at = now;
+        }
+
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(area));
+        child.label(
+            RichText::new("Run here")
+                .size(10.5)
+                .color(theme::text_faint()),
+        );
+        if self.shell_history.is_empty() {
+            child.label(
+                RichText::new("nothing yet")
+                    .size(11.0)
+                    .color(theme::text_faint()),
+            );
+            return;
+        }
+
+        let mut reuse: Option<String> = None;
+        egui::ScrollArea::vertical()
+            .id_salt("shell_history")
+            .auto_shrink([false, false])
+            .show(&mut child, |ui| {
+                for past in &self.shell_history {
+                    let line = past.line.clone();
+                    if ui
+                        .add(
+                            egui::Label::new(
+                                RichText::new(&line)
+                                    .monospace()
+                                    .size(11.0)
+                                    .color(theme::text_dim()),
+                            )
+                            .truncate()
+                            .sense(Sense::click()),
+                        )
+                        .on_hover_text("Click to put this on the command line")
+                        .clicked()
+                    {
+                        reuse = Some(line);
+                    }
+                }
+            });
+        if let Some(line) = reuse {
+            self.type_into_command_line(&line);
+            self.terminal_focused = true;
+        }
+    }
+
+    /// The last week of the shell stream, as what was run in one directory.
+    fn commands_in(&self, here: &Path) -> Vec<journal::Past> {
+        let Some(journal) = &self.journal else {
+            return Vec::new();
+        };
+        let mut records = Vec::new();
+        let mut days = journal.days(journal::Stream::Shell);
+        days.truncate(7);
+        for day in days.into_iter().rev() {
+            records.extend(journal.read(journal::Stream::Shell, day));
+        }
+        // Only what was run *here*: the rest is another directory's work, and
+        // the whole reason this program records where a command ran.
+        journal::commands_before(&records, here)
+            .into_iter()
+            .filter(|past| past.cwd == here)
+            .collect()
+    }
+
+    /// What was done to the things in the other pane's folder.
+    fn pane_history(&mut self, ui: &mut egui::Ui, side: Side) {
+        let here = self.panel(side.other()).cwd.clone();
+        let now = ui.input(|input| input.time);
+        if self.history_of.as_deref() != Some(here.as_path()) || now - self.history_read_at > 1.0 {
+            self.history_rows = self.happenings_in(&here);
+            self.history_of = Some(here.clone());
+            self.history_read_at = now;
+        }
+
+        if self.history_rows.is_empty() {
+            ui.label(
+                RichText::new(format!(
+                    "Nothing recorded in {} - the last week of the account is what this reads.",
+                    lost_commander_core::paths::undecorated(&here).display()
+                ))
+                .color(theme::text_faint())
+                .size(11.5),
+            );
+            return;
+        }
+
+        egui::ScrollArea::vertical()
+            .id_salt("pane_history")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                for happening in &self.history_rows {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        ui.label(
+                            RichText::new(journal::clock(happening.at))
+                                .monospace()
+                                .size(11.0)
+                                .color(theme::text_faint()),
+                        );
+                        // A delete and a failure read the same way here on
+                        // purpose: both are the row you are scanning for.
+                        let alarming =
+                            happening.failed.is_some() || happening.kind.is_destructive();
+                        let colour = if alarming {
+                            theme::danger()
+                        } else {
+                            theme::text_dim()
+                        };
+                        ui.label(
+                            RichText::new(happening.kind.label())
+                                .size(11.0)
+                                .color(colour),
+                        );
+                        ui.label(
+                            RichText::new(&happening.name)
+                                .size(11.5)
+                                .color(theme::text()),
+                        );
+                        if let Some(became) = &happening.became {
+                            ui.label(
+                                RichText::new(format!("-> {became}"))
+                                    .size(11.5)
+                                    .color(theme::text()),
+                            );
+                        }
+                        if let Some(other) = &happening.other {
+                            // Which way it went, which is half of what the row
+                            // is worth: a file arriving and a file leaving look
+                            // identical without it.
+                            let way = if happening.incoming { "from" } else { "to" };
+                            ui.label(
+                                RichText::new(format!(
+                                    "{way} {}",
+                                    lost_commander_core::paths::undecorated(other).display()
+                                ))
+                                .size(11.0)
+                                .color(theme::text_faint()),
+                            );
+                        }
+                        if let Some(why) = &happening.failed {
+                            ui.label(
+                                RichText::new(format!("- {why}"))
+                                    .size(11.0)
+                                    .color(theme::danger()),
+                            );
+                        }
+                    });
+                }
+            });
+    }
+
+    /// The last week of the file stream, as what happened in one folder.
+    fn happenings_in(&self, here: &Path) -> Vec<journal::Happening> {
+        let Some(journal) = &self.journal else {
+            return Vec::new();
+        };
+        let mut records = Vec::new();
+        // Newest last, so `happened_in` walking backwards sees the newest
+        // first. Far enough back to be useful, not so far that a pane reads a
+        // year of files.
+        let mut days = journal.days(journal::Stream::Files);
+        days.truncate(7);
+        for day in days.into_iter().rev() {
+            records.extend(journal.read(journal::Stream::Files, day));
+        }
+        journal::happened_in(&records, here)
+    }
+
+    /// The function keys, as the terminal view has always shown them.
+    ///
+    /// What this bar says is read out of the same table the keyboard uses, so
+    /// it cannot drift from what the keys do - a key bar that lies is worse
+    /// than none, and this is the third time in this program a hand-written
+    /// list of keys had gone stale. F9 is not "sort" here, whatever Norton
+    /// did: in the graphical view it opens the selection menu, and the bar
+    /// says so because it is asking rather than remembering.
+    fn key_bar(&mut self, ui: &mut egui::Ui) {
+        let mut chosen: Option<keys::Action> = None;
+        ui.horizontal_centered(|ui| {
+            ui.spacing_mut().item_spacing.x = 3.0;
+            let width = (ui.available_width() / 12.0).clamp(52.0, 120.0);
+            for (number, action) in keys::function_keys() {
+                // "F5 Copy", not "5 Copy": the point of the bar is to say
+                // which key does it, and the number alone is what a reader
+                // has to already know to make sense of.
+                let label = format!("F{number} {}", keys::name_of(action));
+                if ui
+                    .add_sized(
+                        Vec2::new(width, 20.0),
+                        egui::Button::new(RichText::new(label).size(10.5).color(theme::text()))
+                            .fill(theme::surface_hi())
+                            .corner_radius(CornerRadius::same(3)),
+                    )
+                    .clicked()
+                {
+                    chosen = Some(action);
+                }
+            }
+        });
+        if let Some(action) = chosen {
+            self.run_action(action);
+        }
+    }
 
     fn status_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_centered(|ui| {
@@ -9642,6 +10059,130 @@ mod tests {
         assert_ne!(second, first);
         assert!(first.exists() && second.exists());
         app.toggle_recording("stamp");
+    }
+
+    #[test]
+    fn the_key_bar_says_what_the_keyboard_does() {
+        // The bar is read out of `action_for`, so this is the check that it
+        // is still asking rather than remembering - and that nothing on it is
+        // drawn with an empty label.
+        let bar = keys::function_keys();
+        assert_eq!(bar.len(), 10, "F1 to F10");
+        for (number, action) in &bar {
+            assert!(
+                !keys::name_of(*action).is_empty(),
+                "F{number} is on the bar with nothing to say"
+            );
+        }
+        // F9 is the selection menu here, whatever Norton put there. If that
+        // ever changes, the bar changes with it and this line is what says so.
+        assert_eq!(
+            bar.iter().find(|(number, _)| *number == 9).map(|(_, a)| *a),
+            Some(keys::Action::SelectMenu)
+        );
+        assert_eq!(
+            bar.iter().find(|(number, _)| *number == 5).map(|(_, a)| *a),
+            Some(keys::Action::Copy)
+        );
+    }
+
+    #[test]
+    fn history_answers_in_the_other_pane_and_gives_it_back() {
+        use keys::Action as A;
+        let (_root, mut app) = fixture();
+        assert!(!app.show_right, "one pane to begin with");
+
+        app.run_action(A::ViewHistory);
+        // The answer is about the folder you are standing in, so it cannot be
+        // drawn in the pane showing it - and the cursor stays where it was.
+        assert!(app.show_right);
+        assert_eq!(app.view(Side::Right), ViewMode::History);
+        assert_eq!(app.active, Side::Left);
+
+        app.run_action(A::ViewHistory);
+        assert_eq!(app.view(Side::Right), ViewMode::Details);
+        assert!(
+            !app.show_right,
+            "a pane opened only to answer is folded away again"
+        );
+    }
+
+    #[test]
+    fn a_pane_the_reader_opened_survives_the_history_closing() {
+        use keys::Action as A;
+        let (_root, mut app) = fixture();
+        app.show_right = true;
+
+        app.run_action(A::ViewHistory);
+        app.run_action(A::ViewHistory);
+        assert!(app.show_right, "it was not borrowed, so it is not taken");
+    }
+
+    #[test]
+    fn two_panes_cannot_both_follow_the_other_one() {
+        let (_root, mut app) = fixture();
+        app.show_right = true;
+
+        // History and quick view both read the *other* pane, so a pair of
+        // them would be two panes looking at each other with no cursor
+        // between them.
+        app.set_view(Side::Left, ViewMode::History);
+        app.set_view(Side::Right, ViewMode::History);
+        assert_eq!(app.view(Side::Left), ViewMode::Details);
+        assert_eq!(app.view(Side::Right), ViewMode::History);
+
+        app.set_view(Side::Left, ViewMode::Preview);
+        assert_eq!(
+            app.view(Side::Right),
+            ViewMode::Details,
+            "a history pane gives way to a quick view as well"
+        );
+    }
+
+    #[test]
+    fn the_history_view_reads_what_was_done_in_the_other_pane_s_folder() {
+        let (_root, mut app) = fixture();
+        let _dir = with_a_journal(&mut app);
+        let here = app.left.cwd().to_path_buf();
+
+        app.note(journal::Event::new(
+            journal::Kind::Delete,
+            here.join("a.txt"),
+        ));
+        app.note(
+            journal::Event::new(journal::Kind::Copy, "/somewhere/report.txt")
+                .to(here.join("report.txt").display().to_string()),
+        );
+
+        // The right pane is the one showing the history, so what it reads is
+        // the left pane's folder - the one being stood in.
+        let rows = app.happenings_in(&here);
+        let names: Vec<&str> = rows.iter().map(|h| h.name.as_str()).collect();
+        assert_eq!(names, vec!["report.txt", "a.txt"], "newest first");
+        assert!(rows[0].incoming, "it arrived here, and the row can say so");
+
+        // Somewhere else has its own story, and it is not this one.
+        assert!(app.happenings_in(Path::new("/nowhere")).is_empty());
+    }
+
+    #[test]
+    fn the_shell_column_lists_only_what_was_run_in_that_directory() {
+        let (_root, mut app) = fixture();
+        let _dir = with_a_journal(&mut app);
+        let here = app.left.cwd().to_path_buf();
+
+        app.note(journal::Event::new(journal::Kind::Command, &here).note("cargo test"));
+        app.note(journal::Event::new(journal::Kind::Command, "/elsewhere").note("make"));
+
+        let lines: Vec<String> = app
+            .commands_in(&here)
+            .into_iter()
+            .map(|past| past.line)
+            .collect();
+        // `commands_before` offers everything, here first; the column keeps
+        // only the here half, because it is a list about this directory and
+        // there is no room to explain that half of it is not.
+        assert_eq!(lines, vec!["cargo test"]);
     }
 
     /// An app with an account, kept in a directory of its own.

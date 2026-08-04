@@ -1079,6 +1079,113 @@ fn directory_of(kind: Kind, path: &str) -> Option<PathBuf> {
     }
 }
 
+/// One thing that was done to something living in a directory.
+///
+/// The account read the other way round: the journal screen asks "what did I
+/// do today", and this asks "what has been done to the things *here*" - which
+/// is the question you have standing in a folder wondering why it looks like
+/// this.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Happening {
+    pub at: i64,
+    pub kind: Kind,
+    /// The name inside this directory that it was about.
+    pub name: String,
+    /// The other end, when there is one and it is somewhere else: where a
+    /// copy came from, or where a move went.
+    pub other: Option<PathBuf>,
+    /// Set when this end is where the thing *arrived*, so a row can say
+    /// "from" rather than "to".
+    pub incoming: bool,
+    /// What it became, when the other end has a different name: a rename, or
+    /// a copy that was given a new name. Without this a rename reads as the
+    /// old name alone, which is the half of it nobody needs.
+    pub became: Option<String>,
+    pub note: String,
+    pub failed: Option<String>,
+}
+
+/// The directory a path lives in - not the one it *is*.
+///
+/// Unlike [`directory_of`], a made directory belongs to its parent here: it
+/// appeared in that listing, and that is where somebody watching would have
+/// seen it happen.
+fn holder_of(path: &str) -> Option<PathBuf> {
+    if path.trim().is_empty() {
+        return None;
+    }
+    PathBuf::from(path).parent().map(Path::to_path_buf)
+}
+
+fn name_of(path: &str) -> String {
+    Path::new(path)
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| path.to_string())
+}
+
+/// What was done to the contents of one directory, newest first.
+///
+/// Both ends count: a file copied *into* here belongs in this folder's story
+/// as much as one copied out of it, and the row says which way it went.
+///
+/// Commands are left out. A command is recorded against the directory it ran
+/// in rather than a file, so treating its path the same way would file every
+/// command under the folder above the one it ran in - and commands have their
+/// own list, from [`commands_before`].
+pub fn happened_in(records: &[Record], here: &Path) -> Vec<Happening> {
+    let mut out: Vec<Happening> = Vec::new();
+    for record in records.iter().rev() {
+        let Record::Event(event) = record else {
+            continue;
+        };
+        if event.kind == Kind::Command {
+            continue;
+        }
+        let from_here = holder_of(&event.path).as_deref() == Some(here);
+        let arrived = event
+            .to
+            .as_deref()
+            .and_then(holder_of)
+            .is_some_and(|holder| holder == here);
+        if !from_here && !arrived {
+            continue;
+        }
+
+        // The end that is here names the row; the other end, if it is
+        // somewhere else, is what the row can point at.
+        let (name, other) = if from_here {
+            (
+                name_of(&event.path),
+                event.to.as_deref().and_then(holder_of),
+            )
+        } else {
+            (
+                name_of(event.to.as_deref().unwrap_or(&event.path)),
+                holder_of(&event.path),
+            )
+        };
+        // The name at the other end, when it is a different name. A copy
+        // that kept its name says nothing here, and should not.
+        let far_end = if from_here {
+            event.to.as_deref().map(name_of)
+        } else {
+            Some(name_of(&event.path))
+        };
+        out.push(Happening {
+            at: event.at,
+            kind: event.kind,
+            became: far_end.filter(|other| *other != name),
+            name,
+            other: other.filter(|elsewhere| elsewhere != here),
+            incoming: arrived && !from_here,
+            note: event.note.clone(),
+            failed: event.failed.clone(),
+        });
+    }
+    out
+}
+
 /// Where to stand to look at what this entry describes.
 pub fn scene_of(event: &Event) -> Option<Scene> {
     let left = directory_of(event.kind, &event.path)?;
@@ -1904,5 +2011,74 @@ mod tests {
             Record::Event(Event::new(Kind::Command, "/work")),
         ];
         assert!(commands_before(&records, Path::new("/work")).is_empty());
+    }
+
+    #[test]
+    fn what_happened_here_is_newest_first_and_names_the_file() {
+        let records = vec![
+            Record::Event(Event::new(Kind::MakeDir, "/work/build")),
+            Record::Event(Event::new(Kind::Delete, "/work/old.txt")),
+        ];
+        let here = happened_in(&records, Path::new("/work"));
+        let names: Vec<&str> = here.iter().map(|h| h.name.as_str()).collect();
+        assert_eq!(names, vec!["old.txt", "build"]);
+        // A made directory belongs to the folder it appeared in, not to
+        // itself - that listing is where somebody would have seen it happen.
+        assert_eq!(here[1].kind, Kind::MakeDir);
+    }
+
+    #[test]
+    fn both_ends_of_a_copy_are_part_of_a_folder_s_story() {
+        let records = vec![Record::Event(
+            Event::new(Kind::Copy, "/src/report.txt").to("/work/report.txt"),
+        )];
+
+        // Where it came from: it left here, and the row can point at where
+        // it went.
+        let out = happened_in(&records, Path::new("/src"));
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].name, "report.txt");
+        assert!(!out[0].incoming);
+        assert_eq!(out[0].other, Some(PathBuf::from("/work")));
+
+        // Where it arrived: the same event, read from the other end. A file
+        // appearing in a folder is the thing you most want explained.
+        let into = happened_in(&records, Path::new("/work"));
+        assert_eq!(into.len(), 1);
+        assert!(into[0].incoming);
+        assert_eq!(into[0].other, Some(PathBuf::from("/src")));
+    }
+
+    #[test]
+    fn a_copy_within_one_folder_points_nowhere_else() {
+        let records = vec![Record::Event(
+            Event::new(Kind::Copy, "/work/a.txt").to("/work/b.txt"),
+        )];
+        let here = happened_in(&records, Path::new("/work"));
+        assert_eq!(here.len(), 1);
+        assert_eq!(here[0].other, None, "both ends are this folder");
+    }
+
+    #[test]
+    fn a_folder_s_story_is_about_its_own_contents() {
+        let records = vec![
+            Record::Event(Event::new(Kind::Delete, "/work/sub/deep.txt")),
+            Record::Event(Event::new(Kind::Delete, "/elsewhere/other.txt")),
+            // A command is filed against the directory it ran in, so reading
+            // its path the same way would put every command in the folder
+            // above the one it ran in.
+            Record::Event(Event::new(Kind::Command, "/work/sub").note("make")),
+        ];
+        assert!(happened_in(&records, Path::new("/work")).is_empty());
+        assert_eq!(happened_in(&records, Path::new("/work/sub")).len(), 1);
+    }
+
+    #[test]
+    fn a_failure_is_kept_because_it_is_the_answer_more_often_than_not() {
+        let records = vec![Record::Event(
+            Event::new(Kind::Delete, "/work/locked.txt").failed("in use"),
+        )];
+        let here = happened_in(&records, Path::new("/work"));
+        assert_eq!(here[0].failed.as_deref(), Some("in use"));
     }
 }

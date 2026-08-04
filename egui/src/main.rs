@@ -25,7 +25,7 @@ fn main() -> eframe::Result<()> {
             "lostc-gui {VERSION} - graphical file manager
 
 USAGE:
-    lostc-gui [--grid] [--tree] [--preview] [LEFT_DIR] [RIGHT_DIR]
+    lostc-gui [--grid] [--tree] [--preview] [--history] [LEFT_DIR] [RIGHT_DIR]
     lostc-gui --screenshot FILE.png [LEFT_DIR] [RIGHT_DIR]
     lostc-gui --help | --version
 
@@ -35,9 +35,14 @@ USAGE:
     --tree starts the left pane with the directory tree above its files,
     which is XTree's arrangement: walk directories above, tag files below.
 
-    --preview starts the right pane showing what the left one is pointing at,
-    which is what F3 does. It pairs with --screenshot: a quick view cannot be
-    checked from a picture of the window it is not open in.
+    --preview starts the second pane showing what the first one is pointing
+    at, which is what F3 does, and opens that pane to do it. It pairs with
+    --screenshot: a quick view cannot be checked from a picture of the window
+    it is not open in.
+
+    --history starts the second pane showing what has been done to the things
+    in the first one's folder - the account read from where you are standing
+    rather than by day. It opens the second pane, as --preview does.
 
     --screenshot renders a few frames, saves a PNG and exits. It is how the
     view is checked without a human at the screen."
@@ -56,6 +61,7 @@ USAGE:
     let mut grid = false;
     let mut preview = false;
     let mut tree = false;
+    let mut history = false;
     let mut positional: Vec<String> = Vec::new();
     let mut rest = args.into_iter();
     while let Some(arg) = rest.next() {
@@ -64,6 +70,7 @@ USAGE:
             "--grid" => grid = true,
             "--preview" => preview = true,
             "--tree" => tree = true,
+            "--history" => history = true,
             _ => positional.push(arg),
         }
     }
@@ -109,6 +116,10 @@ USAGE:
                 );
             }
             if preview {
+                // The second pane is folded away to begin with, so a flag
+                // that puts something *in* it has to open it as well - F3
+                // does exactly this when a reader asks the same question.
+                app.show_right = true;
                 app.right_view = lost_commander_egui::ViewMode::Preview;
                 // The cursor starts on `..`, and a quick view of the parent
                 // directory is a count of what is in it - true, and not what
@@ -118,6 +129,10 @@ USAGE:
                 if let Some(first) = panel.entries.iter().position(|e| !e.is_parent()) {
                     panel.cursor_to(first);
                 }
+            }
+            if history {
+                app.show_right = true;
+                app.right_view = lost_commander_egui::ViewMode::History;
             }
             if grid {
                 // Both panes, since the view is now a per-pane choice.

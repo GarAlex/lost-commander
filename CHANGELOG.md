@@ -26,6 +26,34 @@ Notable changes, newest first. Versions follow [semantic versioning]; until
 
 ### Added
 
+- **A row of function keys under the panes in the graphical view**, as in every
+  commander since Norton. It had none, which left `F5` a secret kept from
+  anybody who had not read the key list. What it says is read out of the same
+  table the keyboard uses, so it cannot drift: `F9` is *Select* in this
+  front-end rather than *Sort*, and the bar says so because it is asking
+  rather than remembering. The toolbar folds it away.
+- **Folder history, in the other pane** (`Alt-H`): what was copied in, moved
+  out, renamed, deleted or created here, newest first, with failures kept -
+  "why is this file not here" is answered by the attempt that failed as often
+  as by the one that worked. The journal screen answers "what did I do today";
+  this answers "why does this folder look like this", which is the question
+  you have while looking at it.
+- **What was run here, beside the shell in the graphical view.** The terminal
+  view has had this column since it got a shell screen; the drawer now has it
+  too, on by default and off with `hist`. Clicking a line puts it on the
+  command line without running it.
+
+### Changed
+
+- **Quick view and folder history came off the panes' own view switch.** That
+  switch is list / grid / tree - three ways of drawing *this* pane's own
+  directory. The other two are about the folder in the *other* pane, so
+  choosing one from a pane's own header put an answer in the pane you were
+  standing in about somewhere you were not. They are `F3` and `Alt-H`, both
+  act on the opposite pane, and both are on the toolbar's view menu. A pane
+  showing either now names the folder it is showing and drops the switch,
+  which would otherwise offer to redraw a directory that pane is not showing.
+
 - **The shell screen lists what was run in this directory**, beside it, with
   the one `Alt-P` is offering marked. A shell's own history is one list with
   no idea where you were; this is the half that is about here.

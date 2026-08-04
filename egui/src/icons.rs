@@ -213,6 +213,10 @@ pub enum Tool {
     QuickView,
     Move,
     Select,
+    /// The row of function keys.
+    Keys,
+    /// What has been done: a clock, which is what every program means by it.
+    History,
 }
 
 pub fn draw_tool(painter: &Painter, rect: Rect, tool: Tool, colour: Color32) {
@@ -368,6 +372,25 @@ pub fn draw_tool(painter: &Painter, rect: Rect, tool: Tool, colour: Color32) {
             painter.line_segment([p(0.16, 0.82), p(0.84, 0.82)], line);
         }
         // A tick in a box: the selection menu.
+        // Three keys in a row, which is what the bar looks like from across
+        // the room - and that is how a toggle should read.
+        Tool::Keys => {
+            for x in [0.10f32, 0.40, 0.70] {
+                painter.rect_stroke(
+                    Rect::from_min_max(p(x, 0.36), p(x + 0.20, 0.64)),
+                    CornerRadius::same(1),
+                    line,
+                    eframe::egui::StrokeKind::Inside,
+                );
+            }
+        }
+        // A clock, hands at a readable angle rather than at noon, where they
+        // would overlap and look like one line.
+        Tool::History => {
+            painter.circle_stroke(square.center(), side * 0.34, line);
+            painter.line_segment([square.center(), p(0.50, 0.24)], line);
+            painter.line_segment([square.center(), p(0.70, 0.56)], line);
+        }
         Tool::Select => {
             painter.rect_stroke(
                 Rect::from_min_max(p(0.14, 0.16), p(0.86, 0.84)),

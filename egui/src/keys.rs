@@ -79,6 +79,12 @@ pub enum Action {
     ViewGrid,
     ViewTree,
     QuickView,
+    /// Put the *other* pane on the history of this one's folder.
+    ///
+    /// Like [`Action::QuickView`] and unlike the list/grid/tree switch, this
+    /// is about the pane you are not standing in: it answers a question about
+    /// where you are, so it has to be drawn somewhere else.
+    ViewHistory,
     ToggleHidden,
     ToggleSidebar,
     ToggleSecondPane,
@@ -223,6 +229,12 @@ pub fn action_for(key: Key, modifiers: Modifiers) -> Option<Action> {
     if alt && key == Key::F7 {
         return Some(Action::Find);
     }
+    // Alt-H puts the other pane on this folder's history. Alt rather than
+    // Ctrl because Ctrl-H is already "show hidden files", and one keystroke
+    // that means two things is one nobody trusts.
+    if alt && key == Key::H {
+        return Some(Action::ViewHistory);
+    }
     // Alt-Enter is Properties everywhere it exists, which is everywhere.
     if alt && key == Key::Enter {
         return Some(Action::Properties);
@@ -315,6 +327,55 @@ pub fn action_for(key: Key, modifiers: Modifiers) -> Option<Action> {
         Key::F12 => Action::ToggleSecondPane,
         _ => return None,
     })
+}
+
+/// The function keys and what each one does, for the bar under the panes.
+///
+/// Asked of [`action_for`] rather than written out again, so the bar cannot
+/// come to disagree with the keyboard. A hand-written list is how a key bar
+/// ends up advertising a key that was remapped two releases ago.
+pub fn function_keys() -> Vec<(u8, Action)> {
+    const KEYS: [(u8, Key); 10] = [
+        (1, Key::F1),
+        (2, Key::F2),
+        (3, Key::F3),
+        (4, Key::F4),
+        (5, Key::F5),
+        (6, Key::F6),
+        (7, Key::F7),
+        (8, Key::F8),
+        (9, Key::F9),
+        (10, Key::F10),
+    ];
+    KEYS.iter()
+        .filter_map(|(number, key)| {
+            action_for(*key, Modifiers::NONE).map(|action| (*number, action))
+        })
+        .collect()
+}
+
+/// Two or three words for what an action does, for the key bar.
+///
+/// Shorter than the help screen's wording, which has a whole line to spend.
+pub fn name_of(action: Action) -> &'static str {
+    use Action as A;
+    match action {
+        A::Help => "Help",
+        A::Rename => "Rename",
+        A::View => "View",
+        A::Edit => "Edit",
+        A::Copy => "Copy",
+        A::Move => "Move",
+        A::MkDir => "MkDir",
+        A::Delete => "Delete",
+        A::SelectMenu => "Select",
+        A::Quit => "Quit",
+        A::ToggleSidebar => "Sidebar",
+        A::ToggleSecondPane => "2nd pane",
+        // Every action the bar can reach is named above. This is here for
+        // the ones it cannot, so adding a key never fails to build.
+        _ => "",
+    }
 }
 
 /// What a printable character means when the panes have the keyboard.
@@ -464,6 +525,7 @@ pub const HELP: &[(&str, &str)] = &[
     ("Ctrl-Q", "quick view"),
     ("Ctrl-H, Alt-.", "show hidden files"),
     ("Ctrl-D", "bookmark this directory"),
+    ("Alt-H", "history of this folder, in the other pane"),
     ("F11 / F12", "sidebar / show or hide the second pane"),
     ("Shift-Enter", "open with a chosen application"),
     ("Shift-F4", "edit a file you do not own"),
@@ -695,6 +757,7 @@ mod tests {
             ViewGrid,
             ViewTree,
             QuickView,
+            ViewHistory,
             ToggleHidden,
             ToggleSidebar,
             ToggleSecondPane,

@@ -153,16 +153,37 @@ cargo run --bin lostc-gui                        # current directory
 cargo run --bin lostc-gui -- ~/src ~/documents   # left, and the second when it opens
 cargo run --bin lostc-gui -- --grid              # start both panes in the icon grid
 cargo run --bin lostc-gui -- --tree              # tree above the files, XTree's arrangement
-cargo run --bin lostc-gui -- --preview           # right pane follows the left, as F3 does
+cargo run --bin lostc-gui -- --preview           # second pane follows the first, as F3 does
+cargo run --bin lostc-gui -- --history           # second pane shows what was done in the first's folder
 cargo run --bin lostc-gui -- --help
 ```
 
-`Tab` opens the second pane and `F12` folds it away. `F3` borrows it for a
-preview and gives it back when the preview closes; a folder comparison opens
-it, since it has two directories to show. Each pane carries its own view
-switch in its header — a dense detail list, a grid of large icons, the
-directory tree, or a preview of whatever the *other* pane is pointing at. The
-function keys do what they do in the terminal view.
+`Tab` opens the second pane and `F12` folds it away. A folder comparison
+opens it, since it has two directories to show.
+
+Each pane carries its own view switch in its header — a dense detail list, a
+grid of large icons, or the directory tree. Those are three ways of drawing
+*this* pane's own directory, which is why they are the only three there.
+
+Two other things can be put on a pane, and neither is a way of drawing its own
+directory: **quick view** (`F3`) and **folder history** (`Alt-H`). Both are
+about the folder you are standing in, so both are drawn in the pane you are
+*not* — the one you asked from keeps the cursor. A pane showing either says
+whose folder it is showing in its header and drops the list/grid/tree switch,
+which would otherwise be three buttons offering to redraw a directory that
+pane is not showing. They are on the toolbar's view menu as well as on the
+keys, and a pane opened only to answer folds away again when it stops.
+
+Folder history is the account read from where you are standing rather than by
+day: what was copied in, moved out, renamed, deleted or created here, newest
+first, with failures kept — because "why is this file not here" is answered by
+the attempt that failed as often as by the one that worked. `Ctrl-J` still
+opens the whole journal, by day.
+
+Under the panes is the row of function keys, as in every commander since
+Norton. It is read out of the same table the keyboard uses, so it cannot come
+to disagree with what the keys actually do — `F9` is *Select* in this
+front-end, not *Sort*, and the bar says so. The toolbar can fold it away.
 
 There is one more argument, and it is how the view gets checked without a
 human at the screen:
@@ -203,9 +224,19 @@ terminal cannot, plus one thing not yet built:
 | The shell and the panel sharing a directory | yes, both ways | yes, both ways, and a tab can be pinned out of it | a `cd` either side moves the other; switching panes takes the shell along |
 | Session recording (`rec`) | — | yes | it records that shell, so it needs one |
 | Named colour schemes | one | several | the terminal view uses the classic blue/cyan palette, and a terminal has its own colours anyway |
+| Function keys along the bottom | yes | yes | the graphical one had none, which left `F5` a secret |
+| What was run here, beside the shell | yes | yes | `Alt-P`/`Alt-N` walk it in the terminal; the window shows the list |
+| What was done in *this folder* | the journal, by day (`Ctrl-J`) | that, and a pane beside it (`Alt-H`) | a window has room to show the answer next to the question |
 | Markdown rendered rather than shown as markup | — | yes | not built for the terminal yet; the parse is in the engine, so it is drawing that is missing, not logic |
 
 Reading bytes as hex, the directory tree, tabs and the journal are in both.
+
+**Beside the shell** — in both front-ends — is what has been run *in that
+directory*, newest first, `hist` in the graphical view turns the column off.
+A shell's own history is one list with no idea where you were standing, and
+the half that is about here is the half worth having in front of you. Clicking
+a line puts it on the command line without running it; the terminal view walks
+the same list with `Alt-P` and `Alt-N`.
 
 **On the shell.** `lostc` keeps one shell running underneath the panels for
 the whole session, the way Midnight Commander does. Typing goes to the
@@ -229,7 +260,7 @@ changes it.
 ## Testing
 
 ```sh
-cargo test                     # all 1061, from the workspace root
+cargo test                     # all 1072, from the workspace root
 ```
 
 From the root that is everything, because the root is a virtual manifest and
@@ -240,8 +271,8 @@ say `cargo test --workspace` there if you meant all of it.
 Per crate, when you want a fast loop:
 
 ```sh
-cargo test -p lost-commander-core    # 637 - the engine, seconds to build
-cargo test -p lost-commander-egui    # 196 - the graphical view
+cargo test -p lost-commander-core    # 642 - the engine, seconds to build
+cargo test -p lost-commander-egui    # 202 - the graphical view
 cargo test -p lost-commander-tui     # 122 - the terminal view
 cargo test -p lost-commander-ffi     # 106 - the C ABI
 ```
