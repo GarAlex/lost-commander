@@ -975,6 +975,59 @@ impl Line {
 }
 
 /// Flatten rows into lines, headings and all.
+/// Where the panels would have to be to see what an entry describes.
+///
+/// A record says what happened and to what; this says where to stand to look
+/// at it now. For a copy or a move that is two directories - the one it came
+/// from and the one it went to - which is the question anybody actually asks
+/// afterwards: what do both ends look like now?
+///
+/// Directories, not the files themselves: a panel shows a directory, and the
+/// file may well not be there any more. Whether either still exists is the
+/// caller's question - a path may have been deleted since, or be on a disk
+/// nobody has mounted today - and this deliberately does not ask, so it stays
+/// a pure function of the record.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Scene {
+    pub left: PathBuf,
+    /// The other end, for the operations that have one.
+    pub right: Option<PathBuf>,
+}
+
+/// The directory a recorded path was in.
+///
+/// A command records the directory it ran in and has no parent to take; for
+/// everything else the record names a file and the panel wants the directory
+/// holding it.
+fn directory_of(kind: Kind, path: &str) -> Option<PathBuf> {
+    if path.trim().is_empty() {
+        return None;
+    }
+    let path = PathBuf::from(path);
+    if kind == Kind::Command || kind == Kind::MakeDir {
+        return Some(path);
+    }
+    match path.parent() {
+        // A path with no parent is a root, and a root is a directory.
+        None => Some(path),
+        Some(parent) if parent.as_os_str().is_empty() => Some(path),
+        Some(parent) => Some(parent.to_path_buf()),
+    }
+}
+
+/// Where to stand to look at what this entry describes.
+pub fn scene_of(event: &Event) -> Option<Scene> {
+    let left = directory_of(event.kind, &event.path)?;
+    let right = event
+        .to
+        .as_deref()
+        .and_then(|to| directory_of(event.kind, to))
+        // The two ends of a copy within one directory are one place, and
+        // sending both panels there says nothing twice.
+        .filter(|right| *right != left);
+    Some(Scene { left, right })
+}
+
 pub fn lines(rows: &[Row]) -> Vec<Line> {
     let mut lines = Vec::new();
     for (row, entry) in rows.iter().enumerate() {
@@ -1704,5 +1757,51 @@ mod tests {
         let first = new_group_id();
         std::thread::sleep(std::time::Duration::from_millis(2));
         assert_ne!(first, new_group_id());
+    }
+
+    #[test]
+    fn a_copy_puts_both_ends_on_screen() {
+        // The question anybody asks after a copy is what both ends look like
+        // now, and that is two directories rather than one.
+        let event = Event::new(Kind::Copy, "/src/notes/a.txt").to("/backup/2026/a.txt");
+        let scene = scene_of(&event).expect("a scene");
+        assert_eq!(scene.left, PathBuf::from("/src/notes"));
+        assert_eq!(scene.right, Some(PathBuf::from("/backup/2026")));
+    }
+
+    #[test]
+    fn a_copy_inside_one_directory_is_one_place() {
+        // Sending both panels to the same directory says nothing twice.
+        let event = Event::new(Kind::Copy, "/src/a.txt").to("/src/a.copy.txt");
+        let scene = scene_of(&event).expect("a scene");
+        assert_eq!(scene.left, PathBuf::from("/src"));
+        assert_eq!(scene.right, None);
+    }
+
+    #[test]
+    fn a_command_ran_in_a_directory_rather_than_on_a_file() {
+        // Its path is already where to stand; taking a parent would send the
+        // panel one level above where the command ran.
+        let event = Event::new(Kind::Command, "/work/project").note("cargo test");
+        let scene = scene_of(&event).expect("a scene");
+        assert_eq!(scene.left, PathBuf::from("/work/project"));
+        assert_eq!(scene.right, None);
+    }
+
+    #[test]
+    fn a_deleted_file_still_says_where_it_was() {
+        // The file has gone; the directory it was in is exactly what somebody
+        // wants to look at afterwards.
+        let event = Event::new(Kind::Delete, "/src/old/gone.txt");
+        assert_eq!(
+            scene_of(&event).expect("a scene").left,
+            PathBuf::from("/src/old")
+        );
+    }
+
+    #[test]
+    fn a_record_with_no_path_has_nowhere_to_send_anybody() {
+        let event = Event::new(Kind::Command, "");
+        assert!(scene_of(&event).is_none());
     }
 }

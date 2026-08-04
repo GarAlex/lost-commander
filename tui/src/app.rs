@@ -875,6 +875,56 @@ impl App {
         self.info(format!("New tab: {where_}"));
     }
 
+    /// Alt-Enter in the journal: open where an entry happened, as new tabs.
+    ///
+    /// New tabs rather than moving the panels, because looking at what a
+    /// command did should not cost you the place you were working in - and a
+    /// copy has two ends, so it opens two: the directory it came from on the
+    /// left and the one it went to on the right.
+    ///
+    /// A path may simply not be there any more. The file was deleted, the
+    /// directory was the point of the deletion, or it is on a disk nobody has
+    /// mounted today. Whatever is still there is opened and whatever is not
+    /// is named, because "nothing happened" is the one answer that leaves a
+    /// reader with no idea which of those it was.
+    pub fn open_scene(&mut self, scene: &journal::Scene) {
+        let mut missing: Vec<String> = Vec::new();
+        let mut opened = 0;
+
+        for (side, path) in [
+            (Side::Left, Some(scene.left.clone())),
+            (Side::Right, scene.right.clone()),
+        ] {
+            let Some(path) = path else { continue };
+            if !path.is_dir() {
+                missing.push(path.display().to_string());
+                continue;
+            }
+            let mut panel = match side {
+                Side::Left => self.left.duplicate(),
+                Side::Right => self.right.duplicate(),
+            };
+            panel.chdir(path);
+            match side {
+                Side::Left => self.left.open(panel),
+                Side::Right => self.right.open(panel),
+            }
+            opened += 1;
+        }
+
+        if opened > 0 {
+            self.active = Side::Left;
+        }
+        match (opened, missing.len()) {
+            (0, _) => self.error(format!("Gone: {}", missing.join(", "))),
+            (_, 0) => self.info(format!("Opened {opened} tab(s) where that happened")),
+            (_, _) => self.info(format!(
+                "Opened {opened} tab(s); gone: {}",
+                missing.join(", ")
+            )),
+        }
+    }
+
     /// `Ctrl-W`: close the tab on show.
     pub fn close_tab(&mut self) {
         if self.active_tabs_mut().close() {
@@ -3444,6 +3494,23 @@ impl App {
                 // in a directory that is not this one, is exactly where an
                 // `rm` goes wrong. It is offered for reading and editing,
                 // and Enter is still what runs it.
+                // Alt-Enter takes the *place* rather than the line: where it
+                // happened, as new tabs. For a copy that is both ends, which
+                // is the question anybody asks afterwards.
+                KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => {
+                    let lines = journal::lines(&showing);
+                    let scene = lines
+                        .get(*cursor)
+                        .and_then(|line| journal::event_at(&showing, line))
+                        .and_then(journal::scene_of);
+                    let Some(scene) = scene else {
+                        self.error("That record does not say where it happened");
+                        return;
+                    };
+                    self.mode = Mode::Normal;
+                    self.open_scene(&scene);
+                    return;
+                }
                 KeyCode::Enter => {
                     let lines = journal::lines(&showing);
                     let found = lines
@@ -6334,5 +6401,62 @@ mod tests {
         // And a command with nothing recorded under it is nothing to run.
         let empty = journal::Event::new(journal::Kind::Command, "/work");
         assert!(command_to_reuse(&empty).is_none());
+    }
+
+    #[test]
+    fn a_copy_opens_both_ends_as_tabs_without_losing_where_you_were() {
+        let root = tempfile::tempdir().unwrap();
+        let from = root.path().join("from");
+        let to = root.path().join("to");
+        std::fs::create_dir_all(&from).unwrap();
+        std::fs::create_dir_all(&to).unwrap();
+
+        let (_root, mut app) = app_fixture();
+        let before = (app.left.len(), app.right.len());
+        let was = app.left.cwd().to_path_buf();
+
+        app.open_scene(&journal::Scene {
+            left: from.clone(),
+            right: Some(to.clone()),
+        });
+
+        assert_eq!(app.left.len(), before.0 + 1, "a tab, not a move");
+        assert_eq!(app.right.len(), before.1 + 1);
+        assert_eq!(app.left.cwd(), from);
+        assert_eq!(app.right.cwd(), to);
+        // The tab you were in is still there, still where it was.
+        app.left.close();
+        assert_eq!(app.left.cwd(), was);
+    }
+
+    #[test]
+    fn a_place_that_is_gone_is_named_rather_than_ignored() {
+        // Deleted since, or on a disk nobody has mounted today. "Nothing
+        // happened" would leave the reader with no idea which.
+        let (_root, mut app) = app_fixture();
+        let before = app.left.len();
+        app.open_scene(&journal::Scene {
+            left: PathBuf::from("/no/such/place"),
+            right: None,
+        });
+        assert_eq!(app.left.len(), before, "nothing opened");
+        assert!(app.status_is_error, "and it said so: {}", app.status);
+        assert!(app.status.contains("Gone"), "{}", app.status);
+    }
+
+    #[test]
+    fn one_end_missing_still_opens_the_other() {
+        let root = tempfile::tempdir().unwrap();
+        let from = root.path().join("from");
+        std::fs::create_dir_all(&from).unwrap();
+
+        let (_root, mut app) = app_fixture();
+        let before = app.left.len();
+        app.open_scene(&journal::Scene {
+            left: from.clone(),
+            right: Some(PathBuf::from("/no/such/place")),
+        });
+        assert_eq!(app.left.len(), before + 1);
+        assert!(app.status.contains("gone"), "{}", app.status);
     }
 }

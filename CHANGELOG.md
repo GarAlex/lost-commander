@@ -9,6 +9,11 @@ Notable changes, newest first. Versions follow [semantic versioning]; until
 
 ### Added
 
+- **`Alt-Enter` opens where an entry happened**, as new tabs rather than by
+  moving the panels — so looking at what a command did costs you nothing. A
+  copy opens *both* ends, which is the question anybody asks afterwards: what
+  do A and B look like now? Anything that has since been deleted or is on an
+  unmounted disk is named rather than silently skipped.
 - **A command can be taken back out of the account.** `Enter` on a command in
   the journal puts it on the command line, with a note saying where it
   originally ran if that is not where you are. It is not run: a line
