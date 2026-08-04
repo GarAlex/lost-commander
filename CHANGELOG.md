@@ -9,6 +9,12 @@ Notable changes, newest first. Versions follow [semantic versioning]; until
 
 ### Added
 
+- **A command can be taken back out of the account.** `Enter` on a command in
+  the journal puts it on the command line, with a note saying where it
+  originally ran if that is not where you are. It is not run: a line
+  remembered from a week ago, in another directory, is exactly where an `rm`
+  goes wrong.
+
 - **Both front-ends can find the machine's drives.** The graphical one lists
   them in the sidebar; the terminal one has a third tab in `Ctrl-B`, beside
   Saved and Recent. Drives say how much room is left.

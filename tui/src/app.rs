@@ -355,6 +355,18 @@ impl Mode {
 /// see.
 const ENTER: &[u8] = &[13];
 
+/// The command line out of a journal entry, and where it ran.
+///
+/// `None` for anything that is not a command: a copy or a rename is a record
+/// of something that happened, not a line anybody typed, and offering to
+/// "run it again" would be offering to do something the reader never wrote.
+fn command_to_reuse(event: &journal::Event) -> Option<(String, String)> {
+    if event.kind != journal::Kind::Command || event.note.trim().is_empty() {
+        return None;
+    }
+    Some((event.note.clone(), event.path.clone()))
+}
+
 /// What to write into the shell to run `line` in `cwd`.
 ///
 /// One line for a shell that reports where it is, two for one that does not.
@@ -3427,6 +3439,34 @@ impl App {
                     self.mode = Mode::Normal;
                     return;
                 }
+                // Take a command back out of the account and put it on the
+                // command line. Not run: a line remembered from a week ago,
+                // in a directory that is not this one, is exactly where an
+                // `rm` goes wrong. It is offered for reading and editing,
+                // and Enter is still what runs it.
+                KeyCode::Enter => {
+                    let lines = journal::lines(&showing);
+                    let found = lines
+                        .get(*cursor)
+                        .and_then(|line| journal::event_at(&showing, line))
+                        .and_then(command_to_reuse);
+                    let Some((line, ran_in)) = found else {
+                        self.error("That is not a command - nothing to run again");
+                        return;
+                    };
+                    self.mode = Mode::Normal;
+                    let here = self.active_panel().cwd.clone();
+                    self.command = line;
+                    // Where it ran matters: the same line means something
+                    // else in another directory, and the reader is about to
+                    // press Enter.
+                    if Path::new(&ran_in) == here {
+                        self.info("Ready to run again here. Enter runs it.");
+                    } else {
+                        self.info(format!("Ran in {ran_in} - you are in {}", here.display()));
+                    }
+                    return;
+                }
                 KeyCode::Down => *cursor = (*cursor + 1).min(last),
                 KeyCode::Up => *cursor = cursor.saturating_sub(1),
                 KeyCode::PageDown => *cursor = (*cursor + 15).min(last),
@@ -6273,5 +6313,26 @@ mod tests {
         // Nothing to write into: the point is that it does not try.
         app.tell_the_shell();
         assert!(app.shell.is_none(), "and it did not start one to say it");
+    }
+
+    #[test]
+    fn a_command_can_be_taken_back_out_of_the_account() {
+        let event = journal::Event::new(journal::Kind::Command, "/work").note("cargo test");
+        let (line, ran_in) = command_to_reuse(&event).expect("a command");
+        assert_eq!(line, "cargo test");
+        assert_eq!(ran_in, "/work", "where it ran is part of the answer");
+    }
+
+    #[test]
+    fn what_was_never_typed_is_not_offered_for_running() {
+        // A copy is a record of something that happened, not a line anybody
+        // wrote, and "run it again" would be offering to do something the
+        // reader never asked for.
+        let copy = journal::Event::new(journal::Kind::Copy, "/a").to("/b");
+        assert!(command_to_reuse(&copy).is_none());
+
+        // And a command with nothing recorded under it is nothing to run.
+        let empty = journal::Event::new(journal::Kind::Command, "/work");
+        assert!(command_to_reuse(&empty).is_none());
     }
 }

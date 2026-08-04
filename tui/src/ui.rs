@@ -1042,7 +1042,7 @@ fn draw_journal(
                 match searching {
                     true => " type to search anything on a line  Enter keep it  Esc clear",
                     false =>
-                        " Left/Right day  Tab all/files/commands  / find  k kind  ! only failures  Esc close",
+                        " Left/Right day  Tab all/files/commands  / find  Enter run again  ! failures  Esc close",
                 },
                 dim,
             )),
