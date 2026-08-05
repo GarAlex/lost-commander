@@ -386,6 +386,16 @@ pub struct Panel {
     /// when you would not want the shell left behind.
     pub id: u64,
     pub cwd: PathBuf,
+    /// Text the listing is narrowed by; empty means everything. What the
+    /// F-keys act on is what is on screen, so a filtered listing means a
+    /// filtered copy, a filtered mark-all - which is the point of it.
+    pub filter: String,
+    /// Marks belonging to entries the filter is hiding right now.
+    ///
+    /// Without this, filtering to `.log`, marking, and clearing the filter
+    /// would quietly drop any mark made before the filter went on - a filter
+    /// must never be a way to lose marks nobody asked to lose.
+    masked_marks: Vec<String>,
     pub entries: Vec<Entry>,
     pub cursor: usize,
     pub sort_by: SortBy,
@@ -442,6 +452,8 @@ impl Panel {
         let mut panel = Panel {
             id: NEXT_PANEL_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             cwd: path,
+            filter: String::new(),
+            masked_marks: Vec::new(),
             opened: Opened::default(),
             entries: Vec::new(),
             tagged: std::collections::BTreeSet::new(),
@@ -528,20 +540,33 @@ impl Panel {
             return;
         }
         let previous = self.selected().map(|e| e.name.clone());
-        let marked: Vec<String> = self
+        let mut marked: Vec<String> = self
             .entries
             .iter()
             .filter(|e| e.marked)
             .map(|e| e.name.clone())
             .collect();
+        // The marks the filter was hiding count too, or narrowing the view
+        // twice would lose what the first narrowing hid.
+        marked.append(&mut self.masked_marks);
 
         match read_entries(&self.cwd, self.show_hidden, self.sort_by, self.order) {
             Ok(mut entries) => {
+                if !self.filter.is_empty() {
+                    let needle = self.filter.to_lowercase();
+                    // ".." always stays: a filter narrows what is here, and
+                    // the way out is not one of the things that is here.
+                    entries.retain(|e| e.name == ".." || e.name.to_lowercase().contains(&needle));
+                }
                 for e in entries.iter_mut() {
                     if marked.contains(&e.name) {
                         e.marked = true;
                     }
                 }
+                self.masked_marks = marked
+                    .into_iter()
+                    .filter(|name| !entries.iter().any(|e| &e.name == name))
+                    .collect();
                 self.entries = entries;
                 self.error = None;
             }
@@ -630,7 +655,22 @@ impl Panel {
     /// Change directory, resetting cursor and marks.
     ///
     /// Leaves any archive: asking for a directory means a directory.
+    /// Narrow the listing to names containing this, or widen it back with
+    /// an empty string. Case-insensitive, applied on every reload until it
+    /// is taken off.
+    pub fn set_filter(&mut self, text: &str) {
+        self.filter = text.to_string();
+        self.reload();
+        if self.cursor >= self.entries.len() {
+            self.cursor = self.entries.len().saturating_sub(1);
+        }
+    }
+
     pub fn chdir(&mut self, path: PathBuf) {
+        // A filter is about the directory it was typed in; carrying it into
+        // the next one would make a folder look empty for no visible reason.
+        self.filter.clear();
+        self.masked_marks.clear();
         self.inside = None;
         self.cwd = path;
         self.entries.clear();
@@ -1290,6 +1330,87 @@ mod tests {
         panel.toggle_mark();
         assert_eq!(panel.marked_count(), 1);
         assert_eq!(panel.cursor, 2);
+    }
+
+    #[test]
+    fn a_filter_narrows_the_listing_and_the_way_out_stays() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["build.log", "old.log", "notes.txt"] {
+            std::fs::write(dir.path().join(name), "x").unwrap();
+        }
+        let mut panel = Panel::new(dir.path().to_path_buf());
+        panel.reload();
+        assert_eq!(panel.entries.len(), 4, "three files and ..");
+
+        panel.set_filter("LOG");
+        let names: Vec<&str> = panel.entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["..", "build.log", "old.log"],
+            "case is not meaning, and .. is not one of the things here"
+        );
+
+        panel.set_filter("");
+        assert_eq!(panel.entries.len(), 4, "the whole listing comes back");
+    }
+
+    #[test]
+    fn a_filter_is_never_a_way_to_lose_marks() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["build.log", "old.log", "notes.txt"] {
+            std::fs::write(dir.path().join(name), "x").unwrap();
+        }
+        let mut panel = Panel::new(dir.path().to_path_buf());
+        panel.reload();
+
+        // Mark something, then filter it out of sight, then come back.
+        let notes = panel
+            .entries
+            .iter()
+            .position(|e| e.name == "notes.txt")
+            .unwrap();
+        panel.cursor = notes;
+        panel.toggle_mark();
+        panel.set_filter("log");
+        assert!(
+            panel.entries.iter().all(|e| e.name != "notes.txt"),
+            "hidden by the filter"
+        );
+
+        // Mark everything the filter shows - which is what a filter is for.
+        for e in panel.entries.iter_mut().filter(|e| e.name != "..") {
+            e.marked = true;
+        }
+        panel.set_filter("");
+        let marked: Vec<&str> = panel
+            .entries
+            .iter()
+            .filter(|e| e.marked)
+            .map(|e| e.name.as_str())
+            .collect();
+        assert_eq!(
+            marked,
+            vec!["build.log", "notes.txt", "old.log"],
+            "the mark made before the filter survived being hidden by it"
+        );
+    }
+
+    #[test]
+    fn a_filter_stays_out_of_the_next_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        std::fs::write(dir.path().join("sub").join("inside.txt"), "x").unwrap();
+        std::fs::write(dir.path().join("only-here.log"), "x").unwrap();
+
+        let mut panel = Panel::new(dir.path().to_path_buf());
+        panel.reload();
+        panel.set_filter("nothing-matches-this");
+        panel.chdir(dir.path().join("sub"));
+        assert!(
+            panel.filter.is_empty(),
+            "a filter is about the directory it was typed in"
+        );
+        assert!(panel.entries.iter().any(|e| e.name == "inside.txt"));
     }
 
     #[test]

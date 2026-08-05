@@ -9,6 +9,13 @@ Notable changes, newest first. Versions follow [semantic versioning]; until
 
 ### Added
 
+- **The quick filter.** `Alt-F` narrows the listing as you type - `Ctrl-F`
+  finds on the disk, this filters what is already on screen. The F-keys act
+  on what the filter leaves visible, so filter plus `Ctrl-A` is "mark all
+  the `.log` files"; a mark made before the filter went on survives being
+  hidden by it, because a filter must never be a way to lose marks; and a
+  change of directory takes the filter off, since a filter is about the
+  folder it was typed in. Shown in the pane's heading while it is on.
 - **Pinned commands.** `pin cargo test` on the command line - the file
   manager's own verb, like `cd` - keeps that line on top of the current
   folder's history until the same `pin` takes it off. The reuse of commands

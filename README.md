@@ -281,6 +281,14 @@ standing in; `all` is the rest, this directory first, with the ones from
 somewhere else drawn dimmer and naming their folder on hover. Clicking a line
 puts it on the command line without running it.
 
+**The quick filter** (`Alt-F`) narrows the listing as you type — `Ctrl-F`
+finds on the disk; this filters what is already on screen. Enter keeps it,
+Escape takes it off, and it shows in the pane's heading while it is on. What
+the F-keys act on is what the filter leaves visible, so filter plus `Ctrl-A`
+is "mark all the `.log` files" — and a mark made before the filter went on
+survives being hidden by it. Changing directory takes the filter off, since a
+filter is about the folder it was typed in.
+
 **Pinned commands.** `pin cargo test` on the command line puts that line on
 top of this folder's history, permanently; `pin` the same line again takes it
 off. The line is kept as typed, so a pinned `%f` template stays a template.
@@ -315,7 +323,7 @@ opens onto a line saying which of the two you have, and `Alt-O` changes it.
 ## Testing
 
 ```sh
-cargo test                     # all 1129, from the workspace root
+cargo test                     # all 1134, from the workspace root
 ```
 
 From the root that is everything, because the root is a virtual manifest and
@@ -326,9 +334,9 @@ say `cargo test --workspace` there if you meant all of it.
 Per crate, when you want a fast loop:
 
 ```sh
-cargo test -p lost-commander-core    # 665 - the engine, seconds to build
-cargo test -p lost-commander-egui    # 232 - the graphical view
-cargo test -p lost-commander-tui     # 126 - the terminal view
+cargo test -p lost-commander-core    # 668 - the engine, seconds to build
+cargo test -p lost-commander-egui    # 233 - the graphical view
+cargo test -p lost-commander-tui     # 127 - the terminal view
 cargo test -p lost-commander-ffi     # 106 - the C ABI
 ```
 

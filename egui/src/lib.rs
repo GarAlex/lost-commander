@@ -529,6 +529,8 @@ pub struct GuiApp {
     pub history_filter: String,
     /// Set by `Alt-R`; the next frame hands the filter box the keyboard.
     focus_history_filter: bool,
+    /// The pane whose quick filter is being edited, if any.
+    filter_editing: Option<Side>,
     /// Whether the history column is showing only this directory's commands.
     ///
     /// On to begin with, which is the half worth having in front of you: a
@@ -783,6 +785,7 @@ impl GuiApp {
             pinned_path: None,
             history_filter: String::new(),
             focus_history_filter: false,
+            filter_editing: None,
             history_here_only: true,
             shell_history_of: None,
             shell_history: Vec::new(),
@@ -2993,6 +2996,10 @@ impl GuiApp {
         // unique access to `self` and so cannot hold a borrow of the panel.
         let summary = selection_summary(panel, count, current);
 
+        let mut filter_change: Option<String> = None;
+        let mut stop_editing_filter = false;
+        let editing_filter = self.filter_editing == Some(side);
+        let filter_now = panel.filter.clone();
         inner.horizontal(|ui| {
             ui.label(
                 RichText::new(name)
@@ -3004,6 +3011,52 @@ impl GuiApp {
                     .size(13.0)
                     .strong(),
             );
+
+            // The quick filter: a field while it is being edited, a note
+            // with a cross once it is set. Alt-F opens it; what the F-keys
+            // then act on is what the filter leaves on screen.
+            if editing_filter {
+                let mut text = filter_now.clone();
+                let field = ui.add(
+                    egui::TextEdit::singleline(&mut text)
+                        .desired_width(120.0)
+                        .hint_text("filter")
+                        .font(egui::TextStyle::Small),
+                );
+                if ui.memory(|memory| memory.focused().is_none()) {
+                    field.request_focus();
+                }
+                if text != filter_now {
+                    filter_change = Some(text.clone());
+                }
+                if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
+                    filter_change = Some(String::new());
+                    stop_editing_filter = true;
+                } else if field.lost_focus() {
+                    stop_editing_filter = true;
+                }
+            } else if !filter_now.is_empty() {
+                ui.label(
+                    RichText::new(format!("filter: {filter_now}"))
+                        .size(11.0)
+                        .color(theme::accent_dim()),
+                );
+                if ui
+                    .add(
+                        egui::Button::new(
+                            RichText::new("\u{00d7}")
+                                .size(10.0)
+                                .color(theme::text_faint()),
+                        )
+                        .fill(Color32::TRANSPARENT)
+                        .min_size(Vec2::new(14.0, 14.0)),
+                    )
+                    .on_hover_text("Take the filter off")
+                    .clicked()
+                {
+                    filter_change = Some(String::new());
+                }
+            }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 // The view switch lives here rather than on the toolbar,
                 // because it belongs to this pane and not to the window. It
@@ -3035,6 +3088,12 @@ impl GuiApp {
                 ui.label(RichText::new(summary).color(theme::text_faint()).size(11.0));
             });
         });
+        if let Some(text) = filter_change {
+            self.panel_mut(side).set_filter(&text);
+        }
+        if stop_editing_filter && self.filter_editing == Some(side) {
+            self.filter_editing = None;
+        }
         inner.add_space(6.0);
 
         // Quick view brings its own scrolling - text scrolls, a picture does
@@ -4217,6 +4276,9 @@ impl GuiApp {
                 }
             }
             A::LastWorkspace => self.last_workspace(),
+            A::FilterPane => {
+                self.filter_editing = Some(side);
+            }
             A::SearchHistory => {
                 // The filter box lives in the history column, and typing
                 // into something that is not on screen is the thing this
@@ -10946,6 +11008,34 @@ mod tests {
             sub,
             "the one that was in front, not the one at its old index"
         );
+    }
+
+    #[test]
+    fn the_quick_filter_narrows_what_every_key_acts_on() {
+        use keys::Action as A;
+        let (_root, mut app) = fixture();
+        let before = app.left.current().entries.len();
+
+        app.run_action(A::FilterPane);
+        assert_eq!(
+            app.filter_editing,
+            Some(Side::Left),
+            "Alt-F edits this pane's filter"
+        );
+
+        app.left.current_mut().set_filter("a.txt");
+        assert!(app.left.current().entries.len() < before);
+
+        // Mark-all under a filter marks what the filter shows - the point.
+        app.run_action(A::MarkAll);
+        let marked = app.left.current().marked_count();
+        app.left.current_mut().set_filter("");
+        assert_eq!(
+            app.left.current().marked_count(),
+            marked,
+            "clearing the filter keeps the marks it was used to make"
+        );
+        assert_eq!(app.left.current().entries.len(), before);
     }
 
     #[test]

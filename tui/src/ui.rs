@@ -1579,11 +1579,16 @@ fn draw_tab_strip(frame: &mut Frame, area: Rect, tabs: &Tabs, active: bool) {
 }
 
 fn draw_panel(frame: &mut Frame, area: Rect, panel: &Panel, active: bool, on_tree: bool) {
-    let heading = if panel.in_tree_mode() {
+    let mut heading = if panel.in_tree_mode() {
         format!("Tree: {}", panel.cwd.display())
     } else {
         panel.cwd.display().to_string()
     };
+    // A narrowed listing says so where the reader is already looking - a
+    // filter nobody can see is a folder that looks mysteriously empty.
+    if !panel.filter.is_empty() {
+        heading.push_str(&format!("  filter: {}", panel.filter));
+    }
     let title = fit(&heading, area.width.saturating_sub(4) as usize);
 
     let block = Block::default()
@@ -1739,6 +1744,20 @@ fn draw_tree(frame: &mut Frame, area: Rect, tree: &Tree, active: bool, here: &st
 /// The prompt is the directory being shown, because that is where a command
 /// will run.
 fn draw_command_line(frame: &mut Frame, area: Rect, app: &App) {
+    // A quick filter being edited takes the row: what is typed here narrows
+    // the listing above, live. Enter keeps it, Escape takes it off.
+    if app.filter_edit {
+        let line = Line::from(vec![
+            Span::styled("filter: ", Style::default().fg(theme::TITLE_FG)),
+            Span::styled(
+                app.active_panel().filter.clone(),
+                Style::default().fg(theme::FILE_FG),
+            ),
+            Span::styled("\u{2588}", Style::default().fg(theme::CURSOR_FG)),
+        ]);
+        frame.render_widget(Paragraph::new(line).style(theme::base()), area);
+        return;
+    }
     // A running reverse search takes the row over: the query, and the line
     // it is offering. Enter takes the offer, Alt-R steps, Escape gives back.
     if let Some((query, _)) = &app.history_search {

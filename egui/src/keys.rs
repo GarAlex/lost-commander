@@ -137,6 +137,8 @@ pub enum Action {
     LastWorkspace,
     /// Put the keyboard in the history column's filter box.
     SearchHistory,
+    /// Narrow the active pane's listing as you type.
+    FilterPane,
     /// Send this tab, whole, to the other pane.
     MoveTabAcross,
 
@@ -265,6 +267,11 @@ pub fn action_for(key: Key, modifiers: Modifiers) -> Option<Action> {
         // the shells' own reverse-search, both older claims on the key.
         if key == Key::R {
             return Some(Action::SearchHistory);
+        }
+        // Alt-F narrows the listing. Ctrl-F is Find, which searches the
+        // disk; this filters what is already on screen.
+        if key == Key::F {
+            return Some(Action::FilterPane);
         }
     }
 
@@ -587,6 +594,7 @@ pub const HELP: &[(&str, &str)] = &[
     ("Alt-1 .. Alt-9", "the nth workspace"),
     ("Alt-0", "the workspace you were just in"),
     ("Alt-R", "search what has been run"),
+    ("Alt-F", "narrow the listing as you type"),
     ("Alt-H", "history of this folder, in the other pane"),
     ("F11 / F12", "sidebar / show or hide the second pane"),
     ("Shift-Enter", "open with a chosen application"),
@@ -844,6 +852,7 @@ mod tests {
             ShowWorkspace(0),
             LastWorkspace,
             SearchHistory,
+            FilterPane,
         ];
 
         // The combinations the map actually uses, as well as the single

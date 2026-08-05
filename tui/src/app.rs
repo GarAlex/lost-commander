@@ -453,6 +453,8 @@ pub struct App {
     /// search runs over the same list `Alt-P` walks - here first - so the
     /// local `cargo test` is found before somebody else's.
     pub history_search: Option<(String, usize)>,
+    /// Whether Alt-F is editing the active panel's quick filter.
+    pub filter_edit: bool,
     /// The commands pinned to directories - "this line, this folder, always
     /// on top" - and where they are written.
     pub pinned: lost_commander_core::pinned::Pinned,
@@ -566,6 +568,7 @@ impl App {
             show_right: false,
             history: Vec::new(),
             history_search: None,
+            filter_edit: false,
             pinned: lost_commander_core::pinned::Pinned::default(),
             pinned_path: None,
             at_in_history: None,
@@ -610,6 +613,32 @@ impl App {
             return out;
         }
         Location::local(path)
+    }
+
+    /// One key of the quick filter being edited.
+    fn filter_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Char(character) => {
+                let mut text = self.active_panel().filter.clone();
+                text.push(character);
+                self.active_panel_mut().set_filter(&text);
+            }
+            KeyCode::Backspace => {
+                let mut text = self.active_panel().filter.clone();
+                text.pop();
+                self.active_panel_mut().set_filter(&text);
+            }
+            // Enter keeps the filter on; it shows in the panel's title until
+            // Escape or a change of directory takes it off.
+            KeyCode::Enter => self.filter_edit = false,
+            KeyCode::Esc => {
+                self.active_panel_mut().set_filter("");
+                self.filter_edit = false;
+            }
+            // Any other key ends the edit where it stands, keystroke
+            // swallowed - the same contract as the history search.
+            _ => self.filter_edit = false,
+        }
     }
 
     /// Pin a line to this directory, or unpin it - and write the shelf down.
@@ -3263,6 +3292,18 @@ impl App {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
 
+        // Alt-F: the quick filter. Typing narrows the listing as it goes,
+        // Enter keeps it, Escape takes it off - and every key while it is
+        // being edited belongs to it.
+        if alt && key.code == KeyCode::Char('f') {
+            self.filter_edit = true;
+            return;
+        }
+        if self.filter_edit {
+            self.filter_key(key.code);
+            return;
+        }
+
         // Alt-R: reverse search. Starting it, stepping it, and every key
         // while it runs - before anything else can read the same keys.
         if alt && key.code == KeyCode::Char('r') {
@@ -5658,6 +5699,39 @@ mod tests {
 
         assert!(app.status_is_error);
         assert!(app.status.contains("already exists"), "{}", app.status);
+    }
+
+    #[test]
+    fn alt_f_narrows_the_listing_and_escape_takes_it_off() {
+        let (_root, mut app) = app_fixture();
+        assert_eq!(
+            app.active_panel().entries.len(),
+            4,
+            "two files, sub, and .."
+        );
+
+        app.on_key(alt('f'));
+        for c in "one".chars() {
+            app.on_key(key(KeyCode::Char(c)));
+        }
+        let names: Vec<String> = app
+            .active_panel()
+            .entries
+            .iter()
+            .map(|e| e.name.clone())
+            .collect();
+        assert_eq!(names, vec!["..", "one.txt"], "narrowed as typed");
+
+        // Enter keeps it; marking under it is what it is for.
+        app.on_key(key(KeyCode::Enter));
+        assert!(!app.filter_edit);
+        assert_eq!(app.active_panel().filter, "one");
+
+        // Alt-F again reopens the same filter; Escape takes it off.
+        app.on_key(alt('f'));
+        app.on_key(key(KeyCode::Esc));
+        assert!(app.active_panel().filter.is_empty());
+        assert_eq!(app.active_panel().entries.len(), 4);
     }
 
     #[test]
