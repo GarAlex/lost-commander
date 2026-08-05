@@ -93,7 +93,16 @@ pub fn draw(frame: &mut Frame, app: &App) {
             forced,
             detected,
             ..
-        } => draw_viewer(frame, area, title, lines, *scroll, *forced, *detected),
+        } => draw_viewer(
+            frame,
+            area,
+            title,
+            lines,
+            *scroll,
+            *forced,
+            *detected,
+            app.viewer_wrap,
+        ),
         Mode::Connections { tab, cursor } => draw_connections(frame, area, app, *tab, *cursor),
         Mode::Shells { shells, cursor } => draw_shells(frame, area, app, shells, *cursor),
         Mode::Progress => draw_progress(frame, area, app),
@@ -2015,6 +2024,7 @@ fn draw_confirm(frame: &mut Frame, area: Rect, dialog: &crate::app::ConfirmDialo
     frame.render_widget(Paragraph::new(body).wrap(Wrap { trim: true }), inner);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_viewer(
     frame: &mut Frame,
     area: Rect,
@@ -2023,6 +2033,7 @@ fn draw_viewer(
     scroll: usize,
     forced: Option<lost_commander_core::encoding::Encoding>,
     detected: lost_commander_core::encoding::Detected,
+    wrap: bool,
 ) {
     frame.render_widget(Clear, area);
 
@@ -2033,23 +2044,40 @@ fn draw_viewer(
         Some(encoding) => format!("{} (forced)", encoding.label()),
         None => detected.describe(),
     };
-    let heading = format!("View: {title}  [{reading}]  e/E encoding  (Esc closes)");
+    let heading =
+        format!("View: {title}  [{reading}]  e/E encoding  w wrap  n/p next  (Esc closes)");
     let block = dialog_block(&heading);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
     let height = inner.height as usize;
-    let visible: Vec<Line> = lines
-        .iter()
-        .skip(scroll)
-        .take(height)
-        .map(|l| {
-            Line::from(Span::styled(
-                l.clone(),
-                Style::default().bg(theme::DIALOG_BG).fg(theme::FILE_FG),
-            ))
-        })
-        .collect();
+    let width = inner.width as usize;
+    let style = Style::default().bg(theme::DIALOG_BG).fg(theme::FILE_FG);
+    // Wrapped, a logical line becomes several rows; scrolling still moves by
+    // logical line, which is what n-percent-through-the-file means either way.
+    let mut visible: Vec<Line> = Vec::new();
+    for logical in lines.iter().skip(scroll) {
+        if visible.len() >= height {
+            break;
+        }
+        if !wrap || logical.chars().count() <= width || width == 0 {
+            visible.push(Line::from(Span::styled(logical.clone(), style)));
+            continue;
+        }
+        let mut row = String::new();
+        for character in logical.chars() {
+            if row.chars().count() == width {
+                visible.push(Line::from(Span::styled(std::mem::take(&mut row), style)));
+                if visible.len() >= height {
+                    break;
+                }
+            }
+            row.push(character);
+        }
+        if !row.is_empty() && visible.len() < height {
+            visible.push(Line::from(Span::styled(row, style)));
+        }
+    }
 
     frame.render_widget(Paragraph::new(visible), inner);
 }

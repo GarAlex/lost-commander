@@ -9,6 +9,11 @@ Notable changes, newest first. Versions follow [semantic versioning]; until
 
 ### Added
 
+- **The viewer walks and wraps.** `n` and `p` step to the next and
+  previous file in the panel without going back to the listing, skipping
+  directories - the reader asked for the next thing to *read* - and `w`
+  toggles wrapping long lines, one setting for the session, as in every
+  pager anyone already knows.
 - **Markdown rendered in the terminal view.** F3 on a markdown file shows
   the document rather than the markup: headings underlined, lists hung at
   their depth, quotes barred, code kept exactly as written, tables padded

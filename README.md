@@ -349,7 +349,7 @@ opens onto a line saying which of the two you have, and `Alt-O` changes it.
 ## Testing
 
 ```sh
-cargo test                     # all 1153, from the workspace root
+cargo test                     # all 1154, from the workspace root
 ```
 
 From the root that is everything, because the root is a virtual manifest and
@@ -362,7 +362,7 @@ Per crate, when you want a fast loop:
 ```sh
 cargo test -p lost-commander-core    # 682 - the engine, seconds to build
 cargo test -p lost-commander-egui    # 236 - the graphical view
-cargo test -p lost-commander-tui     # 129 - the terminal view
+cargo test -p lost-commander-tui     # 130 - the terminal view
 cargo test -p lost-commander-ffi     # 106 - the C ABI
 ```
 

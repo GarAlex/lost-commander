@@ -457,6 +457,11 @@ pub struct App {
     pub history_search: Option<(String, usize)>,
     /// Whether Alt-F is editing the active panel's quick filter.
     pub filter_edit: bool,
+    /// Whether the viewer wraps long lines rather than cutting them.
+    ///
+    /// One setting for the session, not per file: how you like to read is
+    /// about you, and re-deciding it per document would be a chore.
+    pub viewer_wrap: bool,
     /// The commands pinned to directories - "this line, this folder, always
     /// on top" - and where they are written.
     pub pinned: lost_commander_core::pinned::Pinned,
@@ -571,6 +576,7 @@ impl App {
             history: Vec::new(),
             history_search: None,
             filter_edit: false,
+            viewer_wrap: false,
             pinned: lost_commander_core::pinned::Pinned::default(),
             pinned_path: None,
             at_in_history: None,
@@ -4240,8 +4246,59 @@ impl App {
             // than a form.
             KeyCode::Char('e') => self.view_next_encoding(false),
             KeyCode::Char('E') => self.view_next_encoding(true),
+            // As in every pager anyone already knows.
+            KeyCode::Char('w') => {
+                self.viewer_wrap = !self.viewer_wrap;
+                self.info(if self.viewer_wrap {
+                    "Long lines wrap - w cuts them again"
+                } else {
+                    "Long lines are cut - w wraps them"
+                });
+            }
+            KeyCode::Char('n') => self.view_neighbour(true),
+            KeyCode::Char('p') => self.view_neighbour(false),
             _ => {}
         }
+    }
+
+    /// `n` and `p` in the viewer: the next or previous file in the panel,
+    /// without going back to the listing first.
+    ///
+    /// Directories are stepped over rather than closing the viewer - the
+    /// reader asked for the next thing to *read*.
+    fn view_neighbour(&mut self, forward: bool) {
+        let Mode::Viewer { path, .. } = &self.mode else {
+            return;
+        };
+        let viewing = path.clone();
+        let entries = &self.active_panel().entries;
+        let Some(at) = entries.iter().position(|entry| entry.path == viewing) else {
+            self.error("The file on show is not in this panel any more");
+            return;
+        };
+        let step = |index: usize| {
+            if forward {
+                index + 1
+            } else {
+                index.wrapping_sub(1)
+            }
+        };
+        let mut index = step(at);
+        while let Some(entry) = entries.get(index) {
+            if !entry.is_dir() {
+                let name = entry.name.clone();
+                self.active_panel_mut().cursor = index;
+                self.view_selected();
+                self.info(name);
+                return;
+            }
+            index = step(index);
+        }
+        self.info(if forward {
+            "That was the last file in this panel"
+        } else {
+            "That was the first file in this panel"
+        });
     }
 }
 
@@ -5874,6 +5931,32 @@ mod tests {
 
         assert!(app.status_is_error);
         assert!(app.status.contains("already exists"), "{}", app.status);
+    }
+
+    #[test]
+    fn n_and_p_walk_the_panel_without_leaving_the_viewer() {
+        let (_root, mut app) = app_fixture();
+        select(&mut app, "one.txt");
+        app.on_key(key(KeyCode::F(3)));
+        assert!(matches!(&app.mode, Mode::Viewer { title, .. } if title.contains("one.txt")));
+
+        // n steps to the next file, skipping the directory between.
+        app.on_key(key(KeyCode::Char('n')));
+        assert!(
+            matches!(&app.mode, Mode::Viewer { title, .. } if title.contains("two.txt")),
+            "the next thing to read, not the next entry"
+        );
+        // Past the end it says so and stays put.
+        app.on_key(key(KeyCode::Char('n')));
+        assert!(matches!(&app.mode, Mode::Viewer { title, .. } if title.contains("two.txt")));
+
+        app.on_key(key(KeyCode::Char('p')));
+        assert!(matches!(&app.mode, Mode::Viewer { title, .. } if title.contains("one.txt")));
+
+        // w flips the session-wide wrap.
+        assert!(!app.viewer_wrap);
+        app.on_key(key(KeyCode::Char('w')));
+        assert!(app.viewer_wrap);
     }
 
     #[test]
