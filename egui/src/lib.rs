@@ -369,6 +369,11 @@ pub struct Workspace {
     pub active: Side,
     /// Whether the shell here follows the panes, and they follow it.
     pub synced: bool,
+    /// Which halves of the window this one shows: both, the panes alone, or
+    /// the shell alone. One workspace can be a shell and nothing else while
+    /// the next is files and nothing else - that is what makes them windows
+    /// rather than directories.
+    pub half: Half,
     pub split: f32,
 }
 
@@ -415,6 +420,15 @@ pub struct GuiApp {
     /// they are next looked at rather than swept: the shell can end at any
     /// moment, so any sweep would have to run every frame anyway.
     pub workspaces: std::collections::HashMap<u64, Workspace>,
+    /// The second pane of each workspace, parked whole while another is on
+    /// show.
+    ///
+    /// The panel itself rather than its directory: a workspace is meant to
+    /// feel like a separate window, and a window you come back to has its
+    /// cursor where you left it, its marks still marked and its tree still
+    /// open at the same branch. Only a `Panel` carries all of that, so the
+    /// panel is what is kept.
+    pub parked: std::collections::HashMap<u64, Panel>,
     /// The rail down the left: the workspaces, and how much of each is shown.
     pub show_rail: bool,
     /// Wide enough for the whole path and the shell's name, or narrow enough
@@ -668,6 +682,7 @@ impl GuiApp {
             show_keys: true,
             half: Half::Both,
             workspaces: std::collections::HashMap::new(),
+            parked: std::collections::HashMap::new(),
             show_rail: true,
             rail_wide: false,
             column_width: 210.0,
@@ -778,12 +793,29 @@ impl GuiApp {
             self.remember_workspace();
             self.workspaces.get(&self.workspace_id()).cloned()
         });
+        // The second pane is forked too: a copy of where it is, so the new
+        // window starts arranged like this one. The one being left has to be
+        // parked first, or it would walk into the new workspace and the old
+        // one would come back to a stranger.
+        let leaving = (side == Side::Left).then(|| {
+            let current = self.right.current();
+            let mut copy = Panel::new(current.cwd.clone());
+            copy.sort_by = current.sort_by;
+            copy.show_hidden = current.show_hidden;
+            copy.reload();
+            (self.workspace_id(), copy)
+        });
+
         let panel = self.tabs(side).duplicate();
         self.tabs_mut(side).open(panel);
         self.active = side;
         if let Some(Some(carried)) = forked {
             let id = self.workspace_id();
             self.workspaces.insert(id, carried);
+        }
+        if let Some((id, copy)) = leaving {
+            let outgoing = std::mem::replace(self.right.current_mut(), copy);
+            self.parked.insert(id, outgoing);
         }
         let where_ = self.panel(side).cwd.display().to_string();
         self.info(format!("New workspace: {where_}"));
@@ -2810,6 +2842,10 @@ impl GuiApp {
             return;
         }
 
+        // Salted with the workspace, so every window scrolls on its own. egui
+        // keeps a scroll offset per id, and a shared id meant walking to the
+        // bottom of one listing left another workspace's scrolled to match.
+        let scroll_id = (scroll_id, self.workspace_id());
         egui::ScrollArea::vertical()
             .id_salt(scroll_id)
             .auto_shrink([false, false])
@@ -2873,6 +2909,7 @@ impl GuiApp {
             Side::Left => "tree_left",
             Side::Right => "tree_right",
         };
+        let id = (id, self.workspace_id());
         ui.allocate_ui(Vec2::new(ui.available_width(), top), |ui| {
             egui::ScrollArea::vertical()
                 .id_salt(id)
@@ -2915,6 +2952,7 @@ impl GuiApp {
             Side::Left => "files_left",
             Side::Right => "files_right",
         };
+        let files_id = (files_id, self.workspace_id());
         egui::ScrollArea::vertical()
             .id_salt(files_id)
             .auto_shrink([false, false])
@@ -7533,6 +7571,7 @@ impl GuiApp {
             right_view: self.right_view,
             active: self.active,
             synced: !self.terminals.is_pinned(self.terminals.active),
+            half: self.half,
             split: self.split,
         };
         // A shell is only this workspace's if one is actually running: with
@@ -7547,6 +7586,7 @@ impl GuiApp {
             // or one just forked. What is on screen is as good as anything.
             return;
         };
+        self.half = want.half;
         self.show_right = want.show_right;
         self.left_view = want.left_view;
         self.right_view = want.right_view;
@@ -7560,9 +7600,6 @@ impl GuiApp {
             want.left_view == ViewMode::Tree,
             want.right_view == ViewMode::Tree,
         ];
-        if self.right.current().cwd != want.right {
-            self.right.current_mut().chdir(want.right.clone());
-        }
         if let Some(at) = want.shell.and_then(|id| self.terminals.at_id(id)) {
             self.terminals.select(at);
             self.terminal_scroll_carry = 0.0;
@@ -7572,13 +7609,34 @@ impl GuiApp {
         }
     }
 
-    /// Show a workspace: its directory, its arrangement, and its shell.
+    /// Show a workspace: its panes, its arrangement, and its shell.
     pub fn show_workspace(&mut self, index: usize) {
         if index == self.left.active() {
             return;
         }
         self.remember_workspace();
+        let leaving = self.workspace_id();
         self.left.activate(index);
+        let arriving = self.workspace_id();
+
+        // The second pane is swapped rather than re-pointed: the one being
+        // left is parked exactly as it stands - cursor, marks, tree and all -
+        // and the arriving one comes back the same way.
+        let mut incoming = self.parked.remove(&arriving);
+        if incoming.is_none() {
+            let where_ = self
+                .workspaces
+                .get(&arriving)
+                .map(|workspace| workspace.right.clone())
+                .unwrap_or_else(|| self.right.current().cwd.clone());
+            let mut fresh = Panel::new(where_);
+            fresh.reload();
+            incoming = Some(fresh);
+        }
+        let outgoing =
+            std::mem::replace(self.right.current_mut(), incoming.expect("just filled in"));
+        self.parked.insert(leaving, outgoing);
+
         self.restore_workspace();
     }
 
@@ -9915,6 +9973,71 @@ mod tests {
         app.run_action(A::MoveTabAcross);
         assert_eq!(app.tabs(Side::Left).len(), 1);
         assert!(app.status_is_error);
+    }
+
+    #[test]
+    fn a_workspace_comes_back_exactly_as_it_was_left() {
+        use keys::Action as A;
+        let (root, mut app) = fixture();
+        app.show_right = true;
+        // The fixture's second pane is an empty directory, and an empty pane
+        // has nothing to mark.
+        fs::write(root.path().join("right").join("there.txt"), "t").unwrap();
+        app.right.current_mut().reload();
+
+        // Somewhere to be, something chosen, in both panes.
+        app.left.current_mut().cursor_to(2);
+        let left_was = app.left.current().cursor;
+        app.right.current_mut().cursor_to(1);
+        app.right.current_mut().toggle_mark();
+        let right_was = app.right.current().cwd.clone();
+        let marked = app.right.current().marked_count();
+        assert_eq!(marked, 1);
+
+        // Another window, arranged differently.
+        app.run_action(A::NewTab);
+        app.right.current_mut().cursor_to(0);
+        app.run_action(A::ToggleSecondPane);
+        assert!(!app.show_right);
+
+        app.run_action(A::PreviousTab);
+        // Everything, not just the directory: a workspace is meant to feel
+        // like a separate window, and a window you come back to has its
+        // cursor where you left it and its marks still marked.
+        assert!(app.show_right, "two panes, as it was left");
+        assert_eq!(app.left.current().cursor, left_was);
+        assert_eq!(app.right.current().cwd, right_was);
+        assert_eq!(
+            app.right.current().marked_count(),
+            1,
+            "the second pane is parked whole, not re-pointed at a directory"
+        );
+    }
+
+    #[test]
+    fn one_workspace_can_be_a_shell_and_the_next_only_files() {
+        use keys::Action as A;
+        let (_root, mut app) = fixture();
+
+        // This one is the shell and nothing else.
+        app.run_action(A::ShellOnly);
+        assert_eq!(app.half, Half::Shell);
+
+        // The next is forked from it, so it starts the same way - and then
+        // becomes files and nothing else.
+        app.run_action(A::NewTab);
+        app.run_action(A::ShellOnly);
+        app.run_action(A::FilesOnly);
+        assert_eq!(app.half, Half::Files);
+
+        app.run_action(A::PreviousTab);
+        assert_eq!(app.half, Half::Shell, "back to the one that is a shell");
+        app.run_action(A::NextTab);
+        assert_eq!(
+            app.half,
+            Half::Files,
+            "and forward to the one that is files"
+        );
     }
 
     #[test]
