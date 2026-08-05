@@ -178,6 +178,12 @@ Switching workspaces puts all of it back, down to the cursor, the marks and
 the scroll position. `Ctrl-T` forks the workspace you are in. The rail's `>`
 widens it from a name to the whole path and the shell.
 
+`Alt-1` through `Alt-9` jump to a workspace by position, `Alt-0` bounces to
+the one that had the window before this one, and `Ctrl-Tab` walks them in
+order. Double-click a rail entry to name it — two workspaces on the same
+folder are otherwise indistinguishable — and drag one to reorder; the wide
+rail has a `×` per row, and middle-click closes in either width.
+
 Workspaces are written down as they change — opened, closed, switched,
 rearranged — and the next start with no arguments opens them again. The shell
 process is not saved; its kind and its directory are, and a fresh one of the
@@ -290,7 +296,7 @@ opens onto a line saying which of the two you have, and `Alt-O` changes it.
 ## Testing
 
 ```sh
-cargo test                     # all 1108, from the workspace root
+cargo test                     # all 1113, from the workspace root
 ```
 
 From the root that is everything, because the root is a virtual manifest and
@@ -301,8 +307,8 @@ say `cargo test --workspace` there if you meant all of it.
 Per crate, when you want a fast loop:
 
 ```sh
-cargo test -p lost-commander-core    # 655 - the engine, seconds to build
-cargo test -p lost-commander-egui    # 225 - the graphical view
+cargo test -p lost-commander-core    # 656 - the engine, seconds to build
+cargo test -p lost-commander-egui    # 229 - the graphical view
 cargo test -p lost-commander-tui     # 122 - the terminal view
 cargo test -p lost-commander-ffi     # 106 - the C ABI
 ```

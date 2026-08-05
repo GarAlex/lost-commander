@@ -161,6 +161,27 @@ impl Tabs {
         self.activate(at);
     }
 
+    /// Move the tab at `from` so it sits at `to`, keeping the same tab on
+    /// show.
+    ///
+    /// Reordering is about where a tab *sits*, never about which one is
+    /// showing - dragging the third workspace to the front should not
+    /// switch windows on the way.
+    pub fn shift(&mut self, from: usize, to: usize) -> bool {
+        if from >= self.panels.len() || to >= self.panels.len() || from == to {
+            return false;
+        }
+        let showing = self.panels[self.active].id;
+        let panel = self.panels.remove(from);
+        self.panels.insert(to, panel);
+        self.active = self
+            .panels
+            .iter()
+            .position(|panel| panel.id == showing)
+            .unwrap_or(0);
+        true
+    }
+
     /// Lift the tab on show out of this pane, to be handed to the other one.
     ///
     /// `None` when it is the only tab, because a pane always shows something.
@@ -182,6 +203,24 @@ impl Tabs {
 #[cfg(test)]
 mod identity_tests {
     use super::*;
+
+    #[test]
+    fn shifting_a_tab_moves_where_it_sits_and_never_what_is_showing() {
+        let mut tabs = Tabs::new(Panel::new(PathBuf::from("/a")));
+        tabs.open(Panel::new(PathBuf::from("/b")));
+        tabs.open(Panel::new(PathBuf::from("/c")));
+        let showing = tabs.current().id;
+
+        // Drag the first to the end: the shown tab keeps showing, from its
+        // new index.
+        assert!(tabs.shift(0, 2));
+        assert_eq!(tabs.current().id, showing);
+        assert_eq!(tabs.all()[2].cwd, PathBuf::from("/a"));
+
+        // Out of range or nowhere to go refuses rather than panics.
+        assert!(!tabs.shift(0, 9));
+        assert!(!tabs.shift(1, 1));
+    }
 
     #[test]
     fn closing_a_tab_behind_the_current_one_does_not_change_what_is_on_show() {

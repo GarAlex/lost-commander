@@ -28,6 +28,10 @@ use serde::{Deserialize, Serialize};
 /// One window: its panes, its arrangement, and where its shell stood.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Workspace {
+    /// What the reader called this window, when they called it anything.
+    /// Two workspaces on the same folder are otherwise indistinguishable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     /// The directory of the pane that is always there.
     pub left: PathBuf,
     /// The second pane's directory, kept even when it is folded away: it is
@@ -143,6 +147,7 @@ mod tests {
 
     fn one(left: &str) -> Workspace {
         Workspace {
+            name: Some("work".into()),
             left: PathBuf::from(left),
             right: PathBuf::from(left),
             show_right: true,

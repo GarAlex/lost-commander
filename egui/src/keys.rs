@@ -131,6 +131,10 @@ pub enum Action {
     CloseOtherTabs,
     NextTab,
     PreviousTab,
+    /// Jump straight to the nth workspace, counted from zero.
+    ShowWorkspace(usize),
+    /// Back to the workspace that had the window before this one.
+    LastWorkspace,
     /// Send this tab, whole, to the other pane.
     MoveTabAcross,
 
@@ -233,6 +237,30 @@ pub fn action_for(key: Key, modifiers: Modifiers) -> Option<Action> {
     if alt && key == Key::F7 {
         return Some(Action::Find);
     }
+    // Alt-1 through Alt-9 are the workspaces by position, and Alt-0 is the
+    // one you were just in - beside the digits, because "back" is a jump
+    // like the others rather than a different kind of thing.
+    if alt {
+        let nth = match key {
+            Key::Num1 => Some(0),
+            Key::Num2 => Some(1),
+            Key::Num3 => Some(2),
+            Key::Num4 => Some(3),
+            Key::Num5 => Some(4),
+            Key::Num6 => Some(5),
+            Key::Num7 => Some(6),
+            Key::Num8 => Some(7),
+            Key::Num9 => Some(8),
+            _ => None,
+        };
+        if let Some(nth) = nth {
+            return Some(Action::ShowWorkspace(nth));
+        }
+        if key == Key::Num0 {
+            return Some(Action::LastWorkspace);
+        }
+    }
+
     // Alt-H puts the other pane on this folder's history. Alt rather than
     // Ctrl because Ctrl-H is already "show hidden files", and one keystroke
     // that means two things is one nobody trusts.
@@ -549,6 +577,8 @@ pub const HELP: &[(&str, &str)] = &[
         "Ctrl-Alt-O",
         "a shell that stays, or a one-shot command line",
     ),
+    ("Alt-1 .. Alt-9", "the nth workspace"),
+    ("Alt-0", "the workspace you were just in"),
     ("Alt-H", "history of this folder, in the other pane"),
     ("F11 / F12", "sidebar / show or hide the second pane"),
     ("Shift-Enter", "open with a chosen application"),
@@ -803,6 +833,8 @@ mod tests {
             DeleteForever,
             Find,
             Properties,
+            ShowWorkspace(0),
+            LastWorkspace,
         ];
 
         // The combinations the map actually uses, as well as the single

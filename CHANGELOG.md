@@ -7,6 +7,17 @@ Notable changes, newest first. Versions follow [semantic versioning]; until
 
 ## Unreleased
 
+### Added
+
+- **Workspaces by key, and by name.** `Alt-1`..`Alt-9` jump to a workspace by
+  position, `Alt-0` bounces to the one that had the window before this one -
+  the two-window bounce that Alt-Tab means everywhere else - and `Ctrl-Tab`
+  still walks them in order. Double-click a rail entry to name it, since two
+  workspaces on the same folder are otherwise indistinguishable; the name is
+  workspace state, saved and restored with the rest, and deliberately not
+  copied by a fork. Rows drag to reorder, the wide rail grows a close cross,
+  and middle-click still closes in either width.
+
 ### Changed
 
 - **The account is held in memory.** The journal reads each stream's files

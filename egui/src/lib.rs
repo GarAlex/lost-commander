@@ -403,6 +403,10 @@ impl Half {
 /// views, shells or how many panes a front-end has.
 #[derive(Debug, Clone)]
 pub struct Workspace {
+    /// What the reader called this window. Not derived from anything live,
+    /// which is why `remember_workspace` carries it over rather than
+    /// rebuilding it.
+    pub name: Option<String>,
     /// The shell standing in this workspace, by identity. `None` means one
     /// has not been started here yet, which the rail says out loud.
     pub shell: Option<u64>,
@@ -480,6 +484,15 @@ pub struct GuiApp {
     /// and where. Consumed on arrival, which is what keeps opening a saved
     /// session from spawning one process per window up front.
     pub pending_shells: std::collections::HashMap<u64, (Option<String>, PathBuf)>,
+    /// Workspaces in the order they last had the window, most recent first.
+    /// `Alt-0` reads the second entry, which is "where I just was".
+    pub workspace_mru: Vec<u64>,
+    /// The rail entry being renamed, and the text as typed so far.
+    rail_renaming: Option<(u64, String)>,
+    /// The rail entry being dragged to a new position, by identity - an
+    /// index would name a different workspace the moment the drag passed
+    /// another row.
+    rail_drag: Option<u64>,
     /// The rail down the left: the workspaces, and how much of each is shown.
     pub show_rail: bool,
     /// Wide enough for the whole path and the shell's name, or narrow enough
@@ -745,6 +758,9 @@ impl GuiApp {
             workspaces: std::collections::HashMap::new(),
             parked: std::collections::HashMap::new(),
             pending_shells: std::collections::HashMap::new(),
+            workspace_mru: Vec::new(),
+            rail_renaming: None,
+            rail_drag: None,
             show_rail: true,
             rail_wide: false,
             column_width: 210.0,
@@ -850,6 +866,9 @@ impl GuiApp {
 
     /// `Ctrl-T`: another tab, on the directory this one is showing.
     fn new_tab(&mut self, side: Side) {
+        if side == Side::Left {
+            self.note_workspace_used();
+        }
         // A fork, not a blank window. Everything about how you have this one
         // arranged - one pane or two, what each is drawing, which shell is
         // standing here - is what you were about to set up again by hand.
@@ -885,6 +904,9 @@ impl GuiApp {
                 .map(|session| session.program.clone());
             let carried = Workspace {
                 shell: None,
+                // The name is identity, not arrangement: two windows both
+                // called "build" is worse than one called nothing.
+                name: None,
                 ..carried
             };
             self.workspaces.insert(id, carried);
@@ -899,6 +921,7 @@ impl GuiApp {
             self.parked.insert(id, outgoing);
         }
         if side == Side::Left {
+            self.note_workspace_used();
             self.autosave_workspaces();
         }
         let where_ = self.panel(side).cwd.display().to_string();
@@ -4130,6 +4153,14 @@ impl GuiApp {
             A::EditAsAdmin => self.edit_as_admin(),
             A::RootShell => self.root_shell(),
             A::NewTab => self.new_tab(side),
+            A::ShowWorkspace(nth) => {
+                if nth < self.left.len() {
+                    self.show_workspace(nth);
+                } else {
+                    self.error(format!("There is no workspace {}", nth + 1));
+                }
+            }
+            A::LastWorkspace => self.last_workspace(),
             A::CloseTab => self.close_tab(side),
             A::CloseOtherTabs => self.close_other_tabs(side),
             A::NextTab => self.walk_tabs(side, true),
@@ -7753,6 +7784,7 @@ impl GuiApp {
                     .and_then(|id| self.terminals.at_id(id))
                     .and_then(|at| self.terminals.sessions.get(at));
                 session::Workspace {
+                    name: kept.and_then(|w| w.name.clone()),
                     left: panel.cwd.clone(),
                     right,
                     show_right: kept.is_some_and(|w| w.show_right),
@@ -7845,6 +7877,7 @@ impl GuiApp {
             self.workspaces.insert(
                 id,
                 Workspace {
+                    name: saved.name.clone(),
                     // The process is gone; `pending_shells` holds what kind
                     // and where, for arrival to open.
                     shell: None,
@@ -7925,6 +7958,9 @@ impl GuiApp {
     pub fn remember_workspace(&mut self) {
         let id = self.workspace_id();
         let now = Workspace {
+            // The one field that is not a fact about the live window: a name
+            // was given, so it is kept.
+            name: self.workspaces.get(&id).and_then(|w| w.name.clone()),
             shell: self.terminals.active_id(),
             show_right: self.show_right,
             right: self.right.current().cwd.clone(),
@@ -7975,6 +8011,10 @@ impl GuiApp {
         if index == self.left.active() {
             return;
         }
+        // The leaver goes into the recency order too - the workspace the
+        // window opened on has never "arrived", and without this Alt-0
+        // could not bounce back to it.
+        self.note_workspace_used();
         self.remember_workspace();
         let leaving = self.workspace_id();
         self.left.activate(index);
@@ -8000,7 +8040,50 @@ impl GuiApp {
 
         self.restore_workspace();
         self.open_pending_shell();
+        self.note_workspace_used();
         self.autosave_workspaces();
+    }
+
+    /// Name a workspace, or take its name away with an empty string.
+    ///
+    /// A name is workspace state like everything else, so it is saved with
+    /// the rest. The record is guaranteed to exist for anything that has
+    /// ever been left; the one window that might not have one yet is the one
+    /// on show, and remembering it first covers that.
+    pub fn set_workspace_name(&mut self, id: u64, name: &str) {
+        if id == self.workspace_id() {
+            self.remember_workspace();
+        }
+        let Some(workspace) = self.workspaces.get_mut(&id) else {
+            return;
+        };
+        let trimmed = name.trim();
+        workspace.name = (!trimmed.is_empty()).then(|| trimmed.to_string());
+        self.autosave_workspaces();
+    }
+
+    /// Put the workspace now on show at the front of the recency order.
+    fn note_workspace_used(&mut self) {
+        let id = self.workspace_id();
+        self.workspace_mru.retain(|seen| *seen != id);
+        self.workspace_mru.insert(0, id);
+    }
+
+    /// `Alt-0`: the workspace that had the window before this one.
+    ///
+    /// The bounce between two windows, which is what "the last one" is for
+    /// everywhere else - walking the rail in order is `Ctrl-Tab`.
+    pub fn last_workspace(&mut self) {
+        let here = self.workspace_id();
+        let target = self
+            .workspace_mru
+            .iter()
+            .find(|id| **id != here)
+            .and_then(|id| self.left.all().iter().position(|panel| panel.id == *id));
+        match target {
+            Some(index) => self.show_workspace(index),
+            None => self.info("No other workspace has had the window yet"),
+        }
     }
 
     /// Swap this workspace's shell for a different one - or the same kind
@@ -8072,6 +8155,7 @@ impl GuiApp {
         self.workspaces.remove(&closing);
         self.parked.remove(&closing);
         self.pending_shells.remove(&closing);
+        self.workspace_mru.retain(|id| *id != closing);
         self.close_orphaned_shells();
         if was_current {
             self.settle_in();
@@ -8218,22 +8302,26 @@ impl GuiApp {
         // read `self.active`, so standing in the right pane made the rail
         // list that pane's tabs as windows while clicks still acted on the
         // left - two different lists behind one set of rows.
-        let rows: Vec<(usize, String, String, Option<String>, bool)> = self
+        let renaming = self.rail_renaming.clone();
+        let rows: Vec<(usize, u64, String, String, Option<String>, bool)> = self
             .left
             .all()
             .iter()
             .enumerate()
             .map(|(index, panel)| {
-                let shell = self
-                    .workspaces
-                    .get(&panel.id)
+                let record = self.workspaces.get(&panel.id);
+                let shell = record
                     .and_then(|workspace| workspace.shell)
                     .and_then(|id| self.terminals.at_id(id))
                     .and_then(|at| self.terminals.sessions.get(at))
                     .map(|session| session.title.clone());
                 (
                     index,
-                    tabs::title(&panel.cwd),
+                    panel.id,
+                    // What the reader called it, or the folder's own name.
+                    record
+                        .and_then(|workspace| workspace.name.clone())
+                        .unwrap_or_else(|| tabs::title(&panel.cwd)),
                     lost_commander_core::paths::undecorated(&panel.cwd)
                         .display()
                         .to_string(),
@@ -8245,11 +8333,16 @@ impl GuiApp {
 
         let mut want: Option<usize> = None;
         let mut close: Option<usize> = None;
+        let mut commit_rename: Option<(u64, String)> = None;
+        let mut typed_rename: Option<(u64, String)> = None;
+        let mut cancel_rename = false;
+        let mut drop_at: Option<usize> = None;
+        let released = ui.input(|input| input.pointer.any_released());
         egui::ScrollArea::vertical()
             .id_salt("rail")
             .auto_shrink([false, false])
             .show(&mut child, |ui| {
-                for (index, name, path, shell, current) in &rows {
+                for (index, id, name, path, shell, current) in &rows {
                     let colour = if *current {
                         theme::text()
                     } else {
@@ -8260,6 +8353,37 @@ impl GuiApp {
                     } else {
                         Color32::TRANSPARENT
                     };
+
+                    // A row being renamed is a text field, not a label: the
+                    // rename happens where the name is, rather than in a
+                    // dialog about somewhere else.
+                    if let Some((renaming_id, text)) = &renaming {
+                        if renaming_id == id {
+                            let mut text = typed_rename
+                                .take()
+                                .map(|(_, t)| t)
+                                .unwrap_or_else(|| text.clone());
+                            let field = ui.add(
+                                egui::TextEdit::singleline(&mut text)
+                                    .desired_width(f32::INFINITY)
+                                    .hint_text("name this workspace")
+                                    .font(egui::TextStyle::Body),
+                            );
+                            if ui.memory(|memory| memory.focused().is_none()) {
+                                field.request_focus();
+                            }
+                            if field.lost_focus() {
+                                if ui.input(|input| input.key_pressed(egui::Key::Enter)) {
+                                    commit_rename = Some((*id, text.clone()));
+                                } else {
+                                    cancel_rename = true;
+                                }
+                            }
+                            typed_rename = Some((*id, text));
+                            continue;
+                        }
+                    }
+
                     let response = egui::Frame::NONE
                         .fill(fill)
                         .corner_radius(CornerRadius::same(4))
@@ -8270,6 +8394,28 @@ impl GuiApp {
                                 ui.horizontal(|ui| {
                                     ui.label(RichText::new("\u{1F5C0}").size(11.0).color(colour));
                                     ui.label(RichText::new(name).size(11.5).color(colour));
+                                    if wide {
+                                        ui.with_layout(
+                                            Layout::right_to_left(Align::Center),
+                                            |ui| {
+                                                if ui
+                                                    .add(
+                                                        egui::Button::new(
+                                                            RichText::new("\u{00d7}")
+                                                                .size(11.0)
+                                                                .color(theme::text_faint()),
+                                                        )
+                                                        .fill(Color32::TRANSPARENT)
+                                                        .min_size(Vec2::new(16.0, 14.0)),
+                                                    )
+                                                    .on_hover_text("Close this workspace")
+                                                    .clicked()
+                                                {
+                                                    close = Some(*index);
+                                                }
+                                            },
+                                        );
+                                    }
                                 });
                                 if wide {
                                     ui.label(
@@ -8301,20 +8447,34 @@ impl GuiApp {
 
                     let hit = ui.interact(
                         response.rect,
-                        ui.id().with(("rail_row", index)),
-                        Sense::click(),
+                        ui.id().with(("rail_row", id)),
+                        Sense::click_and_drag(),
                     );
-                    if hit.clicked() {
+                    // Double-click renames; a plain click switches. egui
+                    // reports both on the second click, so the rename wins.
+                    if hit.double_clicked() {
+                        self.rail_renaming = Some((*id, name.clone()));
+                    } else if hit.clicked() {
                         want = Some(*index);
                     }
-                    // Middle-click closes, as it does on every tab strip
-                    // there has ever been. The wide view has no room for a
-                    // cross without pushing the path out of it.
+                    if hit.drag_started() {
+                        self.rail_drag = Some(*id);
+                    }
+                    // Middle-click closes too, as on every tab strip there
+                    // has ever been; the x is the discoverable spelling.
                     if hit.middle_clicked() {
                         close = Some(*index);
                     }
+                    // Where a dragged row lands: the row under the pointer
+                    // when the button is let go.
+                    if released && self.rail_drag.is_some() && hit.hovered() {
+                        drop_at = Some(*index);
+                    }
+                    if self.rail_drag.is_some() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                    }
                     let _ = hit.on_hover_text(format!(
-                        "{path}\n{}",
+                        "{path}\n{}\nDouble-click to rename",
                         match shell {
                             Some(name) => format!("shell: {name}"),
                             None => "no shell yet".to_string(),
@@ -8322,6 +8482,27 @@ impl GuiApp {
                     ));
                 }
             });
+
+        if let Some((id, text)) = commit_rename {
+            self.set_workspace_name(id, &text);
+            self.rail_renaming = None;
+        } else if cancel_rename {
+            self.rail_renaming = None;
+        } else if let Some(typed) = typed_rename {
+            self.rail_renaming = Some(typed);
+        }
+
+        if released {
+            if let (Some(dragged), Some(to)) = (self.rail_drag.take(), drop_at) {
+                if let Some(from) = self.left.all().iter().position(|panel| panel.id == dragged) {
+                    if self.left.shift(from, to) {
+                        self.autosave_workspaces();
+                    }
+                }
+            } else {
+                self.rail_drag = None;
+            }
+        }
 
         if let Some(index) = want {
             self.show_workspace(index);
@@ -10570,6 +10751,7 @@ mod tests {
         let here = app.left.cwd().to_path_buf();
         let sub = root.path().join("left").join("sub");
         let blank = |left: PathBuf| session::Workspace {
+            name: None,
             left,
             right: here.clone(),
             show_right: false,
@@ -10603,6 +10785,92 @@ mod tests {
     }
 
     #[test]
+    fn alt_digits_jump_and_alt_0_bounces_back() {
+        use keys::Action as A;
+        let (root, mut app) = fixture();
+        let sub = root.path().join("left").join("sub");
+        app.run_action(A::NewTab);
+        app.left.current_mut().chdir(sub);
+
+        app.run_action(A::ShowWorkspace(0));
+        assert_eq!(app.left.active(), 0);
+        app.run_action(A::ShowWorkspace(1));
+        assert_eq!(app.left.active(), 1);
+
+        // Alt-0 is the bounce between two windows, so pressing it twice
+        // lands back where you started.
+        app.run_action(A::LastWorkspace);
+        assert_eq!(app.left.active(), 0, "back to where the window just was");
+        app.run_action(A::LastWorkspace);
+        assert_eq!(app.left.active(), 1, "and it bounces");
+
+        app.run_action(A::ShowWorkspace(5));
+        assert!(
+            app.status_is_error,
+            "a workspace that is not there is said, not ignored"
+        );
+    }
+
+    #[test]
+    fn alt_0_works_from_the_workspace_the_window_opened_on() {
+        use keys::Action as A;
+        let (_root, mut app) = fixture();
+        // The first workspace never "arrived" - it was simply there. Fork
+        // one and bounce straight back.
+        app.run_action(A::NewTab);
+        app.run_action(A::LastWorkspace);
+        assert_eq!(app.left.active(), 0);
+    }
+
+    #[test]
+    fn a_name_is_workspace_state_and_travels_with_the_session() {
+        use keys::Action as A;
+        let (_root, mut app) = fixture();
+        app.run_action(A::NewTab);
+        let id = app.workspace_id();
+
+        app.set_workspace_name(id, "  build  ");
+        assert_eq!(
+            app.workspaces.get(&id).unwrap().name.as_deref(),
+            Some("build"),
+            "trimmed, because a name that is mostly spaces is an accident"
+        );
+
+        // Into the saved session, and out of it in a fresh app.
+        let session = app.session();
+        assert_eq!(session.workspaces[1].name.as_deref(), Some("build"));
+        let (_root2, mut opened) = fixture();
+        opened.open_session(&session);
+        assert!(opened
+            .workspaces
+            .values()
+            .any(|workspace| workspace.name.as_deref() == Some("build")));
+
+        // An empty rename takes the name away rather than keeping "".
+        app.set_workspace_name(id, "   ");
+        assert!(app.workspaces.get(&id).unwrap().name.is_none());
+    }
+
+    #[test]
+    fn a_fork_copies_the_arrangement_but_never_the_name() {
+        use keys::Action as A;
+        let (_root, mut app) = fixture();
+        let original = app.workspace_id();
+        app.remember_workspace();
+        app.set_workspace_name(original, "build");
+
+        app.run_action(A::NewTab);
+        let forked = app.workspace_id();
+        assert!(
+            app.workspaces
+                .get(&forked)
+                .and_then(|workspace| workspace.name.clone())
+                .is_none(),
+            "two windows both called build is worse than one called nothing"
+        );
+    }
+
+    #[test]
     fn workspace_changes_are_written_down_as_they_happen() {
         use keys::Action as A;
         let (root, mut app) = fixture();
@@ -10628,6 +10896,7 @@ mod tests {
         let here = app.left.cwd().to_path_buf();
         let session = session::Session {
             workspaces: vec![session::Workspace {
+                name: None,
                 left: here.clone(),
                 right: here.clone(),
                 show_right: false,
@@ -10739,6 +11008,7 @@ mod tests {
         let session = session::Session {
             workspaces: vec![
                 session::Workspace {
+                    name: None,
                     left: here.clone(),
                     right: here.clone(),
                     show_right: false,
@@ -10752,6 +11022,7 @@ mod tests {
                     shell_program: None,
                 },
                 session::Workspace {
+                    name: None,
                     left: root.path().join("was-here-yesterday"),
                     right: here.clone(),
                     show_right: false,
