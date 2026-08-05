@@ -326,7 +326,7 @@ changes it.
 ## Testing
 
 ```sh
-cargo test                     # all 1092, from the workspace root
+cargo test                     # all 1094, from the workspace root
 ```
 
 From the root that is everything, because the root is a virtual manifest and
@@ -337,8 +337,8 @@ say `cargo test --workspace` there if you meant all of it.
 Per crate, when you want a fast loop:
 
 ```sh
-cargo test -p lost-commander-core    # 648 - the engine, seconds to build
-cargo test -p lost-commander-egui    # 216 - the graphical view
+cargo test -p lost-commander-core    # 649 - the engine, seconds to build
+cargo test -p lost-commander-egui    # 217 - the graphical view
 cargo test -p lost-commander-tui     # 122 - the terminal view
 cargo test -p lost-commander-ffi     # 106 - the C ABI
 ```
@@ -380,13 +380,32 @@ front-end written in C# is built on it.
 
 ## Where things are kept
 
-Settings, saved locations and the journal live in one directory per platform:
+One directory per platform:
 
 | | |
 |---|---|
 | Linux | `~/.config/lost-commander/` |
 | macOS | `~/Library/Application Support/lost-commander/` |
 | Windows | `%APPDATA%\lost-commander\` |
+
+Six things are kept, and each is its own file, because they change at wildly
+different rates and mean different things:
+
+| | | |
+|---|---|---|
+| `settings.toml` | how you like it | when you change something |
+| `bookmarks.toml` | places you saved | when you save or remove one |
+| `recent.toml` | places you have been | every time a pane moves |
+| `workspaces.toml` | the windows you had open | when you ask it to |
+| `journal/shell-*.jsonl` | what you ran | as each command is run |
+| `journal/files-*.jsonl` | what was done to files | as each thing happens |
+
+The two histories are appended a line at a time, so nothing is lost to a
+crash. Recent locations were kept inside `bookmarks.toml` until they got a
+file of their own: walking into a directory rewrote the file holding the
+things you had deliberately saved, which is a lot of writing to risk somebody's
+bookmarks on. An old `bookmarks.toml` with recents inside it still gives them
+up, so nothing disappears on the upgrade.
 
 ## License
 

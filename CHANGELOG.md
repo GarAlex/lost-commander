@@ -9,6 +9,14 @@ Notable changes, newest first. Versions follow [semantic versioning]; until
 
 ### Changed
 
+- **Recent locations moved out of `bookmarks.toml` into `recent.toml`, and are
+  written as they happen.** They were saved only on a clean exit, so a crash
+  or a window closed with the mouse lost them - and every step into a
+  directory rewrote the file holding the things you had deliberately saved.
+  Six things are kept now and each has its own file: settings, bookmarks,
+  recent locations, the windows, what you ran, and what was done to files. An
+  old bookmarks file with recents inside it still gives them up.
+
 - **Either half of the window can have all of it.** `Ctrl-O` gives it to the
   shell and `Ctrl-Shift-O` to the panes, and the same key hands it back; both
   are on the view menu. `Ctrl-O` used to fold the drawer away, which is the

@@ -239,14 +239,31 @@ impl Location {
 /// How many visited directories are kept.
 pub const MAX_RECENT: usize = 20;
 
-/// The persisted saved locations, plus the recently visited ones.
+/// The places you saved, and the places you have been.
+///
+/// Two lists, two files. A bookmark is something you chose and expect to
+/// find again; a recent location is a side effect of walking around, and it
+/// changes on nearly every keystroke. Keeping them in one file meant every
+/// step rewrote the file holding the things you had deliberately saved,
+/// which is a great deal of writing to risk somebody's bookmarks on.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Bookmarks {
     #[serde(default, rename = "location")]
     pub locations: Vec<Location>,
     /// Most recent first.
-    #[serde(default, rename = "recent")]
+    ///
+    /// Read from an old `bookmarks.toml` that still has it, so nobody's list
+    /// disappears on the upgrade, but never written back there: it belongs to
+    /// [`Bookmarks::recent_path`] now.
+    #[serde(default, rename = "recent", skip_serializing)]
     pub recent: Vec<Location>,
+}
+
+/// The recent list on its own, which is all its file holds.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+struct RecentFile {
+    #[serde(default, rename = "recent")]
+    recent: Vec<Location>,
 }
 
 impl Bookmarks {
@@ -256,15 +273,51 @@ impl Bookmarks {
     }
 
     /// Never fails: a missing or unreadable file simply means "no bookmarks".
+    ///
+    /// Reads both files. An old `bookmarks.toml` with a recent list inside it
+    /// still gives up its recents; a `recent.toml` beside it wins, because it
+    /// is the one being kept up to date.
     pub fn load() -> Self {
-        Self::config_path()
+        let mut bookmarks = Self::config_path()
             .and_then(|p| Self::load_from(&p).ok())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        if let Some(path) = Self::recent_path() {
+            bookmarks.load_recent_from(&path);
+        }
+        bookmarks
     }
 
     pub fn load_from(path: &Path) -> io::Result<Self> {
         let text = std::fs::read_to_string(path)?;
         toml::from_str(&text).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))
+    }
+
+    /// `~/.config/lost-commander/recent.toml` and the platform equivalents.
+    pub fn recent_path() -> Option<PathBuf> {
+        dirs::config_dir().map(|d| d.join("lost-commander").join("recent.toml"))
+    }
+
+    /// Read the recent list, keeping whatever an old bookmarks file had if
+    /// there is no separate file yet.
+    pub fn load_recent_from(&mut self, path: &Path) {
+        let Ok(text) = std::fs::read_to_string(path) else {
+            return;
+        };
+        if let Ok(file) = toml::from_str::<RecentFile>(&text) {
+            self.recent = file.recent;
+        }
+    }
+
+    pub fn save_recent_to(&self, path: &Path) -> io::Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let file = RecentFile {
+            recent: self.recent.clone(),
+        };
+        let text = toml::to_string_pretty(&file)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+        std::fs::write(path, text)
     }
 
     pub fn save_to(&self, path: &Path) -> io::Result<()> {
@@ -513,21 +566,65 @@ mod tests {
     }
 
     #[test]
-    fn recent_survives_a_save_and_load_cycle() {
+    fn bookmarks_and_recents_are_two_files() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("bookmarks.toml");
+        let marks_at = dir.path().join("bookmarks.toml");
+        let recent_at = dir.path().join("recent.toml");
 
         let mut marks = Bookmarks::default();
         marks.add(Location::parse("smb://nas.local/media").unwrap());
         marks.push_recent(Location::local("/home/user/code"));
         marks.push_recent(Location::parse("smb://nas.local/media/movies").unwrap());
-        marks.save_to(&path).unwrap();
+        marks.save_to(&marks_at).unwrap();
+        marks.save_recent_to(&recent_at).unwrap();
 
-        let loaded = Bookmarks::load_from(&path).unwrap();
-        assert_eq!(loaded.len(), 1);
-        assert_eq!(loaded.recent.len(), 2);
-        assert_eq!(loaded.recent[0].protocol, Protocol::Smb);
-        assert_eq!(loaded.recent[1].path, "/home/user/code");
+        // What you chose to save is not rewritten every time you walk into a
+        // directory, which is the point of the split.
+        let saved = Bookmarks::load_from(&marks_at).unwrap();
+        assert_eq!(saved.len(), 1);
+        assert!(
+            saved.recent.is_empty(),
+            "the recent list is not in the bookmarks file any more"
+        );
+
+        let mut read = Bookmarks::load_from(&marks_at).unwrap();
+        read.load_recent_from(&recent_at);
+        assert_eq!(read.recent.len(), 2);
+        assert_eq!(read.recent[0].protocol, Protocol::Smb);
+        assert_eq!(read.recent[1].path, "/home/user/code");
+    }
+
+    #[test]
+    fn an_old_bookmarks_file_still_gives_up_its_recents() {
+        // Written by a version that kept both in one file. Nobody's list of
+        // where they have been should disappear on an upgrade.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bookmarks.toml");
+        std::fs::write(
+            &path,
+            "[[location]]
+name = \"nas\"
+protocol = \"smb\"
+host = \"nas.local\"
+path = \"media\"
+
+             [[recent]]
+name = \"code\"
+protocol = \"local\"
+path = \"/home/user/code\"
+",
+        )
+        .unwrap();
+
+        let read = Bookmarks::load_from(&path).unwrap();
+        assert_eq!(read.len(), 1);
+        assert_eq!(read.recent.len(), 1, "read from the old file");
+
+        // And never written back there: the next save leaves the bookmarks
+        // file holding bookmarks alone.
+        let again = dir.path().join("rewritten.toml");
+        read.save_to(&again).unwrap();
+        assert!(Bookmarks::load_from(&again).unwrap().recent.is_empty());
     }
 
     #[test]

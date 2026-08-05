@@ -466,6 +466,9 @@ pub struct App {
     /// Where bookmarks are persisted. `None` disables saving, which keeps the
     /// test suite away from the real user configuration.
     pub bookmarks_path: Option<PathBuf>,
+    /// Where the recent list is kept - its own file, since it changes on
+    /// nearly every keystroke and the bookmarks do not.
+    pub recent_path: Option<PathBuf>,
     /// The copy/move/delete currently running on a worker thread.
     pub job: Option<Job>,
     /// Network shares attached this session, as (browsable path, location).
@@ -496,6 +499,7 @@ impl App {
         let mut app = Self::detached(left, right);
         app.bookmarks = Bookmarks::load();
         app.bookmarks_path = Bookmarks::config_path();
+        app.recent_path = Bookmarks::recent_path();
         // The account, and a sweep of what has aged out of it. Once at
         // startup: it is the only moment the program is certainly not in the
         // middle of writing to it.
@@ -557,6 +561,7 @@ impl App {
             pending_suspend: false,
             bookmarks: Bookmarks::default(),
             bookmarks_path: None,
+            recent_path: None,
             job: None,
             active_mounts: Vec::new(),
             search: None,
@@ -595,13 +600,23 @@ impl App {
             self.left.cwd().to_path_buf(),
             self.right.cwd().to_path_buf(),
         );
+        let mut moved = false;
         if after.0 != before.0 {
             let location = self.location_for(&after.0);
             self.bookmarks.push_recent(location);
+            moved = true;
         }
         if after.1 != before.1 {
             let location = self.location_for(&after.1);
             self.bookmarks.push_recent(location);
+            moved = true;
+        }
+        // Written as it happens rather than only on the way out. Where you
+        // have been is a list built one step at a time, and a program that
+        // only writes it down when it is closed properly loses the lot to a
+        // crash, a power cut or a terminal window shut with the mouse.
+        if moved {
+            self.persist_recent();
         }
     }
 
@@ -720,6 +735,16 @@ impl App {
             job.join();
         }
         self.poll_job();
+    }
+
+    /// Write down where the panels have been, in its own file.
+    fn persist_recent(&mut self) {
+        let Some(path) = self.recent_path.clone() else {
+            return;
+        };
+        if let Err(e) = self.bookmarks.save_recent_to(&path) {
+            self.error(format!("Could not save the recent list: {e}"));
+        }
     }
 
     fn persist_bookmarks(&mut self) {
@@ -5976,16 +6001,23 @@ mod tests {
     }
 
     #[test]
-    fn recent_is_written_out_when_quitting() {
+    fn where_the_panels_have_been_is_written_down_as_it_happens() {
         let (root, mut app) = app_fixture();
-        let path = root.path().join("bookmarks.toml");
+        let recent_at = root.path().join("recent.toml");
+        app.recent_path = Some(recent_at.clone());
 
         select(&mut app, "sub");
         app.on_key(key(KeyCode::Enter));
-        app.persist_on_exit();
 
-        let reloaded = Bookmarks::load_from(&path).unwrap();
+        // Not waiting for a clean exit: a list only written on the way out is
+        // a list lost to a crash or a terminal window shut with the mouse.
+        let mut reloaded = Bookmarks::default();
+        reloaded.load_recent_from(&recent_at);
         assert!(!reloaded.recent.is_empty());
+
+        // And in its own file: walking about does not rewrite the one holding
+        // what was deliberately saved.
+        assert!(!root.path().join("bookmarks.toml").exists());
     }
 
     #[test]

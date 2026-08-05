@@ -560,6 +560,9 @@ pub struct GuiApp {
     pub split: f32,
     pub bookmarks: Bookmarks,
     pub bookmarks_path: Option<PathBuf>,
+    /// Where the recent list is kept - its own file, since it changes on
+    /// nearly every keystroke and the bookmarks do not.
+    pub recent_path: Option<PathBuf>,
     pub job: Option<Job>,
     pub status: String,
     pub status_is_error: bool,
@@ -674,6 +677,7 @@ impl GuiApp {
         let mut app = Self::detached(left, right);
         app.bookmarks = Bookmarks::load();
         app.bookmarks_path = Bookmarks::config_path();
+        app.recent_path = Bookmarks::recent_path();
         app.settings = Settings::load();
         // How the reader left the window arranged. Clamped rather than
         // trusted: a settings file is a text file somebody can edit, and a
@@ -758,6 +762,7 @@ impl GuiApp {
             split: 0.5,
             bookmarks,
             bookmarks_path: None,
+            recent_path: None,
             job: None,
             status: String::from("Ready"),
             status_is_error: false,
@@ -1062,13 +1067,27 @@ impl GuiApp {
         if let Some(error) = self.panel(side).error.clone() {
             self.error(format!("{}: {error}", path.display()));
         } else {
-            self.bookmarks.push_recent(Location::local(path.clone()));
+            self.remember_visit(path.clone());
             // A pane showing a tree should follow along rather than go stale.
             if self.view(side) == ViewMode::Tree {
                 self.panel_mut(side).enter_tree_mode();
                 self.tree_scroll[Self::side_index(side)] = true;
             }
             self.info(path.display().to_string());
+        }
+    }
+
+    /// Note where a pane has just gone, and write the list down.
+    ///
+    /// Where you have been is shared by every workspace - it is one list
+    /// about you, not about a window - so it lives in its own file beside
+    /// the bookmarks rather than in the saved windows. Written as it happens
+    /// rather than on the way out: a list only saved on a clean exit is a
+    /// list lost to a crash or a window closed with the mouse.
+    fn remember_visit(&mut self, path: PathBuf) {
+        self.bookmarks.push_recent(Location::local(path));
+        if let Some(file) = &self.recent_path {
+            let _ = self.bookmarks.save_recent_to(file);
         }
     }
 
@@ -10243,6 +10262,34 @@ mod tests {
             app.right.current().marked_count(),
             1,
             "the second pane is parked whole, not re-pointed at a directory"
+        );
+    }
+
+    #[test]
+    fn where_you_have_been_is_written_down_as_you_go() {
+        let (root, mut app) = fixture();
+        let file = root.path().join("recent.toml");
+        app.recent_path = Some(file.clone());
+        let marks_at = root.path().join("bookmarks.toml");
+        app.bookmarks_path = Some(marks_at.clone());
+        let sub = app.left.cwd().join("sub");
+
+        app.navigate(Side::Left, sub.clone());
+
+        // On disk already, not waiting for a clean exit - and in its own
+        // file, not in the saved windows: it is one list about you rather
+        // than about a window, and every workspace shares it.
+        let mut read = Bookmarks::default();
+        read.load_recent_from(&file);
+        assert!(
+            read.recent
+                .iter()
+                .any(|l| Path::new(&l.path) == sub.as_path()),
+            "the visit is in its own file"
+        );
+        assert!(
+            !marks_at.exists(),
+            "and walking about did not rewrite the file holding the bookmarks"
         );
     }
 
