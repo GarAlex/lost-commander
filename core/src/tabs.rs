@@ -102,10 +102,23 @@ impl Tabs {
     /// What comes forward is the tab to the right, or the one to the left when
     /// the last tab was closed - which is where every browser leaves you.
     pub fn close(&mut self) -> bool {
-        if self.panels.len() < 2 {
+        self.close_at(self.active)
+    }
+
+    /// Close the nth tab, which need not be the one on show.
+    ///
+    /// Closing one *behind* the current tab must not change what is on show,
+    /// which is why the index is adjusted rather than clamped: the front-end
+    /// closes background workspaces from a list, and a close that silently
+    /// switched windows would be worse than the leak it was fixing.
+    pub fn close_at(&mut self, index: usize) -> bool {
+        if self.panels.len() < 2 || index >= self.panels.len() {
             return false;
         }
-        self.panels.remove(self.active);
+        self.panels.remove(index);
+        if self.active > index {
+            self.active -= 1;
+        }
         self.active = self.active.min(self.panels.len() - 1);
         true
     }
@@ -169,6 +182,26 @@ impl Tabs {
 #[cfg(test)]
 mod identity_tests {
     use super::*;
+
+    #[test]
+    fn closing_a_tab_behind_the_current_one_does_not_change_what_is_on_show() {
+        let mut tabs = Tabs::new(Panel::new(PathBuf::from("/a")));
+        tabs.open(Panel::new(PathBuf::from("/b")));
+        tabs.open(Panel::new(PathBuf::from("/c")));
+        let showing = tabs.current().id;
+        assert_eq!(tabs.active(), 2);
+
+        // Close the first, which sits behind the current one.
+        assert!(tabs.close_at(0));
+        assert_eq!(tabs.current().id, showing, "still the same tab on show");
+        assert_eq!(tabs.active(), 1, "at its new index");
+
+        // Out of range refuses rather than panics, and the last tab refuses
+        // because a pane always shows something.
+        assert!(!tabs.close_at(9));
+        assert!(tabs.close_at(1));
+        assert!(!tabs.close_at(0));
+    }
 
     #[test]
     fn a_tab_keeps_its_identity_through_everything_that_moves_it() {

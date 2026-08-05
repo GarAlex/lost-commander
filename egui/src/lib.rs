@@ -875,6 +875,13 @@ impl GuiApp {
 
     /// `Ctrl-W`: close the tab on show.
     fn close_tab(&mut self, side: Side) {
+        // The left pane's tabs are the workspaces, and closing one is more
+        // than a tab going away: its record and parked pane go with it, and
+        // its neighbour arrives with its own arrangement.
+        if side == Side::Left {
+            self.close_workspace(self.left.active());
+            return;
+        }
         if self.tabs_mut(side).close() {
             self.sync_tree_view(side);
             self.info("Tab closed");
@@ -887,6 +894,22 @@ impl GuiApp {
 
     /// `Alt-W`: keep the tab on show and close the rest.
     fn close_other_tabs(&mut self, side: Side) {
+        // The records and parked panes of the closed workspaces go with
+        // them, or every "close others" would leak a map entry per window.
+        if side == Side::Left {
+            let keep = self.left.current().id;
+            let going: Vec<u64> = self
+                .left
+                .all()
+                .iter()
+                .map(|panel| panel.id)
+                .filter(|id| *id != keep)
+                .collect();
+            for id in &going {
+                self.workspaces.remove(id);
+                self.parked.remove(id);
+            }
+        }
         match self.tabs_mut(side).close_others() {
             0 => self.error("There is only this tab"),
             n => self.info(format!(
@@ -924,12 +947,22 @@ impl GuiApp {
     /// tab that arrived as a bare path would have lost the reason you wanted
     /// it over there.
     fn move_tab_across(&mut self, side: Side) {
+        let moving = self.tabs(side).current().id;
         let Some(panel) = self.tabs_mut(side).take() else {
             self.error("That is the only tab in this pane");
             return;
         };
         let where_ = panel.cwd.display().to_string();
         let other = Self::other_side(side);
+        // Out of the left pane, this dissolves a workspace into a pane of
+        // another one: the record and the parked second pane make no sense
+        // where it is going, and the window it leaves behind arrives with
+        // its own arrangement rather than the dissolved one's leftovers.
+        if side == Side::Left {
+            self.workspaces.remove(&moving);
+            self.parked.remove(&moving);
+            self.settle_in();
+        }
         self.tabs_mut(other).accept(panel);
         // Both panes need their tree state settled: one lost a tab and one
         // gained the tab that is now on show.
@@ -7763,14 +7796,18 @@ impl GuiApp {
         // runs, because the first thing it does is write the live one down -
         // over the record just built, if they disagree.
         self.left.activate(0);
-        self.restore_workspace();
-        if let Some(parked) = self.parked.remove(&self.workspace_id()) {
-            let stale = std::mem::replace(self.right.current_mut(), parked);
-            drop(stale);
-        }
+        self.settle_in();
 
-        // Then the one that was actually in front.
-        let at = session.at.min(kept.len() - 1);
+        // Then the one that was actually in front - found by its directory,
+        // not by its saved index: `at` counted the windows as saved, and a
+        // window dropped for a missing directory shifts everything after it.
+        let front = session
+            .workspaces
+            .get(session.at)
+            .map(|workspace| workspace.left.clone());
+        let at = front
+            .and_then(|left| kept.iter().position(|workspace| workspace.left == left))
+            .unwrap_or(0);
         if at > 0 {
             self.show_workspace(at);
         }
@@ -7891,6 +7928,47 @@ impl GuiApp {
         self.restore_workspace();
     }
 
+    /// Put the workspace that is now on show fully on screen: its
+    /// arrangement, and its own second pane in place of whatever is live.
+    ///
+    /// For arrivals that have no leaver to park - a closed workspace, one
+    /// moved away, a session being opened. [`GuiApp::show_workspace`] parks
+    /// the leaver first and then does this.
+    fn settle_in(&mut self) {
+        self.restore_workspace();
+        if let Some(parked) = self.parked.remove(&self.workspace_id()) {
+            let stale = std::mem::replace(self.right.current_mut(), parked);
+            // Whatever was live belonged to a workspace that is gone or
+            // parked itself; nothing owns it any more.
+            drop(stale);
+        }
+    }
+
+    /// Close a workspace: its tab, its record, and its parked pane.
+    ///
+    /// Closing one that is *not* on show changes nothing on screen - which is
+    /// exactly why it cannot go through `Tabs::close`, whose only mode is
+    /// "close the current one". Closing the one on show brings its neighbour
+    /// forward with that neighbour's own arrangement and second pane, not the
+    /// dead workspace's leftovers.
+    pub fn close_workspace(&mut self, index: usize) {
+        let Some(closing) = self.left.all().get(index).map(|panel| panel.id) else {
+            return;
+        };
+        let was_current = index == self.left.active();
+        if !self.left.close_at(index) {
+            self.error("That is the only workspace");
+            return;
+        }
+        self.workspaces.remove(&closing);
+        self.parked.remove(&closing);
+        if was_current {
+            self.settle_in();
+            self.sync_tree_view(Side::Left);
+        }
+        self.info("Workspace closed");
+    }
+
     /// Tie the shell on show to the workspace on show.
     ///
     /// The pairing is made by using them together, which is the only moment
@@ -7958,7 +8036,6 @@ impl GuiApp {
     /// the drawer. They are one thing - a place you are working, and the
     /// shell standing in it - and this is the one list of them.
     fn rail(&mut self, ui: &mut egui::Ui, area: Rect) {
-        let side = self.active;
         let wide = self.rail_wide;
         let mut child = ui.new_child(
             egui::UiBuilder::new()
@@ -8000,8 +8077,12 @@ impl GuiApp {
 
         // Read out before drawing: the rows need `self` and so cannot hold a
         // borrow of the tabs while they are drawn.
+        // The left pane's tabs, always: they are what a workspace *is*. This
+        // read `self.active`, so standing in the right pane made the rail
+        // list that pane's tabs as windows while clicks still acted on the
+        // left - two different lists behind one set of rows.
         let rows: Vec<(usize, String, String, Option<String>, bool)> = self
-            .tabs(side)
+            .left
             .all()
             .iter()
             .enumerate()
@@ -8020,7 +8101,7 @@ impl GuiApp {
                         .display()
                         .to_string(),
                     shell,
-                    index == self.tabs(side).active(),
+                    index == self.left.active(),
                 )
             })
             .collect();
@@ -8109,10 +8190,7 @@ impl GuiApp {
             self.show_workspace(index);
         }
         if let Some(index) = close {
-            self.tabs_mut(side).activate(index);
-            if !self.tabs_mut(side).close() {
-                self.error("That is the only workspace in this pane");
-            }
+            self.close_workspace(index);
         }
     }
 
@@ -10290,6 +10368,94 @@ mod tests {
         assert!(
             !marks_at.exists(),
             "and walking about did not rewrite the file holding the bookmarks"
+        );
+    }
+
+    #[test]
+    fn closing_a_workspace_brings_the_next_ones_own_arrangement_back() {
+        use keys::Action as A;
+        let (root, mut app) = fixture();
+        let sub = root.path().join("left").join("sub");
+
+        // The first window: two panes, a tree.
+        app.show_right = true;
+        app.run_action(A::ViewTree);
+
+        // The second: one pane, a plain listing, somewhere else.
+        app.run_action(A::NewTab);
+        app.left.current_mut().chdir(sub.clone());
+        app.run_action(A::ViewDetails);
+        app.run_action(A::ToggleSecondPane);
+        assert!(!app.show_right);
+
+        // Closing the one on show is not just a tab going away: the
+        // neighbour arrives as itself, tree, second pane and all.
+        let closed = app.left.current().id;
+        app.run_action(A::CloseTab);
+        assert_eq!(app.left.len(), 1);
+        assert!(app.show_right, "the survivor's own arrangement");
+        assert_eq!(app.left_view, ViewMode::Tree);
+        assert!(
+            !app.workspaces.contains_key(&closed) && !app.parked.contains_key(&closed),
+            "the dead workspace's record and parked pane went with it"
+        );
+    }
+
+    #[test]
+    fn closing_a_background_workspace_changes_nothing_on_show() {
+        use keys::Action as A;
+        let (root, mut app) = fixture();
+        let sub = root.path().join("left").join("sub");
+
+        app.run_action(A::NewTab);
+        app.left.current_mut().chdir(sub.clone());
+        let showing = app.left.current().id;
+
+        // Close the first window from the rail while the second is on show.
+        app.close_workspace(0);
+        assert_eq!(app.left.len(), 1);
+        assert_eq!(
+            app.left.current().id,
+            showing,
+            "closing a window behind this one must not switch windows"
+        );
+        assert_eq!(app.left.current().cwd, sub);
+    }
+
+    #[test]
+    fn the_front_window_is_found_by_directory_not_by_saved_index() {
+        let (root, mut app) = fixture();
+        let here = app.left.cwd().to_path_buf();
+        let sub = root.path().join("left").join("sub");
+        let blank = |left: PathBuf| session::Workspace {
+            left,
+            right: here.clone(),
+            show_right: false,
+            left_view: "list".into(),
+            right_view: "list".into(),
+            half: "both".into(),
+            active: "left".into(),
+            split: 0.5,
+            synced: true,
+            shell: None,
+        };
+        // The window in front is the *second* saved one - and the first is
+        // gone, so its index would now point at the wrong window.
+        let session = session::Session {
+            workspaces: vec![
+                blank(root.path().join("was-here-yesterday")),
+                blank(sub.clone()),
+                blank(here.clone()),
+            ],
+            at: 1,
+        };
+
+        app.open_session(&session);
+        assert_eq!(app.left.len(), 2);
+        assert_eq!(
+            app.left.current().cwd,
+            sub,
+            "the one that was in front, not the one at its old index"
         );
     }
 
