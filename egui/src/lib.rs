@@ -129,6 +129,10 @@ pub enum Dialog {
     Undo {
         plan: lost_commander_core::undo::Plan,
     },
+    /// What deletion kept: restore it, or let it go for good.
+    Trash {
+        items: Vec<lost_commander_core::trash::TrashedItem>,
+    },
     /// Where a copy, a move or an extraction is going - typed, not implied.
     ///
     /// The destination used to be wherever the other pane happened to be,
@@ -2891,6 +2895,7 @@ impl GuiApp {
     // ---- sidebar -----------------------------------------------------------
 
     fn sidebar(&mut self, ui: &mut egui::Ui) {
+        let mut open_trash = false;
         let mut target: Option<PathBuf> = None;
 
         egui::ScrollArea::vertical().show(ui, |ui| {
@@ -2912,6 +2917,13 @@ impl GuiApp {
                 if sidebar_row_with(ui, &place.name, icon, false, free) {
                     target = Some(place.path.clone());
                 }
+            }
+
+            // The trash is a place things are, which is what this column is
+            // for. It opens as a browser rather than a directory, because
+            // what matters about a trashed file is where it came from.
+            if sidebar_row_with(ui, "Trash", icons::Kind::Folder, false, None) {
+                open_trash = true;
             }
 
             ui.add_space(10.0);
@@ -2938,6 +2950,9 @@ impl GuiApp {
             }
         });
 
+        if open_trash {
+            self.open_trash();
+        }
         if let Some(path) = target {
             let side = self.active;
             self.navigate(side, path);
@@ -4294,6 +4309,7 @@ impl GuiApp {
                 self.filter_editing = Some(side);
             }
             A::Undo => self.offer_undo(),
+            A::Trash => self.open_trash(),
             A::Palette => {
                 self.dialog = Some(Dialog::Palette {
                     query: String::new(),
@@ -6536,6 +6552,10 @@ impl GuiApp {
                                         "remove the directory (only if empty)  {}",
                                         dir.display()
                                     ),
+                                    Step::RestoreFromTrash { item } => format!(
+                                        "restore from the trash  {}",
+                                        item.original.display()
+                                    ),
                                 };
                                 ui.label(
                                     RichText::new(line)
@@ -6572,6 +6592,138 @@ impl GuiApp {
                     self.apply_undo(&plan);
                 }
                 still_open = !escaped && !cancelled && !confirmed;
+            }
+            Dialog::Trash { items } => {
+                use lost_commander_core::trash;
+                let mut cancelled = false;
+                let mut act: Option<(usize, bool)> = None; // (index, restore?)
+                let mut empty_all = false;
+                let escaped = modal(
+                    ctx,
+                    &format!(
+                        "Trash - {} item{}",
+                        items.len(),
+                        if items.len() == 1 { "" } else { "s" }
+                    ),
+                    |ui| {
+                        if items.is_empty() {
+                            ui.label(
+                                RichText::new("Nothing in the trash.")
+                                    .size(11.5)
+                                    .color(theme::text_faint()),
+                            );
+                        }
+                        egui::ScrollArea::vertical()
+                        .max_height(300.0)
+                        .auto_shrink([false, true])
+                        .show(ui, |ui| {
+                            ui.set_min_width(460.0);
+                            for (index, item) in items.iter().enumerate() {
+                                ui.horizontal(|ui| {
+                                    ui.vertical(|ui| {
+                                        ui.label(
+                                            RichText::new(&item.name)
+                                                .size(12.0)
+                                                .color(theme::text()),
+                                        );
+                                        ui.label(
+                                            RichText::new(format!(
+                                                "{}   {}",
+                                                item.original.display(),
+                                                item.deleted_at
+                                            ))
+                                            .size(9.5)
+                                            .color(theme::text_faint()),
+                                        );
+                                    });
+                                    ui.with_layout(
+                                        Layout::right_to_left(Align::Center),
+                                        |ui| {
+                                            if ui
+                                                .button(RichText::new("purge").size(10.5))
+                                                .on_hover_text("Remove for good - this one is not reversible")
+                                                .clicked()
+                                            {
+                                                act = Some((index, false));
+                                            }
+                                            if ui
+                                                .button(RichText::new("restore").size(10.5))
+                                                .on_hover_text("Put it back where it came from")
+                                                .clicked()
+                                            {
+                                                act = Some((index, true));
+                                            }
+                                        },
+                                    );
+                                });
+                                ui.add_space(2.0);
+                            }
+                        });
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            if ui
+                                .add_enabled(
+                                    !items.is_empty(),
+                                    egui::Button::new(format!(
+                                        "Empty the trash ({} item{})",
+                                        items.len(),
+                                        if items.len() == 1 { "" } else { "s" }
+                                    )),
+                                )
+                                .on_hover_text("Purge everything - not reversible")
+                                .clicked()
+                            {
+                                empty_all = true;
+                            }
+                            cancelled |= ui.button("Close").clicked();
+                        });
+                    },
+                );
+
+                let mut acted = false;
+                if let Some((index, restoring)) = act {
+                    if let Some(item) = items.get(index) {
+                        let outcome = if restoring {
+                            trash::restore(item).map(|()| {
+                                self.note(
+                                    journal::Event::new(journal::Kind::Move, &item.original)
+                                        .note("restored from the trash"),
+                                );
+                            })
+                        } else {
+                            trash::purge(item)
+                        };
+                        match outcome {
+                            Ok(()) => {
+                                self.info(format!(
+                                    "{}: {}",
+                                    if restoring { "Restored" } else { "Purged" },
+                                    item.original.display()
+                                ));
+                            }
+                            Err(e) => self.error(format!("{}: {e}", item.original.display())),
+                        }
+                        acted = true;
+                    }
+                }
+                if empty_all {
+                    let mut gone = 0;
+                    for item in items.iter() {
+                        if trash::purge(item).is_ok() {
+                            gone += 1;
+                        }
+                    }
+                    self.info(format!("Emptied the trash: {gone} purged"));
+                    acted = true;
+                }
+                if acted {
+                    // Re-read rather than guess: the trash is shared with
+                    // the rest of the machine.
+                    *items = trash::list();
+                    self.left.reload();
+                    self.right.reload();
+                }
+                still_open = !escaped && !cancelled;
             }
             Dialog::MkDir { name } => {
                 let (mut confirmed, mut cancelled) = (false, false);
@@ -9176,6 +9328,13 @@ impl GuiApp {
         }
     }
 
+    /// `Alt-B`: what is in the trash, ready to restore or purge.
+    pub fn open_trash(&mut self) {
+        let items = lost_commander_core::trash::list();
+        self.dialog = Some(Dialog::Trash { items });
+        self.dialog_opened = true;
+    }
+
     /// `Ctrl-Z`: read the last operation out of the account and offer its
     /// reversal - shown in full before anything moves, because an undo that
     /// guesses is worse than none.
@@ -9214,6 +9373,10 @@ impl GuiApp {
                     .note("undo"),
                 Step::RemoveMade { dir } => journal::Event::new(journal::Kind::Delete, dir)
                     .note("undo: the directory is removed"),
+                Step::RestoreFromTrash { item } => {
+                    journal::Event::new(journal::Kind::Move, &item.original)
+                        .note("undo: restored from the trash")
+                }
             };
             self.note(event);
         }

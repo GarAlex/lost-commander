@@ -236,8 +236,14 @@ copy's products are removed, the last move or rename goes back, a made
 directory is removed if empty. The plan is shown in full before anything
 moves — every step, and every item that cannot be reversed with its reason.
 A changed copy is refused rather than taken; a permanent delete is named
-irreversible; a trashed file is called safe where it is. The reversal is
+irreversible; a trashed file is restored from the trash. The reversal is
 itself recorded, so undoing an undo is just `Ctrl-Z` again.
+
+`Alt-B` opens the trash — also a row in the places column: everything
+deletion kept, each with where it came from and when. Restore puts a thing
+back (refusing if something else now sits where it came from, and remaking
+its home if that has gone); purge and *Empty the trash* are named not
+reversible, because they are not.
 
 `Ctrl-Shift-P` opens the palette: every action, searchable by name or key,
 Enter runs the highlighted one. It reads the same table as the key bar and
@@ -342,7 +348,7 @@ opens onto a line saying which of the two you have, and `Alt-O` changes it.
 ## Testing
 
 ```sh
-cargo test                     # all 1145, from the workspace root
+cargo test                     # all 1149, from the workspace root
 ```
 
 From the root that is everything, because the root is a virtual manifest and
@@ -353,7 +359,7 @@ say `cargo test --workspace` there if you meant all of it.
 Per crate, when you want a fast loop:
 
 ```sh
-cargo test -p lost-commander-core    # 676 - the engine, seconds to build
+cargo test -p lost-commander-core    # 680 - the engine, seconds to build
 cargo test -p lost-commander-egui    # 236 - the graphical view
 cargo test -p lost-commander-tui     # 127 - the terminal view
 cargo test -p lost-commander-ffi     # 106 - the C ABI

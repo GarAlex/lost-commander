@@ -28,6 +28,8 @@ pub enum Step {
     MoveBack { now: PathBuf, was: PathBuf },
     /// A directory that was made: removed only if it is empty.
     RemoveMade { dir: PathBuf },
+    /// A trashed thing, fetched back to where it came from.
+    RestoreFromTrash { item: crate::trash::TrashedItem },
 }
 
 /// What undoing the last operation would mean.
@@ -100,12 +102,6 @@ pub fn plan(records: &[Record]) -> Undoable {
                 why: "deleted for good - there is nothing to bring back".into(),
             };
         }
-        Kind::Trash => {
-            return Undoable::Refused {
-                what,
-                why: "it is safe in the trash; restoring from there is not built yet".into(),
-            };
-        }
         _ => {}
     }
     if events.len() >= MAX_EVENTS_PER_GROUP {
@@ -166,6 +162,25 @@ pub fn plan(records: &[Record]) -> Undoable {
                     steps.push(Step::MoveBack { now, was });
                 }
             }
+            Kind::Trash => {
+                // The newest trash entry that came from this path: what was
+                // deleted twice has two entries, and the last delete is the
+                // one being undone.
+                let original = PathBuf::from(&event.path);
+                match crate::trash::list()
+                    .into_iter()
+                    .find(|item| item.original == original)
+                {
+                    Some(item) if item.original.exists() => refused.push((
+                        event.path.clone(),
+                        "something else is where it came from".into(),
+                    )),
+                    Some(item) => steps.push(Step::RestoreFromTrash { item }),
+                    None => {
+                        refused.push((event.path.clone(), "it is no longer in the trash".into()))
+                    }
+                }
+            }
             Kind::MakeDir => {
                 let dir = PathBuf::from(&event.path);
                 if dir.is_dir() {
@@ -224,6 +239,9 @@ pub fn apply(plan: &Plan) -> Vec<(PathBuf, String)> {
             }
             Step::RemoveMade { dir } => {
                 std::fs::remove_dir(dir).map_err(|e| (dir.clone(), e.to_string()))
+            }
+            Step::RestoreFromTrash { item } => {
+                crate::trash::restore(item).map_err(|e| (item.original.clone(), e.to_string()))
             }
         };
         if let Err(failure) = outcome {
@@ -343,11 +361,18 @@ mod tests {
         };
         assert!(why.contains("nothing to bring back"));
 
+        // A trashed file plans a restore now - and one that is not actually
+        // in the trash any more says so per item rather than refusing whole.
         records.push(Record::Event(Event::new(Kind::Trash, "/binned.txt")));
-        let Undoable::Refused { why, .. } = plan(&records) else {
-            panic!("refused")
+        let Undoable::Plan(the_plan) = plan(&records) else {
+            panic!("a plan")
         };
-        assert!(why.contains("safe in the trash"));
+        assert!(the_plan.steps.is_empty());
+        assert!(
+            the_plan.refused[0].1.contains("no longer in the trash"),
+            "{:?}",
+            the_plan.refused
+        );
     }
 
     #[test]

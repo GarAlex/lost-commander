@@ -143,6 +143,8 @@ pub enum Action {
     Palette,
     /// Reverse the last file operation, out of the account.
     Undo,
+    /// The trash: what is in it, restore, purge.
+    Trash,
     /// Send this tab, whole, to the other pane.
     MoveTabAcross,
 
@@ -271,6 +273,10 @@ pub fn action_for(key: Key, modifiers: Modifiers) -> Option<Action> {
         // the shells' own reverse-search, both older claims on the key.
         if key == Key::R {
             return Some(Action::SearchHistory);
+        }
+        // B for bin. The trash browser: restore or purge what deletion kept.
+        if key == Key::B {
+            return Some(Action::Trash);
         }
         // Alt-F narrows the listing. Ctrl-F is Find, which searches the
         // disk; this filters what is already on screen.
@@ -698,6 +704,7 @@ pub fn every_action() -> Vec<Action> {
         FilterPane,
         Palette,
         Undo,
+        Trash,
         MoveTabAcross,
         CompareFolders,
         Synchronize,
@@ -783,6 +790,7 @@ pub fn describe(action: Action) -> (&'static str, &'static str) {
         FilterPane => ("Narrow the listing as you type", "Alt-F"),
         Palette => ("This palette", "Ctrl-Shift-P"),
         Undo => ("Undo the last file operation", "Ctrl-Z"),
+        Trash => ("The trash - restore or purge", "Alt-B"),
         MoveTabAcross => ("Send this tab to the other pane", "Shift-F6"),
         CompareFolders => ("Mark what differs between the panes", "Alt-C"),
         Synchronize => ("Synchronise the two folders", "Alt-S"),

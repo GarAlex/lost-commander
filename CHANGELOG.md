@@ -9,6 +9,14 @@ Notable changes, newest first. Versions follow [semantic versioning]; until
 
 ### Added
 
+- **The trash is a place.** `Alt-B`, and a row in the places column:
+  everything deletion kept, each with where it came from and when. Restore
+  puts a thing back - refusing a taken seat, remaking its home if that has
+  gone - and purge and *Empty the trash* are named not reversible. On the
+  XDG side this reads the same trashinfo files deletion writes; on Windows
+  it is the same Shell COM dance deletion already does. And undo grew up
+  with it: `Ctrl-Z` over a delete now restores from the trash instead of
+  calling it not built yet.
 - **Undo, out of the account.** `Ctrl-Z` in the graphical view reads the
   last file operation from the journal and offers its reversal: a copy's
   products removed, a move or rename sent back, a made directory removed if
