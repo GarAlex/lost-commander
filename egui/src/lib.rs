@@ -499,7 +499,8 @@ pub struct GuiApp {
     /// this program made.
     history_of: Option<PathBuf>,
     history_rows: Vec<journal::Happening>,
-    history_read_at: f64,
+    /// The journal generation the folder-history pane was filtered at.
+    history_gen: u64,
     /// The list of what was run here, beside the shell.
     ///
     /// On by default: a shell's own history is one list with no idea where
@@ -516,7 +517,8 @@ pub struct GuiApp {
     pub history_here_only: bool,
     shell_history_of: Option<PathBuf>,
     shell_history: Vec<journal::Past>,
-    shell_history_read_at: f64,
+    /// The journal generation the shell-history column was filtered at.
+    shell_history_gen: u64,
     /// Whether both panes are shown. With one, it is the active pane that
     /// fills the window; the other keeps its directory and cursor for when it
     /// comes back.
@@ -749,12 +751,12 @@ impl GuiApp {
             row_height: 280.0,
             history_of: None,
             history_rows: Vec::new(),
-            history_read_at: 0.0,
+            history_gen: u64::MAX,
             show_shell_history: true,
             history_here_only: true,
             shell_history_of: None,
             shell_history: Vec::new(),
-            shell_history_read_at: 0.0,
+            shell_history_gen: u64::MAX,
             // One pane to begin with, which is XTree's shape and the one
             // most work actually needs: a tree and its files, with the whole
             // width to show them in. The second is for the few things that
@@ -8460,13 +8462,20 @@ impl GuiApp {
         // a shell happened to be standing. With a shell in step the two are
         // the same anyway; when they are not, the pane is what you can see.
         let here = self.panel(self.active).cwd.clone();
-        let now = ui.input(|input| input.time);
+        // Refiltered when the account moved or the directory did - not on a
+        // clock. The generation is the journal saying "something happened",
+        // which is the only reason the answer could differ.
+        let generation = self
+            .journal
+            .as_ref()
+            .map(|journal| journal.generation())
+            .unwrap_or(0);
         if self.shell_history_of.as_deref() != Some(here.as_path())
-            || now - self.shell_history_read_at > 1.0
+            || self.shell_history_gen != generation
         {
             self.shell_history = self.commands_in(&here);
             self.shell_history_of = Some(here.clone());
-            self.shell_history_read_at = now;
+            self.shell_history_gen = generation;
         }
 
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(area));
@@ -8597,25 +8606,27 @@ impl GuiApp {
         let Some(journal) = &self.journal else {
             return Vec::new();
         };
-        let mut records = Vec::new();
-        let mut days = journal.days(journal::Stream::Shell);
-        days.truncate(7);
-        for day in days.into_iter().rev() {
-            records.extend(journal.read(journal::Stream::Shell, day));
-        }
-        // Everything, here first - the filter is applied when it is drawn, so
-        // switching between "here" and "all" does not re-read the account.
-        journal::commands_before(&records, here)
+        // From memory, not from disk: the journal reads its files once and
+        // appends in step from then on. The last week, because a column is a
+        // column - and everything within it, here first, so switching
+        // between "here" and "all" is a redraw, not a read.
+        journal.with_records(journal::Stream::Shell, |records| {
+            journal::commands_before(journal::since(records, 7), here)
+        })
     }
 
     /// What was done to the things in the other pane's folder.
     fn pane_history(&mut self, ui: &mut egui::Ui, side: Side) {
         let here = self.panel(side.other()).cwd.clone();
-        let now = ui.input(|input| input.time);
-        if self.history_of.as_deref() != Some(here.as_path()) || now - self.history_read_at > 1.0 {
+        let generation = self
+            .journal
+            .as_ref()
+            .map(|journal| journal.generation())
+            .unwrap_or(0);
+        if self.history_of.as_deref() != Some(here.as_path()) || self.history_gen != generation {
             self.history_rows = self.happenings_in(&here);
             self.history_of = Some(here.clone());
-            self.history_read_at = now;
+            self.history_gen = generation;
         }
 
         if self.history_rows.is_empty() {
@@ -8700,16 +8711,12 @@ impl GuiApp {
         let Some(journal) = &self.journal else {
             return Vec::new();
         };
-        let mut records = Vec::new();
-        // Newest last, so `happened_in` walking backwards sees the newest
-        // first. Far enough back to be useful, not so far that a pane reads a
-        // year of files.
-        let mut days = journal.days(journal::Stream::Files);
-        days.truncate(7);
-        for day in days.into_iter().rev() {
-            records.extend(journal.read(journal::Stream::Files, day));
-        }
-        journal::happened_in(&records, here)
+        // From memory, and only the last week: far enough back to be
+        // useful, not so far that a pane answers with a year. Newest last,
+        // so `happened_in` walking backwards sees the newest first.
+        journal.with_records(journal::Stream::Files, |records| {
+            journal::happened_in(journal::since(records, 7), here)
+        })
     }
 
     /// The function keys, as the terminal view has always shown them.
@@ -11939,6 +11946,20 @@ mod tests {
 
         // Somewhere else has its own story, and it is not this one.
         assert!(app.happenings_in(Path::new("/nowhere")).is_empty());
+    }
+
+    #[test]
+    fn a_new_record_moves_the_generation_the_history_column_watches() {
+        let (_root, mut app) = fixture();
+        let _dir = with_a_journal(&mut app);
+        let before = app.journal.as_ref().unwrap().generation();
+
+        let here = app.left.cwd().to_path_buf();
+        app.note(journal::Event::new(journal::Kind::Command, &here).note("cargo test"));
+
+        // The column refilters when this moves, and only when it moves -
+        // the once-a-second re-read of the whole stream is gone.
+        assert!(app.journal.as_ref().unwrap().generation() > before);
     }
 
     #[test]

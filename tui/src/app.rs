@@ -3051,11 +3051,9 @@ impl App {
         // The last few days, newest last, so the ordering below sees the
         // newest first when it walks backwards. Far enough to be useful and
         // not so far that opening the command line reads a year of files.
-        let mut days = journal.days(journal::Stream::Shell);
-        days.truncate(7);
-        for day in days.into_iter().rev() {
-            records.extend(journal.read(journal::Stream::Shell, day));
-        }
+        records.extend(journal.with_records(journal::Stream::Shell, |all| {
+            journal::since(all, 7).to_vec()
+        }));
         journal::commands_before(&records, &here)
     }
 

@@ -367,6 +367,17 @@ pub enum Record {
     Done(Done),
 }
 
+impl Record {
+    /// When it happened, whichever kind of record it is.
+    pub fn at(&self) -> i64 {
+        match self {
+            Record::Group(group) => group.at,
+            Record::Event(event) => event.at,
+            Record::Done(done) => done.at,
+        }
+    }
+}
+
 /// The most events one run will write.
 ///
 /// A copy of a hundred thousand files should not become a hundred thousand
@@ -559,6 +570,29 @@ impl Keep {
 pub struct Journal {
     dir: PathBuf,
     pub keep: Keep,
+    /// The account, in memory: one slot per stream, filled the first time a
+    /// stream is asked for and appended to on every write from then on.
+    ///
+    /// Shared by every clone rather than owned by each, because a clone
+    /// crosses to the worker thread that records a copy - a cache the worker
+    /// could not reach would be stale before the copy finished. The files on
+    /// disk are unchanged by any of this; the cache is only ever what the
+    /// files would say.
+    cache: std::sync::Arc<[std::sync::Mutex<Option<Vec<Record>>>; 2]>,
+    /// Moved forward on every change to the account, so a front-end can ask
+    /// "anything new?" once a frame instead of re-reading to find out. Which
+    /// stream changed is not said: the question is asked at human speed and
+    /// a spare re-filter is cheaper than a second counter.
+    generation: std::sync::Arc<std::sync::atomic::AtomicU64>,
+}
+
+impl Stream {
+    fn slot(self) -> usize {
+        match self {
+            Stream::Files => 0,
+            Stream::Shell => 1,
+        }
+    }
 }
 
 impl Journal {
@@ -572,11 +606,63 @@ impl Journal {
         Journal {
             dir: dir.into(),
             keep,
+            cache: std::sync::Arc::new([std::sync::Mutex::new(None), std::sync::Mutex::new(None)]),
+            generation: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
     }
 
     pub fn dir(&self) -> &Path {
         &self.dir
+    }
+
+    /// How many times the account has changed since this journal was made.
+    ///
+    /// A front-end that redraws every frame keeps its filtered view of the
+    /// history by comparing this, which turns "re-read once a second in case
+    /// something happened" into "re-filter when something did".
+    pub fn generation(&self) -> u64 {
+        self.generation.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn touched(&self) {
+        self.generation
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Run `f` over every record of a stream, oldest first, from memory.
+    ///
+    /// The first call reads the stream's day files once; every later call is
+    /// the memory, kept in step by [`Journal::write`]. A borrow rather than a
+    /// clone, because the whole point is not to copy the account per query.
+    pub fn with_records<R>(&self, stream: Stream, f: impl FnOnce(&[Record]) -> R) -> R {
+        let Ok(mut slot) = self.cache[stream.slot()].lock() else {
+            // A panic while the lock was held. The files are still the
+            // truth, so answer from them rather than not at all.
+            return f(&self.read_everything(stream));
+        };
+        if slot.is_none() {
+            *slot = Some(self.read_everything(stream));
+        }
+        f(slot.as_deref().unwrap_or_default())
+    }
+
+    /// Every day file of a stream, oldest first.
+    fn read_everything(&self, stream: Stream) -> Vec<Record> {
+        let mut records = Vec::new();
+        for day in self.days(stream).into_iter().rev() {
+            records.extend(self.read(stream, day));
+        }
+        records
+    }
+
+    /// Forget the memory, for the operations that rewrite the files.
+    fn drop_cache(&self) {
+        for slot in self.cache.iter() {
+            if let Ok(mut slot) = slot.lock() {
+                *slot = None;
+            }
+        }
+        self.touched();
     }
 
     fn file(&self, stream: Stream, day: Day) -> PathBuf {
@@ -608,6 +694,15 @@ impl Journal {
         {
             let _ = writeln!(file, "{line}");
         }
+        // Into the memory as well - even when the disk refused, because the
+        // thing this records *happened*, and the session should be able to
+        // answer for itself either way.
+        if let Ok(mut slot) = self.cache[stream.slot()].lock() {
+            if let Some(records) = slot.as_mut() {
+                records.push(record.clone());
+            }
+        }
+        self.touched();
     }
 
     pub fn record(&self, event: Event) {
@@ -682,6 +777,9 @@ impl Journal {
     ///
     /// Returns how many files went, so the caller can say so.
     pub fn sweep(&self, today: Day) -> usize {
+        // The files are about to change under the memory, so the memory goes:
+        // the next question re-reads what is actually there.
+        self.drop_cache();
         if self.keep.forever() {
             return 0;
         }
@@ -706,6 +804,7 @@ impl Journal {
     /// Throw the lot away. Only the journal's own files, never anything else
     /// that happens to be in the directory.
     pub fn clear(&self) -> usize {
+        self.drop_cache();
         let Ok(entries) = std::fs::read_dir(&self.dir) else {
             return 0;
         };
@@ -1004,6 +1103,18 @@ pub struct Past {
 /// Works whatever shell is running. The line is known before it is handed
 /// over, so this needs no hook - which matters, because the machine's own
 /// shell on Windows has none.
+/// The tail of a stream that is at most this many days old.
+///
+/// A slice rather than a new list: records come out of [`Journal::with_records`]
+/// oldest first, so "the last week" is everything after one cut, found by
+/// binary search because the order is already chronological.
+pub fn since(records: &[Record], days: i64) -> &[Record] {
+    let today = Day::today();
+    let start =
+        records.partition_point(|record| Day::of_time(record.at()).days_before(today) >= days);
+    &records[start..]
+}
+
 pub fn commands_before(records: &[Record], here: &Path) -> Vec<Past> {
     let mut here_first: Vec<Past> = Vec::new();
     let mut elsewhere: Vec<Past> = Vec::new();
@@ -1260,6 +1371,100 @@ pub fn new_group_id() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_account_answers_from_memory_once_read() {
+        let (_dir, journal) = journal();
+        journal.record(Event::new(Kind::Copy, "/a"));
+        assert_eq!(journal.with_records(Stream::Files, |r| r.len()), 1);
+
+        // Take the files away behind its back: memory is what answers now,
+        // and a write keeps feeding it.
+        for entry in std::fs::read_dir(journal.dir()).unwrap().flatten() {
+            std::fs::remove_file(entry.path()).unwrap();
+        }
+        journal.record(Event::new(Kind::Copy, "/b"));
+        assert_eq!(
+            journal.with_records(Stream::Files, |r| r.len()),
+            2,
+            "one read at the start, appends from then on - never a re-read per query"
+        );
+    }
+
+    #[test]
+    fn a_clone_on_another_thread_feeds_the_same_cache() {
+        // Job::spawn_recorded hands a clone of the journal to the worker
+        // thread that runs a copy. A cache owned per clone would leave the
+        // front-end's copy stale the moment a job wrote a record.
+        let (_dir, journal) = journal();
+        assert_eq!(journal.with_records(Stream::Files, |r| r.len()), 0);
+
+        let worker = journal.clone();
+        std::thread::spawn(move || {
+            worker.record(Event::new(Kind::Copy, "/from-the-worker"));
+        })
+        .join()
+        .unwrap();
+
+        assert_eq!(
+            journal.with_records(Stream::Files, |r| r.len()),
+            1,
+            "the worker's record is in the front-end's memory"
+        );
+    }
+
+    #[test]
+    fn the_generation_moves_when_the_account_does_and_only_then() {
+        let (_dir, journal) = journal();
+        let before = journal.generation();
+
+        journal.with_records(Stream::Files, |_| ());
+        journal.days(Stream::Files);
+        assert_eq!(journal.generation(), before, "reading is not a change");
+
+        journal.record(Event::new(Kind::Copy, "/a"));
+        let after_write = journal.generation();
+        assert!(after_write > before);
+
+        journal.clear();
+        assert!(
+            journal.generation() > after_write,
+            "clearing is a change too"
+        );
+    }
+
+    #[test]
+    fn sweeping_drops_the_memory_along_with_the_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let journal = Journal::at(dir.path(), Keep(7));
+        let mut old = Event::new(Kind::Copy, "/old");
+        old.at = now() - 30 * 86_400;
+        journal.write(Stream::Files, &Record::Event(old));
+        journal.record(Event::new(Kind::Copy, "/new"));
+        assert_eq!(journal.with_records(Stream::Files, |r| r.len()), 2);
+
+        journal.sweep(Day::today());
+        assert_eq!(
+            journal.with_records(Stream::Files, |r| r.len()),
+            1,
+            "the memory re-read what the sweep left"
+        );
+    }
+
+    #[test]
+    fn since_cuts_by_age_through_one_binary_search() {
+        let mut records = Vec::new();
+        for days_ago in [30, 8, 6, 0] {
+            let mut event = Event::new(Kind::Command, "/somewhere");
+            event.at = now() - days_ago * 86_400;
+            records.push(Record::Event(event));
+        }
+
+        let week = since(&records, 7);
+        assert_eq!(week.len(), 2, "six days ago and today");
+        assert_eq!(since(&records, 365).len(), 4);
+        assert!(since(&records, 0).is_empty());
+    }
 
     fn journal() -> (tempfile::TempDir, Journal) {
         let dir = tempfile::tempdir().unwrap();

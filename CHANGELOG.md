@@ -9,6 +9,13 @@ Notable changes, newest first. Versions follow [semantic versioning]; until
 
 ### Changed
 
+- **The account is held in memory.** The journal reads each stream's files
+  once and appends in step from then on; the history column and the folder
+  history pane refilter when the account's generation moves rather than
+  re-reading the files once a second. The files on disk are untouched - the
+  memory is only ever what they would say, and the cache is shared with the
+  worker thread that records a copy, so nothing it writes is missed.
+
 - **One shell per workspace.** The drawer's `+` and `-` are gone: a workspace
   has a shell, not a collection of them, so the two operations left are
   *replace* - the picker names what is running, another kind swaps it, the
