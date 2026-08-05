@@ -9,6 +9,15 @@ Notable changes, newest first. Versions follow [semantic versioning]; until
 
 ### Changed
 
+- **The journal is one file per stream** - `journal/files.jsonl` and
+  `journal/shell.jsonl` - rather than one per day. Every record already
+  carries the moment it happened, so the date in sixty file names was saying
+  a second time what each line says for itself, and it left the account
+  scattered over files that were awkward to find, read or copy. Old day files
+  are folded in at startup, oldest first, so nothing disappears on the
+  upgrade. Expiry is now a rewrite through a temporary file renamed over the
+  old one, so an interrupted prune leaves one whole journal or the other.
+
 - **Recent locations moved out of `bookmarks.toml` into `recent.toml`, and are
   written as they happen.** They were saved only on a clean exit, so a crash
   or a window closed with the mouse lost them - and every step into a

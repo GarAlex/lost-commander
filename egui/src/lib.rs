@@ -8384,12 +8384,9 @@ impl GuiApp {
         let Some(journal) = &self.journal else {
             return Vec::new();
         };
-        let mut records = Vec::new();
-        let mut days = journal.days(journal::Stream::Shell);
-        days.truncate(7);
-        for day in days.into_iter().rev() {
-            records.extend(journal.read(journal::Stream::Shell, day));
-        }
+        // One read of the stream rather than one per day: the days used to
+        // be separate files, and asking for seven of them meant seven opens.
+        let records = journal::since(journal.read_all(journal::Stream::Shell), 7);
         // Everything, here first - the filter is applied when it is drawn, so
         // switching between "here" and "all" does not re-read the account.
         journal::commands_before(&records, here)
@@ -8491,11 +8488,7 @@ impl GuiApp {
         // Newest last, so `happened_in` walking backwards sees the newest
         // first. Far enough back to be useful, not so far that a pane reads a
         // year of files.
-        let mut days = journal.days(journal::Stream::Files);
-        days.truncate(7);
-        for day in days.into_iter().rev() {
-            records.extend(journal.read(journal::Stream::Files, day));
-        }
+        records.extend(journal::since(journal.read_all(journal::Stream::Files), 7));
         journal::happened_in(&records, here)
     }
 
