@@ -47,6 +47,13 @@ The third row from the bottom is the command line: what you type goes there
 and Enter runs it in the directory being shown. `Ctrl-O` puts the panels away
 and shows what the shell has printed.
 
+On the command line, `%f` is the file under the cursor, `%s` the marked names
+(or the cursor file when nothing is marked), `%d` the other pane's directory,
+and `%%` a literal percent — each name quoted for the shell. While the line
+holds a placeholder, the status row shows what will actually run, so Enter is
+never a surprise. The same placeholders work on the graphical view's command
+line.
+
 ## The graphical view
 
 ![lostc-gui](docs/lostc-gui.png)
@@ -296,7 +303,7 @@ opens onto a line saying which of the two you have, and `Alt-O` changes it.
 ## Testing
 
 ```sh
-cargo test                     # all 1113, from the workspace root
+cargo test                     # all 1120, from the workspace root
 ```
 
 From the root that is everything, because the root is a virtual manifest and
@@ -307,9 +314,9 @@ say `cargo test --workspace` there if you meant all of it.
 Per crate, when you want a fast loop:
 
 ```sh
-cargo test -p lost-commander-core    # 656 - the engine, seconds to build
-cargo test -p lost-commander-egui    # 229 - the graphical view
-cargo test -p lost-commander-tui     # 122 - the terminal view
+cargo test -p lost-commander-core    # 661 - the engine, seconds to build
+cargo test -p lost-commander-egui    # 230 - the graphical view
+cargo test -p lost-commander-tui     # 123 - the terminal view
 cargo test -p lost-commander-ffi     # 106 - the C ABI
 ```
 

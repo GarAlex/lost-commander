@@ -9,6 +9,15 @@ Notable changes, newest first. Versions follow [semantic versioning]; until
 
 ### Added
 
+- **`%f`, `%s` and `%d` on the command line**, in both front-ends: the file
+  under the cursor, the marked names (or the cursor file when nothing is
+  marked - the same reading of "the selection" as every F-key), and the other
+  pane's directory, each quoted for the shell; `%%` is a literal percent and
+  any other `%` passes through, because `100%done` is a name somebody has.
+  While a placeholder is on the line the status row shows what will actually
+  run, so Enter is never a surprise, and the account records the expanded
+  line - the version worth offering back later. Lines the program builds for
+  itself are never expanded.
 - **Workspaces by key, and by name.** `Alt-1`..`Alt-9` jump to a workspace by
   position, `Alt-0` bounces to the one that had the window before this one -
   the two-window bounce that Alt-Tab means everywhere else - and `Ctrl-Tab`

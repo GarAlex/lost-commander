@@ -232,6 +232,155 @@ pub fn quote_here(name: &str) -> String {
     quote(name, Platform::current())
 }
 
+/// Whether a command line contains something [`expand_placeholders`] would
+/// change - the front-ends use this to decide when a preview is worth
+/// showing, and showing one for every plain command would be noise.
+pub fn has_placeholders(line: &str) -> bool {
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '%' {
+            if let Some('f' | 's' | 'd' | '%') = chars.peek() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Expand `%f`, `%s` and `%d` in a command line, quoting every name.
+///
+/// `%f` is the file under the cursor; `%s` is the marked names, or the file
+/// under the cursor when nothing is marked - the same reading of "the
+/// selection" as every F-key in this program; `%d` is the other pane's
+/// directory; `%%` is a literal percent. Anything else after a `%` passes
+/// through untouched, because `100%done` is a name somebody has.
+///
+/// Expansion happens only where a person typed the line. Lines this program
+/// builds for itself - an editor invocation, an elevation - carry real paths,
+/// and a file called `100%f.txt` must not change what they mean.
+pub fn expand_placeholders(
+    line: &str,
+    file: Option<&str>,
+    marked: &[String],
+    other_dir: &std::path::Path,
+    platform: Platform,
+) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '%' {
+            out.push(c);
+            continue;
+        }
+        match chars.peek() {
+            Some('f') => {
+                chars.next();
+                if let Some(name) = file {
+                    out.push_str(&quote(name, platform));
+                }
+            }
+            Some('s') => {
+                chars.next();
+                let names: Vec<String> = if marked.is_empty() {
+                    file.iter().map(|name| quote(name, platform)).collect()
+                } else {
+                    marked.iter().map(|name| quote(name, platform)).collect()
+                };
+                out.push_str(&names.join(" "));
+            }
+            Some('d') => {
+                chars.next();
+                out.push_str(&quote(&other_dir.display().to_string(), platform));
+            }
+            Some('%') => {
+                chars.next();
+                out.push('%');
+            }
+            _ => out.push('%'),
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod placeholder_tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn each_placeholder_stands_for_what_the_panels_show() {
+        let marked = vec!["a name.txt".to_string(), "plain.rs".to_string()];
+        let out = expand_placeholders(
+            "tar cf out.tar %s && cp %f %d",
+            Some("cursor.rs"),
+            &marked,
+            Path::new("/backup"),
+            Platform::Linux,
+        );
+        // Quoting is only added where a shell needs it: a plain name stays
+        // plain, which keeps the expanded line readable.
+        assert_eq!(
+            out,
+            "tar cf out.tar 'a name.txt' plain.rs && cp cursor.rs /backup"
+        );
+    }
+
+    #[test]
+    fn the_selection_falls_back_to_the_cursor_like_every_f_key() {
+        let out = expand_placeholders(
+            "wc -l %s",
+            Some("only.rs"),
+            &[],
+            Path::new("/x"),
+            Platform::Linux,
+        );
+        assert_eq!(out, "wc -l only.rs");
+    }
+
+    #[test]
+    fn quoting_is_the_platform_s_own() {
+        let out = expand_placeholders(
+            "type %f",
+            Some("a name.txt"),
+            &[],
+            Path::new("C:\\backup dir"),
+            Platform::Windows,
+        );
+        assert_eq!(out, "type \"a name.txt\"");
+        let dir = expand_placeholders(
+            "cd %d",
+            None,
+            &[],
+            Path::new("C:\\backup dir"),
+            Platform::Windows,
+        );
+        assert_eq!(dir, "cd \"C:\\backup dir\"");
+    }
+
+    #[test]
+    fn a_percent_that_means_nothing_passes_through() {
+        // `100%done` is a name somebody has, and `%%` is how you ask for a
+        // literal percent next to a real placeholder letter.
+        let out = expand_placeholders(
+            "echo 100%x and 100%%f",
+            Some("f.rs"),
+            &[],
+            Path::new("/"),
+            Platform::Linux,
+        );
+        assert_eq!(out, "echo 100%x and 100%f");
+        assert!(!has_placeholders("echo 100%x"));
+        assert!(has_placeholders("echo %s"));
+        assert!(has_placeholders("100%%"));
+    }
+
+    #[test]
+    fn a_missing_cursor_file_expands_to_nothing_rather_than_a_word() {
+        let out = expand_placeholders("edit %f", None, &[], Path::new("/"), Platform::Linux);
+        assert_eq!(out, "edit ");
+    }
+}
+
 /// A `cd` typed at the command line, which has to be handled by the file
 /// manager: a subprocess changing its own directory would achieve nothing.
 #[derive(Debug, Clone, PartialEq, Eq)]

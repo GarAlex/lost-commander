@@ -81,7 +81,10 @@ KEYS:
 
     Typing goes to the command line under the panels, and Enter runs it in the
     directory being shown - as in Norton and Midnight Commander. An empty
-    command line means the panels: Space marks, Backspace goes up.
+    command line means the panels: Space marks, Backspace goes up. %f is the
+    file under the cursor, %s the marked names (or the cursor file), %d the
+    other panel's directory, %% a literal percent - the status row previews
+    what will run while a placeholder is on the line.
 
     Ctrl-O swaps between the panels and the shell running underneath them.
     It is one shell for the whole session, so a cd in one command is still

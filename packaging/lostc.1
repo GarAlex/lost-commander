@@ -36,6 +36,16 @@ Print a summary of the keys and exit.
 .TP
 .BR \-V ", " \-\-version
 Print the version and exit.
+.SH COMMAND LINE PLACEHOLDERS
+.B %f
+is the file under the cursor,
+.B %s
+the marked names (or the cursor file when nothing is marked),
+.B %d
+the other panel's directory, and
+.B %%
+a literal percent. Each name is quoted for the shell, and the status row
+shows the expanded line before Enter runs it.
 .SH KEYS
 .TP
 .B Tab

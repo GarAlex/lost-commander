@@ -1747,12 +1747,40 @@ impl GuiApp {
         shell::quote_here(&raw)
     }
 
+    /// `%f`, `%s` and `%d`, expanded against what the panels show.
+    pub fn expand_command(&self, line: &str) -> String {
+        let panel = self.active_panel();
+        let file = panel
+            .selected()
+            .filter(|entry| entry.name != "..")
+            .map(|entry| entry.name.clone());
+        let marked: Vec<String> = panel
+            .entries
+            .iter()
+            .filter(|entry| entry.marked)
+            .map(|entry| entry.name.clone())
+            .collect();
+        let other = self.panel(self.active.other()).cwd.clone();
+        shell::expand_placeholders(
+            line,
+            file.as_deref(),
+            &marked,
+            &other,
+            lost_commander_core::mount::Platform::current(),
+        )
+    }
+
     /// Run whatever is on the command line, in the active panel's directory.
     pub fn run_command(&mut self) {
         let line = self.command.trim().to_string();
         if line.is_empty() {
             return;
         }
+        // %f, %s and %d become the names the panels are showing - only here,
+        // where a person typed the line. Lines this program builds for
+        // itself carry real paths, and a name with a percent in it must not
+        // change what they mean.
+        let line = self.expand_command(&line);
         if self.shell_job.is_some() {
             self.error("A command is already running");
             return;
@@ -10781,6 +10809,27 @@ mod tests {
             app.left.current().cwd,
             sub,
             "the one that was in front, not the one at its old index"
+        );
+    }
+
+    #[test]
+    fn the_selection_placeholder_reads_like_every_f_key() {
+        let (_root, mut app) = fixture();
+        let a = index_of(&app, Side::Left, "a.txt");
+        app.apply_click(Side::Left, Some((a, Click::Plain)), None);
+
+        // Nothing marked: %s is the cursor file, the same fallback the
+        // F-keys use for "the selection".
+        assert_eq!(app.expand_command("wc -l %s"), "wc -l a.txt");
+
+        app.left.current_mut().toggle_mark();
+        let b = index_of(&app, Side::Left, "b.txt");
+        app.left.current_mut().cursor_to(b);
+        app.left.current_mut().toggle_mark();
+        let expanded = app.expand_command("tar cf out.tar %s");
+        assert!(
+            expanded.contains("a.txt") && expanded.contains("b.txt"),
+            "{expanded}"
         );
     }
 

@@ -28,6 +28,7 @@ use lost_commander_core::panel::{Panel, SortBy};
 use lost_commander_core::perms::{self, What, Who};
 use lost_commander_core::progress::{self, Answer, Job, Operation};
 use lost_commander_core::rename;
+use lost_commander_core::shell;
 use lost_commander_core::tabs::Tabs;
 
 pub const PREVIEW_LIMIT: usize = 2 * 1024 * 1024;
@@ -592,6 +593,38 @@ impl App {
             return out;
         }
         Location::local(path)
+    }
+
+    /// `%f`, `%s` and `%d`, expanded against what the panels show.
+    pub fn expand_command(&self, line: &str) -> String {
+        let panel = self.active_panel();
+        let file = panel
+            .selected()
+            .filter(|entry| entry.name != "..")
+            .map(|entry| entry.name.clone());
+        let marked: Vec<String> = panel
+            .entries
+            .iter()
+            .filter(|entry| entry.marked)
+            .map(|entry| entry.name.clone())
+            .collect();
+        shell::expand_placeholders(
+            line,
+            file.as_deref(),
+            &marked,
+            &self.other_panel().cwd,
+            lost_commander_core::mount::Platform::current(),
+        )
+    }
+
+    /// What the command line will actually run, when that differs from what
+    /// it says. Shown in the status row while the line is being typed, so
+    /// Enter is never a surprise.
+    pub fn command_preview(&self) -> Option<String> {
+        if !shell::has_placeholders(&self.command) {
+            return None;
+        }
+        Some(self.expand_command(&self.command))
     }
 
     /// Note where the panels are now, so the Recent list reflects it.
@@ -3069,6 +3102,10 @@ impl App {
         if line.is_empty() {
             return;
         }
+        // %f, %s and %d become the names the panels are showing, before the
+        // account sees the line: the record holds what actually ran, which is
+        // the version worth offering back later.
+        let line = self.expand_command(&line);
         // Written down, like everything else this program does on the
         // reader's behalf. The graphical view records what its shell runs by
         // asking the shell; here the line is known before it is handed over,
@@ -5485,6 +5522,23 @@ mod tests {
 
         assert!(app.status_is_error);
         assert!(app.status.contains("already exists"), "{}", app.status);
+    }
+
+    #[test]
+    fn placeholders_become_the_names_the_panels_show() {
+        let (_root, mut app) = app_fixture();
+        select(&mut app, "one.txt");
+
+        assert_eq!(app.expand_command("cat %f"), "cat one.txt");
+        let across = app.expand_command("cp %f %d");
+        assert!(across.contains("right"), "%d is the other panel: {across}");
+
+        // The preview appears only when the line would change - showing
+        // "runs: cat one.txt" under "cat one.txt" would be noise.
+        app.command = "cat %f".into();
+        assert_eq!(app.command_preview().as_deref(), Some("cat one.txt"));
+        app.command = "cat one.txt".into();
+        assert!(app.command_preview().is_none());
     }
 
     #[test]

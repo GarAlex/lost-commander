@@ -1822,6 +1822,17 @@ pub(crate) fn status_line(app: &App) -> String {
 }
 
 fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
+    // A command line holding placeholders shows what it will actually run,
+    // in the row above it, so Enter is never a surprise. It borrows the
+    // status row because that is the row a reader is already watching.
+    if let Some(preview) = app.command_preview() {
+        frame.render_widget(
+            Paragraph::new(fit(&format!("runs: {preview}"), area.width as usize))
+                .style(Style::default().bg(theme::BG).fg(theme::TITLE_FG)),
+            area,
+        );
+        return;
+    }
     let text = status_line(app);
 
     let style = if app.status_is_error {
