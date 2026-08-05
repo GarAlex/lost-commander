@@ -52,6 +52,20 @@ Notable changes, newest first. Versions follow [semantic versioning]; until
 
 ### Added
 
+- **Workspaces, in a rail of their own.** A tab is a window rather than a
+  directory: it carries its two panes, how they are arranged, what each is
+  drawing, which one you were in, which halves of the window are on show, and
+  the shell that was standing there - down to the cursor, the marks and the
+  scroll position. `Ctrl-T` forks the one you are in. The rail replaces the
+  two tab strips that used to be drawn in the panes and in the shell drawer
+  and knew nothing of each other.
+- **Workspaces can be saved and are opened again next time.** *Save
+  workspaces* on the view menu writes them to `workspaces.toml` beside the
+  settings; starting with no arguments opens them. A shell is not saved,
+  because the process is gone and its scrollback with it - its directory is,
+  and the account already holds what was run there. A window whose directory
+  has since gone is named rather than opened as an error.
+
 - **A row of function keys under the panes in the graphical view**, as in every
   commander since Norton. It had none, which left `F5` a secret kept from
   anybody who had not read the key list. What it says is read out of the same

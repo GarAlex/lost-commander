@@ -48,6 +48,7 @@ use lost_commander_core::places;
 use lost_commander_core::progress::{self, Answer, Job, Operation};
 use lost_commander_core::pty::{self, Terminals};
 use lost_commander_core::rename;
+use lost_commander_core::session;
 use lost_commander_core::tabs::{self, Tabs};
 use lost_commander_core::textedit::Document;
 
@@ -342,6 +343,52 @@ fn selection_summary(
         return String::new();
     }
     format!("{count} items")
+}
+
+impl ViewMode {
+    /// The name this view goes by in a saved session.
+    ///
+    /// Written down rather than derived, so renaming the variant does not
+    /// silently invalidate everybody's saved windows.
+    pub fn saved_name(self) -> &'static str {
+        match self {
+            ViewMode::Details => "list",
+            ViewMode::Grid => "grid",
+            ViewMode::Tree => "tree",
+            ViewMode::Preview => "preview",
+            ViewMode::History => "history",
+        }
+    }
+
+    /// Back again. Anything unrecognised is an ordinary listing: a session
+    /// file is not worth refusing to start over.
+    pub fn from_saved(name: &str) -> ViewMode {
+        match name {
+            "grid" => ViewMode::Grid,
+            "tree" => ViewMode::Tree,
+            "preview" => ViewMode::Preview,
+            "history" => ViewMode::History,
+            _ => ViewMode::Details,
+        }
+    }
+}
+
+impl Half {
+    pub fn saved_name(self) -> &'static str {
+        match self {
+            Half::Both => "both",
+            Half::Files => "files",
+            Half::Shell => "shell",
+        }
+    }
+
+    pub fn from_saved(name: &str) -> Half {
+        match name {
+            "files" => Half::Files,
+            "shell" => Half::Shell,
+            _ => Half::Both,
+        }
+    }
 }
 
 /// Everything about a window except the files on the disk.
@@ -2528,6 +2575,7 @@ impl GuiApp {
                 );
                 let mut want: Option<keys::Action> = None;
                 let mut want_half: Option<Half> = None;
+                let mut save_now = false;
                 egui::Popup::menu(&views).show(|ui| {
                     ui.set_min_width(220.0);
                     // Which halves of the window are on show. First, because
@@ -2541,6 +2589,14 @@ impl GuiApp {
                         if ui.selectable_label(self.half == half, label).clicked() {
                             want_half = Some(half);
                         }
+                    }
+                    ui.separator();
+                    if ui
+                        .selectable_label(false, "Save workspaces")
+                        .on_hover_text("Write the open windows down, to be opened again next time")
+                        .clicked()
+                    {
+                        save_now = true;
                     }
                     ui.separator();
                     if ui
@@ -2558,6 +2614,9 @@ impl GuiApp {
                 });
                 if let Some(action) = want {
                     self.run_action(action);
+                }
+                if save_now {
+                    self.save_session();
                 }
                 if let Some(half) = want_half {
                     // Straight to it from the menu: the keys toggle, because
@@ -7539,6 +7598,179 @@ impl GuiApp {
         }
     }
 
+    /// Open the windows from last time.
+    ///
+    /// Called by the front-end's entry point rather than by the constructor,
+    /// because whether it is wanted is not a fact about the app: a reader who
+    /// named a directory on the command line asked for *that*, and giving
+    /// them yesterday's four windows instead would be ignoring what was
+    /// asked.
+    pub fn open_saved_windows(&mut self) {
+        let saved = session::Session::load();
+        self.open_session(&saved);
+    }
+
+    /// Every window, flattened into something a file can hold.
+    ///
+    /// Split from the writing so it can be tested: a test that called the
+    /// saving version would write the real file belonging to whoever ran the
+    /// suite.
+    pub fn session(&mut self) -> session::Session {
+        self.remember_workspace();
+        let live = self.workspace_id();
+        let saved = self
+            .left
+            .all()
+            .iter()
+            .map(|panel| {
+                let kept = self.workspaces.get(&panel.id);
+                // The second pane of the workspace on show is the live one;
+                // the others are parked, and a workspace that has never been
+                // left has neither.
+                let right = if panel.id == live {
+                    Some(self.right.current().cwd.clone())
+                } else {
+                    self.parked.get(&panel.id).map(|parked| parked.cwd.clone())
+                };
+                let right = right
+                    .or_else(|| kept.map(|workspace| workspace.right.clone()))
+                    .unwrap_or_else(|| panel.cwd.clone());
+                session::Workspace {
+                    left: panel.cwd.clone(),
+                    right,
+                    show_right: kept.is_some_and(|w| w.show_right),
+                    left_view: kept
+                        .map_or(ViewMode::Details, |w| w.left_view)
+                        .saved_name()
+                        .to_string(),
+                    right_view: kept
+                        .map_or(ViewMode::Details, |w| w.right_view)
+                        .saved_name()
+                        .to_string(),
+                    half: kept.map_or(Half::Both, |w| w.half).saved_name().to_string(),
+                    active: match kept.map_or(Side::Left, |w| w.active) {
+                        Side::Left => "left".to_string(),
+                        Side::Right => "right".to_string(),
+                    },
+                    split: kept.map_or(0.5, |w| w.split),
+                    synced: kept.is_none_or(|w| w.synced),
+                    // Where the shell stood, not the shell: the process is
+                    // gone by the time this is read back, and the account
+                    // already holds what was run there.
+                    shell: kept
+                        .and_then(|w| w.shell)
+                        .and_then(|id| self.terminals.at_id(id))
+                        .and_then(|at| self.terminals.sessions.get(at))
+                        .map(|s| s.cwd.clone()),
+                }
+            })
+            .collect();
+        session::Session {
+            workspaces: saved,
+            at: self.left.active(),
+        }
+    }
+
+    /// Write the windows down, where the next run will find them.
+    pub fn save_session(&mut self) {
+        let session = self.session();
+        let count = session.workspaces.len();
+        match session.save() {
+            Ok(()) => self.info(format!(
+                "Saved {count} workspace{}",
+                if count == 1 { "" } else { "s" }
+            )),
+            Err(e) => self.error(format!("Could not save the workspaces: {e}")),
+        }
+    }
+
+    /// Open the windows from a saved session, in place of the one tab a
+    /// fresh start has.
+    ///
+    /// The directories that are no longer there are named rather than opened:
+    /// a session that comes back as four panes showing errors is worse than
+    /// one that comes back as three windows and a sentence.
+    pub fn open_session(&mut self, session: &session::Session) {
+        let (kept, gone) = session.still_there();
+        if kept.is_empty() {
+            if !gone.is_empty() {
+                self.error(format!(
+                    "None of the {} saved workspaces are still there",
+                    gone.len()
+                ));
+            }
+            return;
+        }
+
+        for (nth, saved) in kept.iter().enumerate() {
+            // The first one takes the tab that is already open, since a pane
+            // always shows something and that something may as well be this.
+            if nth > 0 {
+                let mut panel = Panel::new(saved.left.clone());
+                panel.reload();
+                self.left.open(panel);
+            } else {
+                self.left.current_mut().chdir(saved.left.clone());
+            }
+
+            let mut right = Panel::new(saved.right.clone());
+            right.reload();
+            let id = self.workspace_id();
+            self.parked.insert(id, right);
+            self.workspaces.insert(
+                id,
+                Workspace {
+                    // No shell: the process is gone. Its directory is where
+                    // the next one opened here will start.
+                    shell: None,
+                    show_right: saved.show_right,
+                    right: saved.right.clone(),
+                    left_view: ViewMode::from_saved(&saved.left_view),
+                    right_view: ViewMode::from_saved(&saved.right_view),
+                    active: if saved.active == "right" {
+                        Side::Right
+                    } else {
+                        Side::Left
+                    },
+                    synced: saved.synced,
+                    half: Half::from_saved(&saved.half),
+                    split: if saved.split > 0.0 { saved.split } else { 0.5 },
+                },
+            );
+        }
+
+        // The first window is put on properly before anything moves: the
+        // live arrangement has to match the record before `show_workspace`
+        // runs, because the first thing it does is write the live one down -
+        // over the record just built, if they disagree.
+        self.left.activate(0);
+        self.restore_workspace();
+        if let Some(parked) = self.parked.remove(&self.workspace_id()) {
+            let stale = std::mem::replace(self.right.current_mut(), parked);
+            drop(stale);
+        }
+
+        // Then the one that was actually in front.
+        let at = session.at.min(kept.len() - 1);
+        if at > 0 {
+            self.show_workspace(at);
+        }
+
+        if gone.is_empty() {
+            self.info(format!("Opened {} workspaces", kept.len()));
+        } else {
+            self.info(format!(
+                "Opened {} workspaces; {} gone: {}",
+                kept.len(),
+                gone.len(),
+                gone.iter()
+                    .map(|path| path.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+    }
+
     /// Which workspace is on show: the identity of the left pane's tab.
     ///
     /// The left pane, because that is the one that is always there - the
@@ -10011,6 +10243,90 @@ mod tests {
             app.right.current().marked_count(),
             1,
             "the second pane is parked whole, not re-pointed at a directory"
+        );
+    }
+
+    #[test]
+    fn the_windows_come_back_the_way_they_were_left() {
+        use keys::Action as A;
+        let (root, mut app) = fixture();
+        let left = root.path().join("left");
+        let sub = left.join("sub");
+        let right = root.path().join("right");
+
+        // Two windows, arranged differently: one is two panes with a tree on
+        // the left, the other is the shell alone.
+        app.show_right = true;
+        app.run_action(A::ViewTree);
+        app.run_action(A::NewTab);
+        app.left.current_mut().chdir(sub.clone());
+        app.run_action(A::ShellOnly);
+
+        // Written down, and read back into a fresh app - which is what the
+        // next run is.
+        let session = app.session();
+        assert_eq!(session.workspaces.len(), 2);
+        assert_eq!(session.at, 1, "the one that was in front");
+
+        let (_root2, mut opened) = fixture();
+        opened.open_session(&session);
+
+        assert_eq!(opened.left.len(), 2, "both windows");
+        assert_eq!(
+            opened.left.current().cwd,
+            sub,
+            "on the one that was in front"
+        );
+        assert_eq!(opened.half, Half::Shell, "arranged as it was left");
+
+        opened.run_action(A::PreviousTab);
+        assert_eq!(opened.left.current().cwd, left);
+        assert_eq!(opened.half, Half::Both);
+        assert_eq!(opened.left_view, ViewMode::Tree, "the tree came back");
+        assert!(opened.show_right);
+        assert_eq!(opened.right.current().cwd, right, "and its second pane");
+    }
+
+    #[test]
+    fn a_saved_window_whose_directory_is_gone_is_named_rather_than_opened() {
+        let (root, mut app) = fixture();
+        let here = app.left.cwd().to_path_buf();
+        let session = session::Session {
+            workspaces: vec![
+                session::Workspace {
+                    left: here.clone(),
+                    right: here.clone(),
+                    show_right: false,
+                    left_view: "list".into(),
+                    right_view: "list".into(),
+                    half: "both".into(),
+                    active: "left".into(),
+                    split: 0.5,
+                    synced: true,
+                    shell: None,
+                },
+                session::Workspace {
+                    left: root.path().join("was-here-yesterday"),
+                    right: here.clone(),
+                    show_right: false,
+                    left_view: "list".into(),
+                    right_view: "list".into(),
+                    half: "both".into(),
+                    active: "left".into(),
+                    split: 0.5,
+                    synced: true,
+                    shell: None,
+                },
+            ],
+            at: 1,
+        };
+
+        app.open_session(&session);
+        assert_eq!(app.left.len(), 1, "only the one that is still there");
+        assert!(
+            app.status.contains("was-here-yesterday"),
+            "and the one that is not is named: {}",
+            app.status
         );
     }
 

@@ -182,6 +182,21 @@ width, so a shell is exactly as wide as the panes it belongs to, and the list
 of what was run here is exactly as wide as the places list above it. Both
 seams remember where you left them.
 
+**A tab is a window, not a directory.** Down the left is the rail of
+workspaces: each carries its own two panes, how they are arranged, what each
+is drawing, which one you were in, and the shell that was standing there.
+Switching workspaces puts all of it back, down to the cursor, the marks and
+the scroll position — they are meant to feel like separate windows rather
+than separate folders. `Ctrl-T` forks the workspace you are in, since what
+you have set up is usually what you were about to set up again. The rail's
+`>` widens it from a name to the whole path and the shell.
+
+*Save workspaces* on the view menu writes them down, and the next start with
+no arguments opens them again. A shell is not saved — the process is gone and
+its scrollback with it — but its directory is, and the account already holds
+what was run there. A saved window whose directory has since gone is named
+rather than opened.
+
 Either row can have the window to itself: `Ctrl-O` gives it to the shell and
 `Ctrl-Shift-O` to the panes, and the same key hands it back. (`Ctrl-Alt-O` is
 the third of that family: whether the bottom is a shell that stays or a line
@@ -311,7 +326,7 @@ changes it.
 ## Testing
 
 ```sh
-cargo test                     # all 1082, from the workspace root
+cargo test                     # all 1092, from the workspace root
 ```
 
 From the root that is everything, because the root is a virtual manifest and
@@ -322,8 +337,8 @@ say `cargo test --workspace` there if you meant all of it.
 Per crate, when you want a fast loop:
 
 ```sh
-cargo test -p lost-commander-core    # 642 - the engine, seconds to build
-cargo test -p lost-commander-egui    # 212 - the graphical view
+cargo test -p lost-commander-core    # 648 - the engine, seconds to build
+cargo test -p lost-commander-egui    # 216 - the graphical view
 cargo test -p lost-commander-tui     # 122 - the terminal view
 cargo test -p lost-commander-ffi     # 106 - the C ABI
 ```

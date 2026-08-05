@@ -139,6 +139,11 @@ USAGE:
                 app.left_view = lost_commander_egui::ViewMode::Grid;
                 app.right_view = lost_commander_egui::ViewMode::Grid;
             }
+            // The windows from last time, unless a directory was named: that
+            // is a request for a particular folder, not for last time.
+            if positional.is_empty() {
+                app.open_saved_windows();
+            }
             app.screenshot_to = screenshot;
             Ok(Box::new(app))
         }),

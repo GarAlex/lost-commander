@@ -36,6 +36,7 @@ pub mod progress;
 pub mod pty;
 pub mod record;
 pub mod rename;
+pub mod session;
 pub mod shell;
 pub mod shellhook;
 pub mod tabs;
