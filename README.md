@@ -260,6 +260,12 @@ cargo run --bin lostc-gui -- --screenshot shot.png ~/src ~/documents
 It renders a few frames, writes a PNG and exits. The picture above was made
 with it.
 
+**Drag and drop.** Rows drag between the panes — a copy, with the
+destination visibly under the pointer; `Shift` at release makes it a move. A
+marked row drags the whole marked set. Rows dropped on a rail workspace copy
+to its folder, and files dropped in from outside land in the pane they were
+dropped on.
+
 **Where a copy goes.** `F5` and `F6` ask, in a field, with the other pane's
 directory already in it when there is one — one Enter. With a single pane the
 field offers the current directory, to be edited. Nothing is copied into a
@@ -349,7 +355,7 @@ opens onto a line saying which of the two you have, and `Alt-O` changes it.
 ## Testing
 
 ```sh
-cargo test                     # all 1154, from the workspace root
+cargo test                     # all 1155, from the workspace root
 ```
 
 From the root that is everything, because the root is a virtual manifest and
@@ -361,7 +367,7 @@ Per crate, when you want a fast loop:
 
 ```sh
 cargo test -p lost-commander-core    # 682 - the engine, seconds to build
-cargo test -p lost-commander-egui    # 236 - the graphical view
+cargo test -p lost-commander-egui    # 237 - the graphical view
 cargo test -p lost-commander-tui     # 130 - the terminal view
 cargo test -p lost-commander-ffi     # 106 - the C ABI
 ```

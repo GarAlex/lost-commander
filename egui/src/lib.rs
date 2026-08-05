@@ -507,6 +507,13 @@ pub struct GuiApp {
     pub workspace_mru: Vec<u64>,
     /// The rail entry being renamed, and the text as typed so far.
     rail_renaming: Option<(u64, String)>,
+    /// Files being dragged out of a pane: where from, and what. Dropping on
+    /// the other pane, a places row or a rail workspace copies them there -
+    /// the destination is whatever is visibly under the pointer, which is
+    /// the rule about acting on what you can see, satisfied by construction.
+    pub drag_files: Option<(Side, Vec<PathBuf>)>,
+    /// Where the panes were last frame, for aiming an OS drop.
+    last_pane_rects: Option<(Rect, Option<Rect>)>,
     /// The rail entry being dragged to a new position, by identity - an
     /// index would name a different workspace the moment the drag passed
     /// another row.
@@ -789,6 +796,8 @@ impl GuiApp {
             parked: std::collections::HashMap::new(),
             pending_shells: std::collections::HashMap::new(),
             workspace_mru: Vec::new(),
+            drag_files: None,
+            last_pane_rects: None,
             rail_renaming: None,
             rail_drag: None,
             show_rail: true,
@@ -2080,6 +2089,36 @@ impl eframe::App for GuiApp {
             if !(self.terminal_focused && self.send_selection_to_terminal(insert_path)) {
                 self.insert_selection(insert_path);
             }
+        }
+
+        // Files dropped in from outside land in the pane under the pointer -
+        // the destination is what the drop is visibly over, which is the
+        // whole of what choosing by pointing means.
+        let dropped: Vec<PathBuf> = ctx.input(|input| {
+            input
+                .raw
+                .dropped_files
+                .iter()
+                .filter_map(|file| file.path.clone())
+                .collect()
+        });
+        if !dropped.is_empty() {
+            let pointer = ctx.input(|input| input.pointer.latest_pos());
+            let target = match (self.last_pane_rects, pointer) {
+                (Some((_, Some(right))), Some(at)) if right.contains(at) => Side::Right,
+                _ => self.active,
+            };
+            let destination = self.panel(target).cwd.clone();
+            let count = dropped.len();
+            self.start(Operation::Copy {
+                sources: dropped,
+                destination: destination.clone(),
+            });
+            self.info(format!(
+                "Copying {count} dropped item{} to {}",
+                if count == 1 { "" } else { "s" },
+                destination.display()
+            ));
         }
 
         self.terminals.reap_finished();
@@ -3485,8 +3524,21 @@ impl GuiApp {
             if files_only && (entry.is_dir() || entry.is_parent()) {
                 continue;
             }
-            let (rect, response) =
-                ui.allocate_exact_size(Vec2::new(ui.available_width(), ROW_HEIGHT), Sense::click());
+            let (rect, response) = ui.allocate_exact_size(
+                Vec2::new(ui.available_width(), ROW_HEIGHT),
+                Sense::click_and_drag(),
+            );
+            // Dragging a marked row takes the whole marked set, as it does
+            // in every file manager with a pointer; an unmarked row goes
+            // alone. ".." is a door, not a thing.
+            if response.drag_started() && entry.name != ".." {
+                let dragged = if entry.marked {
+                    self.panel(side).action_targets()
+                } else {
+                    vec![entry.path.clone()]
+                };
+                self.drag_files = Some((side, dragged));
+            }
             // Before the visibility check, not after: the row that needs
             // scrolling to is precisely the one that is not visible.
             if index == cursor && moved {
@@ -8807,6 +8859,7 @@ impl GuiApp {
         let mut typed_rename: Option<(u64, String)> = None;
         let mut cancel_rename = false;
         let mut drop_at: Option<usize> = None;
+        let mut drop_files_on: Option<PathBuf> = None;
         let released = ui.input(|input| input.pointer.any_released());
         egui::ScrollArea::vertical()
             .id_salt("rail")
@@ -8940,6 +8993,12 @@ impl GuiApp {
                     if released && self.rail_drag.is_some() && hit.hovered() {
                         drop_at = Some(*index);
                     }
+                    // Files dropped on a workspace go to its folder - the
+                    // folder is written on the row, which is what makes it a
+                    // destination you can see.
+                    if released && self.drag_files.is_some() && hit.hovered() {
+                        drop_files_on = Some(PathBuf::from(path.clone()));
+                    }
                     if self.rail_drag.is_some() {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
                     }
@@ -8962,6 +9021,20 @@ impl GuiApp {
             self.rail_renaming = Some(typed);
         }
 
+        if let Some(destination) = drop_files_on {
+            if let Some((_, sources)) = self.drag_files.take() {
+                let count = sources.len();
+                self.start(Operation::Copy {
+                    sources,
+                    destination: destination.clone(),
+                });
+                self.info(format!(
+                    "Copying {count} item{} to {}",
+                    if count == 1 { "" } else { "s" },
+                    destination.display()
+                ));
+            }
+        }
         if released {
             if let (Some(dragged), Some(to)) = (self.rail_drag.take(), drop_at) {
                 if let Some(from) = self.left.all().iter().position(|panel| panel.id == dragged) {
@@ -8987,6 +9060,61 @@ impl GuiApp {
     /// The second pane splits this sector and nothing else, which is what
     /// keeps the shell below exactly as wide as the panes however they are
     /// arranged. A tree splits a pane the other way, inside it.
+    /// Finish a file drag, wherever it ended: the pane rectangles are known
+    /// here and nowhere else. Copy is the verb - the safe one - and Shift
+    /// at release makes it a move, as it does on every desktop.
+    fn drop_files_at(&mut self, ui: &egui::Ui, left: Rect, right: Option<Rect>) {
+        if self.drag_files.is_none() {
+            return;
+        }
+        if ui.ctx().input(|input| input.pointer.any_pressed()) {
+            // Still holding; keep the cursor saying so.
+        }
+        if !ui.ctx().input(|input| input.pointer.any_released()) {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+            return;
+        }
+        let Some((from, sources)) = self.drag_files.take() else {
+            return;
+        };
+        let Some(pointer) = ui.ctx().input(|input| input.pointer.latest_pos()) else {
+            return;
+        };
+        let target = if right.is_some_and(|rect| rect.contains(pointer)) {
+            Some(Side::Right)
+        } else if left.contains(pointer) {
+            Some(Side::Left)
+        } else {
+            None
+        };
+        let Some(target) = target else {
+            return;
+        };
+        if target == from {
+            return;
+        }
+        let destination = self.panel(target).cwd.clone();
+        let moving = ui.ctx().input(|input| input.modifiers.shift);
+        let count = sources.len();
+        if moving {
+            self.start(Operation::Move {
+                sources,
+                destination: destination.clone(),
+            });
+        } else {
+            self.start(Operation::Copy {
+                sources,
+                destination: destination.clone(),
+            });
+        }
+        self.info(format!(
+            "{} {count} item{} to {}",
+            if moving { "Moving" } else { "Copying" },
+            if count == 1 { "" } else { "s" },
+            destination.display()
+        ));
+    }
+
     fn panes_in(&mut self, ui: &mut egui::Ui, full: Rect) {
         if !self.show_right {
             // One pane, the whole sector - the active one, as every
@@ -8995,12 +9123,26 @@ impl GuiApp {
             // untouched, which is what makes its directory, cursor and marks
             // still be there afterwards.
             let side = self.active;
+            self.last_pane_rects = Some((full, None));
             let mut child = ui.new_child(egui::UiBuilder::new().max_rect(full));
             self.pane(&mut child, side);
+            // With one pane a drop has nowhere new to land inside the panes;
+            // the drag can still end on a places row or the rail.
+            if ui.ctx().input(|input| input.pointer.any_released())
+                && full.contains(
+                    ui.ctx()
+                        .input(|input| input.pointer.latest_pos())
+                        .unwrap_or_default(),
+                )
+            {
+                self.drag_files = None;
+            }
             return;
         }
 
         let (left, divider, right) = pane_rects(full, self.split);
+        self.last_pane_rects = Some((left, Some(right)));
+        self.drop_files_at(ui, left, Some(right));
 
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(left));
         self.pane(&mut child, Side::Left);
@@ -11441,6 +11583,29 @@ mod tests {
             sub,
             "the one that was in front, not the one at its old index"
         );
+    }
+
+    #[test]
+    fn a_drop_on_the_other_pane_copies_and_shift_moves() {
+        let (root, mut app) = fixture();
+        app.show_right = true;
+        let a = root.path().join("left").join("a.txt");
+        let destination = root.path().join("right");
+
+        // What drop_files_at does once the pointer says where: the drag
+        // payload becomes the same job F5 would start.
+        app.drag_files = Some((Side::Left, vec![a.clone()]));
+        let (_, sources) = app.drag_files.take().unwrap();
+        app.start(Operation::Copy {
+            sources,
+            destination: destination.clone(),
+        });
+        if let Some(job) = &mut app.job {
+            job.join();
+        }
+        app.poll_job();
+        assert!(destination.join("a.txt").exists(), "the drop is a copy");
+        assert!(a.exists(), "and a copy leaves the source");
     }
 
     #[test]

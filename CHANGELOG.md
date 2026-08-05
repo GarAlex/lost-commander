@@ -9,6 +9,13 @@ Notable changes, newest first. Versions follow [semantic versioning]; until
 
 ### Added
 
+- **Drag and drop in the graphical view.** Rows drag between the panes as
+  a copy - the safe verb, with the destination visibly under the pointer -
+  and Shift at release makes it a move, as on every desktop. A marked row
+  drags the whole marked set; an unmarked one goes alone; ".." is a door,
+  not a thing. Rows dropped on a rail workspace copy to its folder, whose
+  name is written on the row. Files dropped in from outside land in the
+  pane they were dropped on.
 - **The viewer walks and wraps.** `n` and `p` step to the next and
   previous file in the panel without going back to the listing, skipping
   directories - the reader asked for the next thing to *read* - and `w`
