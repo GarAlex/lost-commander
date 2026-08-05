@@ -9,6 +9,16 @@ Notable changes, newest first. Versions follow [semantic versioning]; until
 
 ### Added
 
+- **Undo, out of the account.** `Ctrl-Z` in the graphical view reads the
+  last file operation from the journal and offers its reversal: a copy's
+  products removed, a move or rename sent back, a made directory removed if
+  empty. The whole plan is shown before anything moves - every step, and
+  every item that cannot be reversed with its reason: a copy changed since
+  is refused rather than taken, a permanent delete is named irreversible, a
+  trashed file is called safe where it is until restoring is built, a run
+  too large to record every item is refused whole. The reversal is recorded
+  as what it literally did, which is what makes undoing an undo work with
+  no special machinery.
 - **Ctrl-click runs a history or pinned line** in the window; the plain
   click keeps pasting to the command line, because pasting is the safe verb.
   A pinned template expands against the cursor before it runs.

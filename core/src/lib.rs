@@ -47,3 +47,4 @@ pub mod textindex;
 pub mod themes;
 pub mod trash;
 pub mod tree;
+pub mod undo;

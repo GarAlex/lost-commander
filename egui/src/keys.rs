@@ -141,6 +141,8 @@ pub enum Action {
     FilterPane,
     /// Every action, searchable by name.
     Palette,
+    /// Reverse the last file operation, out of the account.
+    Undo,
     /// Send this tab, whole, to the other pane.
     MoveTabAcross,
 
@@ -328,6 +330,9 @@ pub fn action_for(key: Key, modifiers: Modifiers) -> Option<Action> {
             Key::M => Action::MultiRename,
             // J for journal. The account of what was done.
             Key::J => Action::Journal,
+            // Ctrl-Z is undo everywhere a keyboard exists. What it reverses
+            // here is read out of the account, and shown before it moves.
+            Key::Z => Action::Undo,
             Key::Num1 => Action::ViewDetails,
             Key::Num2 => Action::ViewGrid,
             Key::Num3 => Action::ViewTree,
@@ -603,6 +608,7 @@ pub const HELP: &[(&str, &str)] = &[
     ("Alt-R", "search what has been run"),
     ("Alt-F", "narrow the listing as you type"),
     ("Ctrl-Shift-P", "every action, searchable"),
+    ("Ctrl-Z", "undo the last file operation"),
     ("Alt-H", "history of this folder, in the other pane"),
     ("F11 / F12", "sidebar / show or hide the second pane"),
     ("Shift-Enter", "open with a chosen application"),
@@ -691,6 +697,7 @@ pub fn every_action() -> Vec<Action> {
         SearchHistory,
         FilterPane,
         Palette,
+        Undo,
         MoveTabAcross,
         CompareFolders,
         Synchronize,
@@ -775,6 +782,7 @@ pub fn describe(action: Action) -> (&'static str, &'static str) {
         SearchHistory => ("Search what has been run", "Alt-R"),
         FilterPane => ("Narrow the listing as you type", "Alt-F"),
         Palette => ("This palette", "Ctrl-Shift-P"),
+        Undo => ("Undo the last file operation", "Ctrl-Z"),
         MoveTabAcross => ("Send this tab to the other pane", "Shift-F6"),
         CompareFolders => ("Mark what differs between the panes", "Alt-C"),
         Synchronize => ("Synchronise the two folders", "Alt-S"),
@@ -962,7 +970,8 @@ mod tests {
         // or text field wants it.
         assert_eq!(plain(Key::D), None);
         assert_eq!(plain(Key::Z), None);
-        assert_eq!(with_ctrl(Key::Z), None);
+        // Ctrl-Z is undo everywhere a keyboard exists, and now here too.
+        assert_eq!(with_ctrl(Key::Z), Some(Action::Undo));
     }
 
     #[test]

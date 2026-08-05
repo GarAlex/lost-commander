@@ -125,6 +125,10 @@ pub enum Dialog {
         query: String,
         at: usize,
     },
+    /// The last operation, and exactly what reversing it would do.
+    Undo {
+        plan: lost_commander_core::undo::Plan,
+    },
     /// Where a copy, a move or an extraction is going - typed, not implied.
     ///
     /// The destination used to be wherever the other pane happened to be,
@@ -4289,6 +4293,7 @@ impl GuiApp {
             A::FilterPane => {
                 self.filter_editing = Some(side);
             }
+            A::Undo => self.offer_undo(),
             A::Palette => {
                 self.dialog = Some(Dialog::Palette {
                     query: String::new(),
@@ -6500,6 +6505,73 @@ impl GuiApp {
                     }
                 }
                 still_open = !escaped && !chosen;
+            }
+            Dialog::Undo { plan } => {
+                use lost_commander_core::undo::Step;
+                let (mut confirmed, mut cancelled) = (false, false);
+                let plan = plan.clone();
+                let escaped = modal(ctx, &format!("Undo \"{}\"?", plan.what), |ui| {
+                    ui.label(
+                        RichText::new(format!("from {}", journal::clock(plan.at)))
+                            .size(11.0)
+                            .color(theme::text_faint()),
+                    );
+                    ui.add_space(4.0);
+                    egui::ScrollArea::vertical()
+                        .max_height(260.0)
+                        .auto_shrink([false, true])
+                        .show(ui, |ui| {
+                            ui.set_min_width(420.0);
+                            for step in &plan.steps {
+                                let line = match step {
+                                    Step::RemoveCopied { copy } => {
+                                        format!("remove the copy  {}", copy.display())
+                                    }
+                                    Step::MoveBack { now, was } => format!(
+                                        "move back  {}  ->  {}",
+                                        now.display(),
+                                        was.display()
+                                    ),
+                                    Step::RemoveMade { dir } => format!(
+                                        "remove the directory (only if empty)  {}",
+                                        dir.display()
+                                    ),
+                                };
+                                ui.label(
+                                    RichText::new(line)
+                                        .monospace()
+                                        .size(11.0)
+                                        .color(theme::text()),
+                                );
+                            }
+                            for (path, why) in &plan.refused {
+                                ui.label(
+                                    RichText::new(format!("left alone  {path}: {why}"))
+                                        .monospace()
+                                        .size(11.0)
+                                        .color(theme::text_faint()),
+                                );
+                            }
+                        });
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        confirmed |= ui
+                            .add_enabled(
+                                !plan.steps.is_empty(),
+                                egui::Button::new(format!(
+                                    "Undo {} step{}",
+                                    plan.steps.len(),
+                                    if plan.steps.len() == 1 { "" } else { "s" }
+                                )),
+                            )
+                            .clicked();
+                        cancelled |= ui.button("Cancel").clicked();
+                    });
+                });
+                if confirmed {
+                    self.apply_undo(&plan);
+                }
+                still_open = !escaped && !cancelled && !confirmed;
             }
             Dialog::MkDir { name } => {
                 let (mut confirmed, mut cancelled) = (false, false);
@@ -9104,6 +9176,66 @@ impl GuiApp {
         }
     }
 
+    /// `Ctrl-Z`: read the last operation out of the account and offer its
+    /// reversal - shown in full before anything moves, because an undo that
+    /// guesses is worse than none.
+    pub fn offer_undo(&mut self) {
+        use lost_commander_core::undo::{self, Undoable};
+        let Some(journal) = &self.journal else {
+            self.error("No account is being kept, so there is nothing to read back");
+            return;
+        };
+        let answer = journal.with_records(journal::Stream::Files, |records| undo::plan(records));
+        match answer {
+            Undoable::Nothing => self.info("Nothing to undo - the account is empty"),
+            Undoable::Refused { what, why } => {
+                self.error(format!("Cannot undo \"{what}\": {why}"));
+            }
+            Undoable::Plan(plan) => {
+                self.dialog = Some(Dialog::Undo { plan });
+                self.dialog_opened = true;
+            }
+        }
+    }
+
+    /// Do what the undo dialog showed, and account for the doing.
+    fn apply_undo(&mut self, plan: &lost_commander_core::undo::Plan) {
+        use lost_commander_core::undo::{self, Step};
+        let failures = undo::apply(plan);
+        // The reversal is itself the newest operation now, recorded as what
+        // it literally did - which is what makes undoing an undo work
+        // without any special machinery.
+        for step in &plan.steps {
+            let event = match step {
+                Step::RemoveCopied { copy } => journal::Event::new(journal::Kind::Delete, copy)
+                    .note("undo: the copy is removed"),
+                Step::MoveBack { now, was } => journal::Event::new(journal::Kind::Move, now)
+                    .to(was)
+                    .note("undo"),
+                Step::RemoveMade { dir } => journal::Event::new(journal::Kind::Delete, dir)
+                    .note("undo: the directory is removed"),
+            };
+            self.note(event);
+        }
+        self.left.reload();
+        self.right.reload();
+        if failures.is_empty() {
+            self.info(format!("Undone: {}", plan.what));
+        } else {
+            let named: Vec<String> = failures
+                .iter()
+                .map(|(path, why)| format!("{}: {why}", path.display()))
+                .collect();
+            self.error(format!(
+                "Undo of \"{}\" finished with {} failure{}: {}",
+                plan.what,
+                failures.len(),
+                if failures.len() == 1 { "" } else { "s" },
+                named.join("; ")
+            ));
+        }
+    }
+
     /// Pin a line to this directory, or unpin it - and write the shelf down.
     pub fn toggle_pin(&mut self, line: String) {
         let here = self.panel(self.active).cwd.clone();
@@ -11145,6 +11277,47 @@ mod tests {
             app.left.current().cwd,
             sub,
             "the one that was in front, not the one at its old index"
+        );
+    }
+
+    #[test]
+    fn ctrl_z_offers_the_last_operation_and_applying_reverses_it() {
+        use keys::Action as A;
+        use lost_commander_core::undo::Step;
+        let (root, mut app) = fixture();
+        let _dir = with_a_journal(&mut app);
+        let was = root.path().join("left").join("a.txt");
+        let moved = root.path().join("right").join("a.txt");
+        std::fs::rename(&was, &moved).unwrap();
+        app.note(journal::Event::new(journal::Kind::Move, &was).to(&moved));
+
+        app.run_action(A::Undo);
+        let Some(Dialog::Undo { plan }) = app.dialog.take() else {
+            panic!("the plan is shown before anything moves");
+        };
+        assert_eq!(
+            plan.steps,
+            vec![Step::MoveBack {
+                now: moved.clone(),
+                was: was.clone()
+            }]
+        );
+
+        app.apply_undo(&plan);
+        assert!(was.exists() && !moved.exists(), "back where it started");
+
+        // The reversal is the newest operation now, so undo of undo is just
+        // undo again - no special machinery.
+        app.run_action(A::Undo);
+        let Some(Dialog::Undo { plan }) = app.dialog.take() else {
+            panic!("the undo itself can be undone");
+        };
+        assert_eq!(
+            plan.steps,
+            vec![Step::MoveBack {
+                now: was.clone(),
+                was: moved.clone()
+            }]
         );
     }
 
