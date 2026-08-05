@@ -11,25 +11,18 @@
 //!
 //! # The shape on disk
 //!
-//! One file per stream, one record per line, appended as things happen:
+//! One file per day, one record per line, appended and never rewritten:
 //!
 //! ```text
-//! ~/.config/lost-commander/journal/files.jsonl
-//! ~/.config/lost-commander/journal/shell.jsonl
+//! ~/.config/lost-commander/journal/files-2026-07-28.jsonl
+//! ~/.config/lost-commander/journal/shell-2026-07-28.jsonl
 //! ```
 //!
-//! It was one file per *day*, which made expiry a matter of deleting whole
-//! files. That bought less than it looked: every record already carries the
-//! moment it happened, so the date in the file name was saying a second time
-//! what each line says for itself - and it left the account scattered over
-//! sixty files that were awkward to find, to read and to copy somewhere else.
-//!
-//! Appending is still the only write while the program runs, so a run that is
-//! killed halfway leaves everything it had already recorded. Expiry is a
-//! rewrite now, done once at startup: the kept records are written to a
-//! temporary file which is then renamed over the old one, so a machine that
-//! dies in the middle of it is left with one whole journal or the other,
-//! never half of either.
+//! That shape falls out of what it has to do. Browsing by date is opening one
+//! file. Keeping thirty days is deleting the files older than thirty days -
+//! no compaction, no rewriting, no chance of losing the good records while
+//! pruning the old ones. Appending is the only write, so a run that is killed
+//! halfway leaves everything it had already recorded.
 //!
 //! Shell commands are a second stream rather than another kind in the first,
 //! because they arrive in a different order of magnitude: a build can run
@@ -374,20 +367,6 @@ pub enum Record {
     Done(Done),
 }
 
-impl Record {
-    /// When it happened, whichever kind of record it is.
-    ///
-    /// The day used to be the file name. With one file per stream it comes
-    /// from the record, which is where it always really lived.
-    pub fn at(&self) -> i64 {
-        match self {
-            Record::Group(group) => group.at,
-            Record::Event(event) => event.at,
-            Record::Done(done) => done.at,
-        }
-    }
-}
-
 /// The most events one run will write.
 ///
 /// A copy of a hundred thousand files should not become a hundred thousand
@@ -600,77 +579,9 @@ impl Journal {
         &self.dir
     }
 
-    /// One file per stream: `files.jsonl` and `shell.jsonl`.
-    ///
-    /// It was one file per day, which made expiry a matter of deleting whole
-    /// files and browsing a matter of opening one. Two streams and one file
-    /// each is easier to say, easier to find and easier to copy somewhere
-    /// else, and the day a record belongs to is in the record - so nothing
-    /// was being bought by the file name that the line does not already say.
-    /// Expiry is a rewrite now, done once at startup and through a temporary
-    /// file, so a machine that dies mid-prune loses nothing.
-    pub fn file(&self, stream: Stream) -> PathBuf {
-        self.dir.join(format!("{}.jsonl", stream.prefix()))
-    }
-
-    /// Every record in a stream, oldest first.
-    pub fn read_all(&self, stream: Stream) -> Vec<Record> {
-        let Ok(text) = std::fs::read_to_string(self.file(stream)) else {
-            return Vec::new();
-        };
-        text.lines()
-            .filter(|line| !line.trim().is_empty())
-            .filter_map(|line| serde_json::from_str(line).ok())
-            .collect()
-    }
-
-    /// Fold the old one-file-per-day journals into the single file.
-    ///
-    /// Nobody's account should disappear because the shape of it changed.
-    /// Runs at startup, costs one `read_dir` when there is nothing to do, and
-    /// puts the days back in order on the way in.
-    pub fn merge_daily_files(&self) -> usize {
-        let Ok(entries) = std::fs::read_dir(&self.dir) else {
-            return 0;
-        };
-        let mut old: Vec<(Day, Stream, PathBuf)> = Vec::new();
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().to_string();
-            for stream in [Stream::Files, Stream::Shell] {
-                if let Some(day) = Day::from_file_name(&name, stream) {
-                    old.push((day, stream, entry.path()));
-                }
-            }
-        }
-        if old.is_empty() {
-            return 0;
-        }
-        // Oldest first, so the merged file reads in the order things happened.
-        old.sort_by_key(|(day, _, _)| *day);
-
-        let mut merged = 0;
-        for (_, stream, path) in &old {
-            let Ok(text) = std::fs::read_to_string(path) else {
-                continue;
-            };
-            let mut file = match std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(self.file(*stream))
-            {
-                Ok(file) => file,
-                Err(_) => continue,
-            };
-            use std::io::Write;
-            if file.write_all(text.as_bytes()).is_ok() {
-                if !text.ends_with('\n') {
-                    let _ = file.write_all(b"\n");
-                }
-                let _ = std::fs::remove_file(path);
-                merged += 1;
-            }
-        }
-        merged
+    fn file(&self, stream: Stream, day: Day) -> PathBuf {
+        self.dir
+            .join(format!("{}-{}.jsonl", stream.prefix(), day.name()))
     }
 
     /// Append one record. Never fails, and never says so.
@@ -678,13 +589,18 @@ impl Journal {
     /// A journal that could stop a copy would be worse than no journal: the
     /// whole point is to be a record of the work, not a participant in it.
     pub fn write(&self, stream: Stream, record: &Record) {
+        let at = match record {
+            Record::Group(group) => group.at,
+            Record::Event(event) => event.at,
+            Record::Done(done) => done.at,
+        };
         let Ok(line) = serde_json::to_string(record) else {
             return;
         };
         if std::fs::create_dir_all(&self.dir).is_err() {
             return;
         }
-        let path = self.file(stream);
+        let path = self.file(stream, Day::of_time(at));
         if let Ok(mut file) = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -708,19 +624,15 @@ impl Journal {
     }
 
     /// Every day that has records, newest first.
-    /// The days this stream has records for, newest first.
-    ///
-    /// Read out of the records rather than off the file names, which is the
-    /// same answer arrived at honestly: a day file could exist and be empty,
-    /// and a record could be written on a day whose file was already there.
     pub fn days(&self, stream: Stream) -> Vec<Day> {
-        let mut days: Vec<Day> = self
-            .read_all(stream)
-            .iter()
-            .map(|record| Day::of_time(record.at()))
+        let Ok(entries) = std::fs::read_dir(&self.dir) else {
+            return Vec::new();
+        };
+        let mut days: Vec<Day> = entries
+            .flatten()
+            .filter_map(|entry| Day::from_file_name(&entry.file_name().to_string_lossy(), stream))
             .collect();
         days.sort_unstable();
-        days.dedup();
         days.reverse();
         days
     }
@@ -730,11 +642,13 @@ impl Journal {
     /// A line that will not parse is skipped rather than failing the read: a
     /// half-written last line - the program killed mid-append - must not cost
     /// the rest of the day.
-    /// One day of a stream, in the order it happened.
     pub fn read(&self, stream: Stream, day: Day) -> Vec<Record> {
-        self.read_all(stream)
-            .into_iter()
-            .filter(|record| Day::of_time(record.at()) == day)
+        let Ok(text) = std::fs::read_to_string(self.file(stream, day)) else {
+            return Vec::new();
+        };
+        text.lines()
+            .filter(|line| !line.trim().is_empty())
+            .filter_map(|line| serde_json::from_str(line).ok())
             .collect()
     }
 
@@ -767,46 +681,23 @@ impl Journal {
     /// Delete the day files older than the retention setting.
     ///
     /// Returns how many files went, so the caller can say so.
-    /// Drop what has aged out, and say how many records went.
-    ///
-    /// A rewrite rather than a delete, now that a stream is one file. Written
-    /// to a temporary file and renamed over the old one, so a machine that
-    /// dies in the middle of it still has the whole journal afterwards -
-    /// either all the old records or all the kept ones, never half a file.
     pub fn sweep(&self, today: Day) -> usize {
-        // Whatever an older version left behind, first: it has to be in the
-        // one file before it can be pruned from it.
-        self.merge_daily_files();
-
         if self.keep.forever() {
             return 0;
         }
+        let Ok(entries) = std::fs::read_dir(&self.dir) else {
+            return 0;
+        };
         let mut swept = 0;
-        for stream in [Stream::Files, Stream::Shell] {
-            let records = self.read_all(stream);
-            if records.is_empty() {
-                continue;
-            }
-            let kept: Vec<&Record> = records
-                .iter()
-                .filter(|record| Day::of_time(record.at()).days_before(today) < self.keep.0 as i64)
-                .collect();
-            if kept.len() == records.len() {
-                continue;
-            }
-            swept += records.len() - kept.len();
-
-            let mut text = String::new();
-            for record in &kept {
-                if let Ok(line) = serde_json::to_string(record) {
-                    text.push_str(&line);
-                    text.push('\n');
-                }
-            }
-            let path = self.file(stream);
-            let temporary = path.with_extension("jsonl.pruning");
-            if std::fs::write(&temporary, text).is_ok() {
-                let _ = std::fs::rename(&temporary, &path);
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let day = Day::from_file_name(&name, Stream::Files)
+                .or_else(|| Day::from_file_name(&name, Stream::Shell));
+            let Some(day) = day else { continue };
+            if day.days_before(today) >= self.keep.0 as i64
+                && std::fs::remove_file(entry.path()).is_ok()
+            {
+                swept += 1;
             }
         }
         swept
@@ -1113,19 +1004,6 @@ pub struct Past {
 /// Works whatever shell is running. The line is known before it is handed
 /// over, so this needs no hook - which matters, because the machine's own
 /// shell on Windows has none.
-/// The last few days of a stream, oldest first.
-///
-/// Both front-ends want "recently, not everything": far enough back to be
-/// useful, not so far that opening a command line reads a year. With one file
-/// per stream this is a filter rather than a choice of which files to open.
-pub fn since(records: Vec<Record>, days: i64) -> Vec<Record> {
-    let today = Day::today();
-    records
-        .into_iter()
-        .filter(|record| Day::of_time(record.at()).days_before(today) < days)
-        .collect()
-}
-
 pub fn commands_before(records: &[Record], here: &Path) -> Vec<Past> {
     let mut here_first: Vec<Past> = Vec::new();
     let mut elsewhere: Vec<Past> = Vec::new();
@@ -1616,7 +1494,7 @@ mod tests {
         journal.record(Event::new(Kind::Copy, "/two"));
 
         // As a kill mid-append would leave it.
-        let path = journal.file(Stream::Files);
+        let path = journal.file(Stream::Files, Day::today());
         let mut text = std::fs::read_to_string(&path).unwrap();
         text.push_str("{\"record\":\"event\",\"at\":1,\"kind\":\"co");
         std::fs::write(&path, text).unwrap();
@@ -1656,67 +1534,23 @@ mod tests {
 
     #[test]
     fn the_days_with_records_are_listed_newest_first() {
-        // Out of the records, not off the file names: a day file could be
-        // there and empty, which used to count as a day with records in it.
-        let (_dir, journal) = journal();
-        let today = now();
-        for (stream, days_ago) in [
-            (Stream::Files, 2),
-            (Stream::Files, 0),
-            (Stream::Files, 1),
-            (Stream::Files, 0),
-            (Stream::Shell, 0),
-        ] {
-            let mut event = Event::new(Kind::Copy, "/a");
-            event.at = today - days_ago * 86_400;
-            journal.write(stream, &Record::Event(event));
-        }
-
-        let listed = journal.days(Stream::Files);
-        assert_eq!(listed.len(), 3, "three days, and today only once");
-        assert_eq!(listed[0], Day::of_time(today));
-        assert_eq!(listed[2], Day::of_time(today - 2 * 86_400));
-        assert_eq!(journal.days(Stream::Shell), vec![Day::of_time(today)]);
-    }
-
-    #[test]
-    fn the_old_one_file_per_day_journals_are_folded_in() {
-        // Nobody's account disappears because the shape of it changed. The
-        // days go in oldest first, so the merged file reads in the order the
-        // work happened.
         let (_dir, journal) = journal();
         std::fs::create_dir_all(journal.dir()).unwrap();
-        for (name, path) in [
-            ("files-2026-07-28.jsonl", "/newer"),
-            ("files-2026-07-26.jsonl", "/older"),
-            ("shell-2026-07-27.jsonl", "/a-command"),
-            ("notes.txt", "not ours"),
+        for name in [
+            "files-2026-07-26.jsonl",
+            "files-2026-07-28.jsonl",
+            "files-2026-07-27.jsonl",
+            "shell-2026-07-28.jsonl",
+            "notes.txt",
+            "files-nonsense.jsonl",
         ] {
-            let line = if name.ends_with(".txt") {
-                path.to_string()
-            } else {
-                let mut event = Event::new(Kind::Copy, path);
-                event.at = now();
-                serde_json::to_string(&Record::Event(event)).unwrap()
-            };
-            std::fs::write(journal.dir().join(name), format!("{line}\n")).unwrap();
+            std::fs::write(journal.dir().join(name), "").unwrap();
         }
-
-        assert_eq!(journal.merge_daily_files(), 3);
-
-        let files = journal.read_all(Stream::Files);
-        assert_eq!(files.len(), 2);
-        let Record::Event(first) = &files[0] else {
-            panic!("an event")
-        };
-        assert_eq!(first.path, "/older", "oldest day first");
-        assert_eq!(journal.read_all(Stream::Shell).len(), 1);
-
-        // The day files are gone, and what was never ours is left alone.
-        assert!(!journal.dir().join("files-2026-07-28.jsonl").exists());
-        assert!(journal.dir().join("notes.txt").exists());
-        // Nothing to do the second time.
-        assert_eq!(journal.merge_daily_files(), 0);
+        assert_eq!(
+            journal.days(Stream::Files),
+            vec![day(2026, 7, 28), day(2026, 7, 27), day(2026, 7, 26)]
+        );
+        assert_eq!(journal.days(Stream::Shell), vec![day(2026, 7, 28)]);
     }
 
     #[test]
@@ -1760,34 +1594,34 @@ mod tests {
     }
 
     #[test]
-    fn sweeping_takes_the_old_records_and_leaves_the_rest() {
+    fn sweeping_takes_the_old_days_and_leaves_the_rest() {
         let dir = tempfile::tempdir().unwrap();
         let journal = Journal::at(dir.path(), Keep(7));
-        let today = now();
-        for (stream, days_ago) in [
-            (Stream::Files, 0),  // today
-            (Stream::Files, 6),  // six days ago - kept
-            (Stream::Files, 7),  // seven - out
-            (Stream::Shell, 30), // long gone
+        for name in [
+            "files-2026-07-28.jsonl", // today
+            "files-2026-07-22.jsonl", // six days ago
+            "files-2026-07-21.jsonl", // seven - out
+            "shell-2026-07-01.jsonl", // long gone
+            "keep-me.txt",            // not ours
         ] {
-            let mut event = Event::new(Kind::Copy, "/a");
-            event.at = today - days_ago * 86_400;
-            journal.write(stream, &Record::Event(event));
+            std::fs::write(dir.path().join(name), "x").unwrap();
         }
-        std::fs::write(dir.path().join("keep-me.txt"), "x").unwrap();
 
-        assert_eq!(journal.sweep(Day::of_time(today)), 2);
+        assert_eq!(journal.sweep(day(2026, 7, 28)), 2);
+        let mut left: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        left.sort();
         assert_eq!(
-            journal.read_all(Stream::Files).len(),
-            2,
-            "today and six days ago"
+            left,
+            vec![
+                "files-2026-07-22.jsonl",
+                "files-2026-07-28.jsonl",
+                "keep-me.txt"
+            ]
         );
-        assert!(journal.read_all(Stream::Shell).is_empty());
-        // A rewrite, not a delete - and nothing else in the directory is
-        // touched, including the temporary file it wrote on the way.
-        assert!(journal.file(Stream::Files).exists());
-        assert!(dir.path().join("keep-me.txt").exists());
-        assert!(!dir.path().join("files.jsonl.pruning").exists());
     }
 
     #[test]
@@ -1796,12 +1630,10 @@ mod tests {
         // would be a trap. Zero means for ever.
         let dir = tempfile::tempdir().unwrap();
         let journal = Journal::at(dir.path(), Keep(0));
-        let mut ancient = Event::new(Kind::Copy, "/a");
-        ancient.at = 978_307_200; // 2001, which is well past any retention
-        journal.write(Stream::Files, &Record::Event(ancient));
+        std::fs::write(dir.path().join("files-2001-01-01.jsonl"), "x").unwrap();
         assert!(journal.keep.forever());
         assert_eq!(journal.sweep(day(2026, 7, 28)), 0);
-        assert_eq!(journal.read_all(Stream::Files).len(), 1, "still there");
+        assert!(dir.path().join("files-2001-01-01.jsonl").exists());
         assert_eq!(Keep(0).describe(), "for ever");
         assert_eq!(Keep(1).describe(), "for a day");
         assert_eq!(Keep(30).describe(), "for 30 days");

@@ -326,7 +326,7 @@ changes it.
 ## Testing
 
 ```sh
-cargo test                     # all 1095, from the workspace root
+cargo test                     # all 1094, from the workspace root
 ```
 
 From the root that is everything, because the root is a virtual manifest and
@@ -337,7 +337,7 @@ say `cargo test --workspace` there if you meant all of it.
 Per crate, when you want a fast loop:
 
 ```sh
-cargo test -p lost-commander-core    # 650 - the engine, seconds to build
+cargo test -p lost-commander-core    # 649 - the engine, seconds to build
 cargo test -p lost-commander-egui    # 217 - the graphical view
 cargo test -p lost-commander-tui     # 122 - the terminal view
 cargo test -p lost-commander-ffi     # 106 - the C ABI
@@ -397,15 +397,15 @@ different rates and mean different things:
 | `bookmarks.toml` | places you saved | when you save or remove one |
 | `recent.toml` | places you have been | every time a pane moves |
 | `workspaces.toml` | the windows you had open | when you ask it to |
-| `journal/shell.jsonl` | what you ran | as each command is run |
-| `journal/files.jsonl` | what was done to files | as each thing happens |
+| `journal/shell-*.jsonl` | what you ran | as each command is run |
+| `journal/files-*.jsonl` | what was done to files | as each thing happens |
 
-The two histories are appended a line at a time, so nothing is lost to a
-crash, and both are plain JSON lines — `grep` and `jq` read them. They were
-one file per *day* until every record was found to carry its own timestamp
-already: sixty files were saying in their names what each line says for
-itself. Expiry rewrites through a temporary file and renames over the old
-one, so an interrupted prune leaves one whole journal or the other. Recent locations were kept inside `bookmarks.toml` until they got a
+The two histories are one file per day — the `*` is a date, as in
+`shell-2026-07-28.jsonl` — and are appended a line at a time, so nothing is
+lost to a crash. Keeping thirty days is then deleting the files older than
+thirty: no compaction, no rewriting, and no way to lose a record that should
+have been kept while pruning one that should not. They are plain JSON lines,
+so `grep` and `jq` read them. Recent locations were kept inside `bookmarks.toml` until they got a
 file of their own: walking into a directory rewrote the file holding the
 things you had deliberately saved, which is a lot of writing to risk somebody's
 bookmarks on. An old `bookmarks.toml` with recents inside it still gives them
