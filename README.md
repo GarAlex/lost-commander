@@ -231,6 +231,11 @@ first, with failures kept. `Ctrl-J` opens the whole journal, by day.
 Under the panes is the row of function keys, read out of the same table the
 keyboard uses. The toolbar can fold it away.
 
+`Ctrl-Shift-P` opens the palette: every action, searchable by name or key,
+Enter runs the highlighted one. It reads the same table as the key bar and
+the keyboard, so it can neither offer what a key cannot do nor miss what one
+can — an action added without a palette name refuses to compile.
+
 There is one more argument, and it is how the view gets checked without a
 human at the screen:
 
@@ -323,7 +328,7 @@ opens onto a line saying which of the two you have, and `Alt-O` changes it.
 ## Testing
 
 ```sh
-cargo test                     # all 1134, from the workspace root
+cargo test                     # all 1136, from the workspace root
 ```
 
 From the root that is everything, because the root is a virtual manifest and
@@ -335,7 +340,7 @@ Per crate, when you want a fast loop:
 
 ```sh
 cargo test -p lost-commander-core    # 668 - the engine, seconds to build
-cargo test -p lost-commander-egui    # 233 - the graphical view
+cargo test -p lost-commander-egui    # 235 - the graphical view
 cargo test -p lost-commander-tui     # 127 - the terminal view
 cargo test -p lost-commander-ffi     # 106 - the C ABI
 ```

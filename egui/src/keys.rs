@@ -139,6 +139,8 @@ pub enum Action {
     SearchHistory,
     /// Narrow the active pane's listing as you type.
     FilterPane,
+    /// Every action, searchable by name.
+    Palette,
     /// Send this tab, whole, to the other pane.
     MoveTabAcross,
 
@@ -285,6 +287,11 @@ pub fn action_for(key: Key, modifiers: Modifiers) -> Option<Action> {
     // one Ctrl-O used to answer.
     if ctrl && shift && key == Key::O {
         return Some(Action::FilesOnly);
+    }
+    // The palette: every action in one searchable list, on the key half the
+    // editors of the last decade taught.
+    if ctrl && shift && key == Key::P {
+        return Some(Action::Palette);
     }
     if ctrl && alt && key == Key::O {
         return Some(Action::ToggleShellPanel);
@@ -595,6 +602,7 @@ pub const HELP: &[(&str, &str)] = &[
     ("Alt-0", "the workspace you were just in"),
     ("Alt-R", "search what has been run"),
     ("Alt-F", "narrow the listing as you type"),
+    ("Ctrl-Shift-P", "every action, searchable"),
     ("Alt-H", "history of this folder, in the other pane"),
     ("F11 / F12", "sidebar / show or hide the second pane"),
     ("Shift-Enter", "open with a chosen application"),
@@ -609,6 +617,174 @@ pub const HELP: &[(&str, &str)] = &[
     ("Shift-Tab", "let the shell complete what you have typed"),
     ("Ctrl-Up / Ctrl-Down", "the shell's history"),
 ];
+
+/// Every action there is, one of each.
+///
+/// The reachability test walks this to prove each can be typed, and the
+/// palette lists it - one list, so the palette can never offer what a key
+/// cannot do, nor miss what one can.
+pub fn every_action() -> Vec<Action> {
+    use Action::*;
+    vec![
+        CursorUp,
+        CursorDown,
+        PageUp,
+        PageDown,
+        Home,
+        End,
+        Open,
+        Parent,
+        Root,
+        SwitchPane,
+        SwapPanes,
+        Reload,
+        Mark,
+        MarkAll,
+        ClearMarks,
+        InvertMarks,
+        SelectByPattern,
+        DeselectByPattern,
+        SelectMenu,
+        Help,
+        Rename,
+        View,
+        Edit,
+        Copy,
+        Move,
+        MkDir,
+        Delete,
+        Quit,
+        ViewDetails,
+        ViewGrid,
+        ViewTree,
+        QuickView,
+        ViewHistory,
+        ToggleHidden,
+        ToggleSidebar,
+        ToggleSecondPane,
+        Bookmark,
+        ToggleShellPanel,
+        ShellOnly,
+        FilesOnly,
+        FocusTerminal,
+        LeaveTerminal,
+        FocusCommandLine,
+        Cancel,
+        CompleteCommand,
+        HistoryBack,
+        HistoryForward,
+        Theme,
+        OpenWith,
+        EditAsAdmin,
+        RootShell,
+        DeleteForever,
+        Find,
+        Properties,
+        MultiRename,
+        NewTab,
+        CloseTab,
+        CloseOtherTabs,
+        NextTab,
+        PreviousTab,
+        ShowWorkspace(0),
+        LastWorkspace,
+        SearchHistory,
+        FilterPane,
+        Palette,
+        MoveTabAcross,
+        CompareFolders,
+        Synchronize,
+        CompareFiles,
+        Duplicates,
+        Journal,
+        EditExternally,
+        EditImage,
+    ]
+}
+
+/// What to call an action, and the keys that reach it.
+///
+/// An exhaustive match on purpose: adding an action without naming it here
+/// refuses to compile, which is how the palette is kept from quietly
+/// falling behind the keyboard.
+pub fn describe(action: Action) -> (&'static str, &'static str) {
+    use Action::*;
+    match action {
+        CursorUp => ("Cursor up", "Up"),
+        CursorDown => ("Cursor down", "Down"),
+        PageUp => ("Page up", "PgUp"),
+        PageDown => ("Page down", "PgDn"),
+        Home => ("First entry", "Home"),
+        End => ("Last entry", "End"),
+        Open => ("Open, or enter the directory", "Enter"),
+        Parent => ("Go to the parent directory", "Backspace"),
+        Root => ("Go to the filesystem root", "Ctrl-\\"),
+        SwitchPane => ("The other pane - opens it if there is only one", "Tab"),
+        SwapPanes => ("Swap the panes", "Ctrl-U"),
+        Reload => ("Re-read the panels", "Ctrl-R"),
+        Mark => ("Mark the entry under the cursor", "Space / Insert"),
+        MarkAll => ("Mark everything", "Ctrl-A"),
+        ClearMarks => ("Clear every mark", "F9 menu"),
+        InvertMarks => ("Invert the marks", "*"),
+        SelectByPattern => ("Mark by pattern", "+"),
+        DeselectByPattern => ("Unmark by pattern", "-"),
+        SelectMenu => ("The select menu", "F9"),
+        Help => ("Help - every key", "F1"),
+        Rename => ("Rename", "F2"),
+        View => ("View the file", "F3"),
+        Edit => ("Edit the file", "F4"),
+        Copy => ("Copy to a directory you name", "F5"),
+        Move => ("Move to a directory you name", "F6"),
+        MkDir => ("New directory", "F7"),
+        Delete => ("Delete to the trash", "F8"),
+        Quit => ("Quit", "F10"),
+        ViewDetails => ("This pane as a detail list", "Ctrl-1"),
+        ViewGrid => ("This pane as an icon grid", "Ctrl-2"),
+        ViewTree => ("This pane as the directory tree", "Ctrl-3 / Alt-T"),
+        QuickView => ("Quick view, in the other pane", "Ctrl-Q / Ctrl-4"),
+        ViewHistory => ("This folder's history, in the other pane", "Alt-H"),
+        ToggleHidden => ("Hidden files on and off", "Ctrl-H / Alt-."),
+        ToggleSidebar => ("Places column on and off", "F11"),
+        ToggleSecondPane => ("Second pane on and off", "F12"),
+        Bookmark => ("Bookmark this directory", "Ctrl-D"),
+        ToggleShellPanel => ("Shell that stays, or one-shot command line", "Ctrl-Alt-O"),
+        ShellOnly => ("The shell alone, and back", "Ctrl-O"),
+        FilesOnly => ("The panes alone, and back", "Ctrl-Shift-O"),
+        FocusTerminal => ("Give the shell the keyboard", "Ctrl-`"),
+        LeaveTerminal => ("Give the panes the keyboard", "Shift-Esc"),
+        FocusCommandLine => ("Type on the command line", "just type"),
+        Cancel => ("Cancel, or close what is open", "Esc"),
+        CompleteCommand => ("Complete the command line", "Shift-Tab"),
+        HistoryBack => ("Earlier command", "Ctrl-Up"),
+        HistoryForward => ("Later command", "Ctrl-Down"),
+        Theme => ("Colour scheme", "Ctrl-K"),
+        OpenWith => ("Open with another program", "Shift-Enter"),
+        EditAsAdmin => ("Edit as administrator", "Shift-F4"),
+        RootShell => ("Root shell", "Ctrl-E"),
+        DeleteForever => ("Delete permanently, skipping the trash", "Shift-F8"),
+        Find => ("Find by name and contents", "Ctrl-F / Alt-F7"),
+        Properties => ("Properties", "Alt-Enter"),
+        MultiRename => ("Multi-rename the marked files", "Ctrl-M / Shift-F2"),
+        NewTab => ("New workspace, forked from this one", "Ctrl-T"),
+        CloseTab => ("Close this workspace", "Ctrl-W"),
+        CloseOtherTabs => ("Close the other workspaces", "Alt-W"),
+        NextTab => ("Next workspace", "Ctrl-Tab"),
+        PreviousTab => ("Previous workspace", "Ctrl-Shift-Tab"),
+        ShowWorkspace(_) => ("Workspace by number", "Alt-1 .. Alt-9"),
+        LastWorkspace => ("The workspace you were just in", "Alt-0"),
+        SearchHistory => ("Search what has been run", "Alt-R"),
+        FilterPane => ("Narrow the listing as you type", "Alt-F"),
+        Palette => ("This palette", "Ctrl-Shift-P"),
+        MoveTabAcross => ("Send this tab to the other pane", "Shift-F6"),
+        CompareFolders => ("Mark what differs between the panes", "Alt-C"),
+        Synchronize => ("Synchronise the two folders", "Alt-S"),
+        CompareFiles => ("Compare two files", "Alt-D / Shift-F3"),
+        Duplicates => ("Find duplicate files", "Alt-U"),
+        Journal => ("The journal, by day", "Ctrl-J"),
+        EditExternally => ("Edit in your own editor", "Alt-E"),
+        EditImage => ("Crop, rotate or resize the image", "Alt-I"),
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -790,70 +966,29 @@ mod tests {
     }
 
     #[test]
+    fn the_palette_names_every_action_distinctly() {
+        // describe() is exhaustive by construction - the compiler refuses an
+        // unnamed action. What it cannot check is that two actions share a
+        // name, which would draw as one row meaning two things.
+        let mut names: Vec<&str> = every_action()
+            .into_iter()
+            .map(|action| describe(action).0)
+            .collect();
+        let count = names.len();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), count, "every palette row means one thing");
+        assert!(every_action()
+            .into_iter()
+            .all(|action| !describe(action).1.is_empty()));
+    }
+
+    #[test]
     fn every_action_is_reachable_from_the_keyboard() {
         // The point of the exercise: nothing may need a mouse. Walk every
         // key/modifier pair and check the map covers the whole enum.
         use Action::*;
-        let every = [
-            CursorUp,
-            CursorDown,
-            PageUp,
-            PageDown,
-            Home,
-            End,
-            Open,
-            Parent,
-            Root,
-            SwitchPane,
-            SwapPanes,
-            Reload,
-            Mark,
-            MarkAll,
-            ClearMarks,
-            InvertMarks,
-            SelectByPattern,
-            DeselectByPattern,
-            SelectMenu,
-            Help,
-            Rename,
-            View,
-            Edit,
-            Copy,
-            Move,
-            MkDir,
-            Delete,
-            Quit,
-            ViewDetails,
-            ViewGrid,
-            ViewTree,
-            QuickView,
-            ViewHistory,
-            ToggleHidden,
-            ToggleSidebar,
-            ToggleSecondPane,
-            Bookmark,
-            ToggleShellPanel,
-            ShellOnly,
-            FilesOnly,
-            FocusTerminal,
-            LeaveTerminal,
-            FocusCommandLine,
-            Cancel,
-            CompleteCommand,
-            HistoryBack,
-            HistoryForward,
-            Theme,
-            OpenWith,
-            EditAsAdmin,
-            RootShell,
-            DeleteForever,
-            Find,
-            Properties,
-            ShowWorkspace(0),
-            LastWorkspace,
-            SearchHistory,
-            FilterPane,
-        ];
+        let every = every_action();
 
         // The combinations the map actually uses, as well as the single
         // modifiers. A walk that only tried one at a time would report a key

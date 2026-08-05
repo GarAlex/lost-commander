@@ -9,6 +9,13 @@ Notable changes, newest first. Versions follow [semantic versioning]; until
 
 ### Added
 
+- **The command palette.** `Ctrl-Shift-P` in the graphical view: every
+  action, searchable by name or key, arrows to choose, Enter to run. It is
+  the discoverability answer for everything that has no button - `Alt-H`,
+  `Ctrl-Shift-O`, select-by-pattern - without adding chrome. One table
+  serves the keyboard, the key bar and the palette, and naming an action for
+  the palette is enforced by an exhaustive match: adding one without a name
+  refuses to compile.
 - **The quick filter.** `Alt-F` narrows the listing as you type - `Ctrl-F`
   finds on the disk, this filters what is already on screen. The F-keys act
   on what the filter leaves visible, so filter plus `Ctrl-A` is "mark all

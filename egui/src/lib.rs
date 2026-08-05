@@ -115,6 +115,16 @@ pub enum Pending {
 /// went ahead without asking at all.
 pub enum Dialog {
     Help,
+    /// Every action, searchable by name and run with Enter.
+    ///
+    /// The list is [`keys::every_action`] and the names are
+    /// [`keys::describe`] - the same tables the keyboard and the key bar
+    /// read, which is what keeps the palette from offering what a key
+    /// cannot do or missing what one can.
+    Palette {
+        query: String,
+        at: usize,
+    },
     /// Where a copy, a move or an extraction is going - typed, not implied.
     ///
     /// The destination used to be wherever the other pane happened to be,
@@ -4279,6 +4289,13 @@ impl GuiApp {
             A::FilterPane => {
                 self.filter_editing = Some(side);
             }
+            A::Palette => {
+                self.dialog = Some(Dialog::Palette {
+                    query: String::new(),
+                    at: 0,
+                });
+                self.dialog_opened = true;
+            }
             A::SearchHistory => {
                 // The filter box lives in the history column, and typing
                 // into something that is not on screen is the thing this
@@ -5328,6 +5345,10 @@ impl GuiApp {
             return;
         };
         let still_open;
+        // An action picked in the palette runs after the dialog machinery has
+        // finished, because the action may open a dialog of its own and the
+        // restore below must not overwrite it.
+        let mut run_after: Option<keys::Action> = None;
         // False on the frame the dialog opened - see `dialog_opened`.
         let accept_enter = !std::mem::take(&mut self.dialog_opened);
         // Taken out and put back so the closure can borrow the rest of self.
@@ -6386,6 +6407,100 @@ impl GuiApp {
                 }
                 still_open = !escaped && !cancelled && !confirmed;
             }
+            Dialog::Palette { query, at } => {
+                let mut chosen = false;
+                // Matched before drawing, so Up, Down and Enter know the
+                // list they are moving over.
+                let needle = query.to_lowercase();
+                let matches: Vec<keys::Action> = keys::every_action()
+                    .into_iter()
+                    .filter(|action| {
+                        let (name, key) = keys::describe(*action);
+                        needle.is_empty()
+                            || name.to_lowercase().contains(&needle)
+                            || key.to_lowercase().contains(&needle)
+                    })
+                    .collect();
+
+                let escaped = modal(ctx, "Every action", |ui| {
+                    chosen = dialog_field(ui, query, "type to narrow", accept_enter);
+                    ui.add_space(4.0);
+
+                    if ui.input(|input| input.key_pressed(egui::Key::ArrowDown)) {
+                        *at = (*at + 1).min(matches.len().saturating_sub(1));
+                    }
+                    if ui.input(|input| input.key_pressed(egui::Key::ArrowUp)) {
+                        *at = at.saturating_sub(1);
+                    }
+                    *at = (*at).min(matches.len().saturating_sub(1));
+
+                    egui::ScrollArea::vertical()
+                        .max_height(320.0)
+                        .auto_shrink([false, true])
+                        .show(ui, |ui| {
+                            ui.set_min_width(380.0);
+                            for (index, action) in matches.iter().enumerate() {
+                                let (name, key) = keys::describe(*action);
+                                let current = index == *at;
+                                let fill = if current {
+                                    theme::surface_hi()
+                                } else {
+                                    Color32::TRANSPARENT
+                                };
+                                let row = egui::Frame::NONE
+                                    .fill(fill)
+                                    .corner_radius(CornerRadius::same(3))
+                                    .inner_margin(egui::Margin::symmetric(6, 2))
+                                    .show(ui, |ui| {
+                                        ui.set_width(ui.available_width());
+                                        ui.horizontal(|ui| {
+                                            ui.label(RichText::new(name).size(12.0).color(
+                                                if current {
+                                                    theme::text()
+                                                } else {
+                                                    theme::text_dim()
+                                                },
+                                            ));
+                                            ui.with_layout(
+                                                Layout::right_to_left(Align::Center),
+                                                |ui| {
+                                                    ui.label(
+                                                        RichText::new(key)
+                                                            .size(10.5)
+                                                            .color(theme::text_faint()),
+                                                    );
+                                                },
+                                            );
+                                        });
+                                    })
+                                    .response;
+                                let hit = ui.interact(
+                                    row.rect,
+                                    ui.id().with(("palette_row", index)),
+                                    Sense::click(),
+                                );
+                                if hit.clicked() {
+                                    *at = index;
+                                    chosen = true;
+                                }
+                            }
+                        });
+                    if matches.is_empty() {
+                        ui.label(
+                            RichText::new("Nothing matches - every action has a name and a key")
+                                .size(11.0)
+                                .color(theme::text_faint()),
+                        );
+                    }
+                });
+
+                if chosen {
+                    if let Some(action) = matches.get(*at) {
+                        run_after = Some(*action);
+                    }
+                }
+                still_open = !escaped && !chosen;
+            }
             Dialog::MkDir { name } => {
                 let (mut confirmed, mut cancelled) = (false, false);
                 let parent = self.active_panel().cwd.clone();
@@ -7142,6 +7257,11 @@ impl GuiApp {
             // Through the same door Escape uses, so a dialog closed either
             // way lets go of the same things.
             self.close_dialog();
+        }
+        // The palette's pick, now that the dialog machinery is done with the
+        // frame: the action is free to open a dialog of its own.
+        if let Some(action) = run_after {
+            self.run_action(action);
         }
     }
 
@@ -11008,6 +11128,34 @@ mod tests {
             sub,
             "the one that was in front, not the one at its old index"
         );
+    }
+
+    #[test]
+    fn the_palette_opens_narrows_and_runs() {
+        use keys::Action as A;
+        let (_root, mut app) = fixture();
+
+        app.run_action(A::Palette);
+        assert!(matches!(app.dialog, Some(Dialog::Palette { .. })));
+
+        // What the reader would do: narrow to the hidden-files toggle and
+        // run it. The narrowing itself is what the dialog draws; here the
+        // list is derived the same way to pick the row Enter would.
+        let matches: Vec<keys::Action> = keys::every_action()
+            .into_iter()
+            .filter(|action| {
+                keys::describe(*action)
+                    .0
+                    .to_lowercase()
+                    .contains("hidden files")
+            })
+            .collect();
+        assert_eq!(matches.len(), 1, "one row means one action");
+
+        let showing_before = app.left.current().show_hidden;
+        app.dialog = None;
+        app.run_action(matches[0]);
+        assert_ne!(app.left.current().show_hidden, showing_before);
     }
 
     #[test]
