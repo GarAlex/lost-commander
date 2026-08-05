@@ -541,6 +541,20 @@ impl PtySession {
     /// Anything sent snaps the view back to the live screen. Every terminal
     /// does this, and for a good reason: typing while scrolled up would
     /// otherwise echo somewhere the user cannot see.
+    /// Wipe the screen and the scrollback, and ask for a fresh prompt.
+    ///
+    /// The wipe is fed to the emulator directly rather than run as a command:
+    /// `clear` would go into the account and `cls` only exists on one shell.
+    /// The bare Enter afterwards is what brings the prompt back, and an empty
+    /// line is nothing to any shell - the hook records it as an empty
+    /// command, which the history filters out.
+    pub fn clean_screen(&mut self) {
+        if let Ok(mut parser) = self.parser.lock() {
+            parser.process(b"\x1b[H\x1b[2J\x1b[3J");
+        }
+        self.write(b"\r");
+    }
+
     pub fn write(&mut self, bytes: &[u8]) {
         {
             let mut writer = lock(&self.writer);

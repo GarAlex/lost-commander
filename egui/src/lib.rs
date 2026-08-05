@@ -476,6 +476,10 @@ pub struct GuiApp {
     /// open at the same branch. Only a `Panel` carries all of that, so the
     /// panel is what is kept.
     pub parked: std::collections::HashMap<u64, Panel>,
+    /// Shells owed to workspaces that have not been shown yet: which kind,
+    /// and where. Consumed on arrival, which is what keeps opening a saved
+    /// session from spawning one process per window up front.
+    pub pending_shells: std::collections::HashMap<u64, (Option<String>, PathBuf)>,
     /// The rail down the left: the workspaces, and how much of each is shown.
     pub show_rail: bool,
     /// Wide enough for the whole path and the shell's name, or narrow enough
@@ -563,6 +567,9 @@ pub struct GuiApp {
     /// Where the recent list is kept - its own file, since it changes on
     /// nearly every keystroke and the bookmarks do not.
     pub recent_path: Option<PathBuf>,
+    /// Where the workspaces are written. `None` in tests, which must never
+    /// touch the file of whoever runs the suite.
+    pub session_path: Option<PathBuf>,
     pub job: Option<Job>,
     pub status: String,
     pub status_is_error: bool,
@@ -678,6 +685,7 @@ impl GuiApp {
         app.bookmarks = Bookmarks::load();
         app.bookmarks_path = Bookmarks::config_path();
         app.recent_path = Bookmarks::recent_path();
+        app.session_path = session::Session::path();
         app.settings = Settings::load();
         // How the reader left the window arranged. Clamped rather than
         // trusted: a settings file is a text file somebody can edit, and a
@@ -734,6 +742,7 @@ impl GuiApp {
             half: Half::Both,
             workspaces: std::collections::HashMap::new(),
             parked: std::collections::HashMap::new(),
+            pending_shells: std::collections::HashMap::new(),
             show_rail: true,
             rail_wide: false,
             column_width: 210.0,
@@ -763,6 +772,7 @@ impl GuiApp {
             bookmarks,
             bookmarks_path: None,
             recent_path: None,
+            session_path: None,
             job: None,
             status: String::from("Ready"),
             status_is_error: false,
@@ -863,11 +873,31 @@ impl GuiApp {
         self.active = side;
         if let Some(Some(carried)) = forked {
             let id = self.workspace_id();
+            // The shell process is not shared - one shell per workspace. Its
+            // *kind* is one of the properties a fork copies, so the new
+            // window is owed one like it, here, opened on arrival.
+            let kind = carried
+                .shell
+                .and_then(|shell| self.terminals.at_id(shell))
+                .and_then(|at| self.terminals.sessions.get(at))
+                .map(|session| session.program.clone());
+            let carried = Workspace {
+                shell: None,
+                ..carried
+            };
             self.workspaces.insert(id, carried);
+            if let Some(kind) = kind {
+                let here = self.left.current().cwd.clone();
+                self.pending_shells.insert(id, (Some(kind), here));
+            }
+            self.open_pending_shell();
         }
         if let Some((id, copy)) = leaving {
             let outgoing = std::mem::replace(self.right.current_mut(), copy);
             self.parked.insert(id, outgoing);
+        }
+        if side == Side::Left {
+            self.autosave_workspaces();
         }
         let where_ = self.panel(side).cwd.display().to_string();
         self.info(format!("New workspace: {where_}"));
@@ -908,7 +938,9 @@ impl GuiApp {
             for id in &going {
                 self.workspaces.remove(id);
                 self.parked.remove(id);
+                self.pending_shells.remove(id);
             }
+            self.close_orphaned_shells();
         }
         match self.tabs_mut(side).close_others() {
             0 => self.error("There is only this tab"),
@@ -916,6 +948,9 @@ impl GuiApp {
                 "Closed {n} other {}",
                 if n == 1 { "tab" } else { "tabs" }
             )),
+        }
+        if side == Side::Left {
+            self.autosave_workspaces();
         }
     }
     fn walk_tabs(&mut self, side: Side, forward: bool) {
@@ -961,7 +996,10 @@ impl GuiApp {
         if side == Side::Left {
             self.workspaces.remove(&moving);
             self.parked.remove(&moving);
+            self.pending_shells.remove(&moving);
+            self.close_orphaned_shells();
             self.settle_in();
+            self.autosave_workspaces();
         }
         self.tabs_mut(other).accept(panel);
         // Both panes need their tree state settled: one lost a tab and one
@@ -1273,7 +1311,13 @@ impl GuiApp {
     pub fn open_terminal(&mut self, program: Option<String>) {
         let program = program.unwrap_or_else(|| self.chosen_shell().0);
         let cwd = self.active_panel().cwd.clone();
-        match self.terminals.open(&program, &cwd, 24, 80) {
+        self.open_terminal_in(&program, &cwd);
+    }
+
+    /// Open a shell somewhere in particular - a restored workspace's shell
+    /// opens where it *was*, not where the pane happens to be now.
+    fn open_terminal_in(&mut self, program: &str, cwd: &Path) {
+        match self.terminals.open(program, cwd, 24, 80) {
             Ok(()) => {
                 self.show_terminal = true;
                 self.terminal_focused = true;
@@ -1281,7 +1325,8 @@ impl GuiApp {
                 // workspace's shell - which is what makes coming back to a
                 // window bring its shell with it.
                 self.pair_shell_here();
-                self.note_unrecorded_shell(&program, &cwd);
+                self.autosave_workspaces();
+                self.note_unrecorded_shell(program, cwd);
                 self.info(format!("Opened {program} in {}", cwd.display()));
             }
             Err(e) => self.error(format!("Could not start {program}: {e}")),
@@ -2627,7 +2672,6 @@ impl GuiApp {
                 );
                 let mut want: Option<keys::Action> = None;
                 let mut want_half: Option<Half> = None;
-                let mut save_now = false;
                 egui::Popup::menu(&views).show(|ui| {
                     ui.set_min_width(220.0);
                     // Which halves of the window are on show. First, because
@@ -2641,14 +2685,6 @@ impl GuiApp {
                         if ui.selectable_label(self.half == half, label).clicked() {
                             want_half = Some(half);
                         }
-                    }
-                    ui.separator();
-                    if ui
-                        .selectable_label(false, "Save workspaces")
-                        .on_hover_text("Write the open windows down, to be opened again next time")
-                        .clicked()
-                    {
-                        save_now = true;
                     }
                     ui.separator();
                     if ui
@@ -2666,9 +2702,6 @@ impl GuiApp {
                 });
                 if let Some(action) = want {
                     self.run_action(action);
-                }
-                if save_now {
-                    self.save_session();
                 }
                 if let Some(half) = want_half {
                     // Straight to it from the menu: the keys toggle, because
@@ -3873,8 +3906,9 @@ impl GuiApp {
             self.command.push_str(text);
             return;
         }
-        if self.terminals.is_empty() {
-            // The command line is always there, so make one.
+        if self.shell_here().is_none() {
+            // The command line is always there, so make one - this
+            // workspace's own, not a hand reaching into another window's.
             self.open_terminal(None);
             self.terminal_focused = false;
         }
@@ -3919,7 +3953,7 @@ impl GuiApp {
             self.error("The shell panel has these - Ctrl-O");
             return;
         }
-        if self.terminals.is_empty() {
+        if self.shell_here().is_none() {
             self.open_terminal(None);
             self.terminal_focused = false;
         }
@@ -4186,7 +4220,7 @@ impl GuiApp {
             }
             A::FocusTerminal => {
                 self.show_terminal = true;
-                if self.terminals.is_empty() {
+                if self.shell_here().is_none() {
                     self.open_terminal(None);
                 }
                 self.terminal_focused = true;
@@ -4760,21 +4794,25 @@ impl GuiApp {
         self.run_elevated(elevate::root_shell(mount::Platform::current(), &cwd), &said);
     }
 
-    /// Type a command into a shell tab, opening one if there is none.
+    /// Type a command into this workspace's shell, opening one if none.
     ///
-    /// A tab whose shell is running a full-screen program is not free to take
-    /// a command: the line would reach `vim` as keystrokes rather than the
-    /// shell as a command. That case gets a tab of its own - which is what you
-    /// would have done by hand anyway.
+    /// A shell running a full-screen program is not free to take a command:
+    /// the line would reach `vim` as keystrokes rather than the shell as a
+    /// command. With one shell per workspace there is no second tab to give
+    /// it, so the honest move is to refuse and say why.
     fn run_in_terminal(&mut self, line: &str, said: &str) {
         self.show_terminal = true;
+        if self.shell_here().is_none() {
+            self.open_terminal(None);
+        }
         let busy = self
             .terminals
             .active()
             .map(|session| session.is_busy())
             .unwrap_or(false);
-        if self.terminals.is_empty() || busy {
-            self.open_terminal(None);
+        if busy {
+            self.error("The shell here is running something - finish it, or replace the shell");
+            return;
         }
         match self.terminals.active_mut() {
             Some(session) => {
@@ -7165,8 +7203,8 @@ impl GuiApp {
         // minimum for the rest of the session - which is exactly what it did.
         ui.set_min_height(ui.available_height());
 
-        let mut open_with: Option<Option<String>> = None;
-        let mut close_active = false;
+        let mut replace_with: Option<String> = None;
+        let mut clean = false;
 
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
@@ -7221,47 +7259,43 @@ impl GuiApp {
                 // The per-tab x closes a named tab; this closes the one on
                 // screen, which is what you want once the strip is long
                 // enough that finding the right x is work.
-                let any_open = !self.terminals.is_empty();
+                // One shell per workspace, so there is no + and no tab of
+                // shells: the two things left to do to one are replace it
+                // and clean it. The picker names what is running; choosing
+                // another kind swaps it, and choosing the same kind again is
+                // how you restart it.
+                let any_open = self.shell_here().is_some();
+                let running = self
+                    .shell_here()
+                    .and_then(|at| self.terminals.sessions.get(at))
+                    .map(|session| session.title.clone())
+                    .unwrap_or_else(|| "no shell".to_string());
+                let current = self
+                    .shell_here()
+                    .and_then(|at| self.terminals.sessions.get(at))
+                    .map(|session| session.program.clone());
+                egui::ComboBox::from_id_salt("replace_shell")
+                    .selected_text(RichText::new(running).size(11.0))
+                    .show_ui(ui, |ui| {
+                        for candidate in &self.shells {
+                            let this_one = current.as_deref() == Some(candidate.as_str());
+                            if shell_choice(ui, candidate, this_one) {
+                                replace_with = Some(candidate.clone());
+                            }
+                        }
+                    });
+
                 if ui
                     .add_enabled(
                         any_open,
-                        egui::Button::new(RichText::new("-").size(14.0).color(theme::text()))
+                        egui::Button::new(RichText::new("clean").size(11.0).color(theme::text()))
                             .fill(theme::surface_hi())
-                            .corner_radius(CornerRadius::same(4))
-                            .min_size(Vec2::new(24.0, 20.0)),
+                            .corner_radius(CornerRadius::same(4)),
                     )
-                    .on_hover_text("Close the terminal on screen")
+                    .on_hover_text("Wipe the screen and the scrollback")
                     .clicked()
                 {
-                    close_active = true;
-                }
-
-                if self.shells.len() > 1 {
-                    egui::ComboBox::from_id_salt("new_terminal_shell")
-                        .selected_text(RichText::new("v").size(11.0))
-                        .width(28.0)
-                        .show_ui(ui, |ui| {
-                            for candidate in &self.shells {
-                                if shell_choice(ui, candidate, false) {
-                                    open_with = Some(Some(candidate.clone()));
-                                }
-                            }
-                        });
-                }
-
-                // A plain click opens the chosen shell; the arrow beside it
-                // opens a specific one, as an editor does.
-                if ui
-                    .add(
-                        egui::Button::new(RichText::new("+").size(14.0).color(theme::text()))
-                            .fill(theme::surface_hi())
-                            .corner_radius(CornerRadius::same(4))
-                            .min_size(Vec2::new(24.0, 20.0)),
-                    )
-                    .on_hover_text("New terminal in the active panel's directory")
-                    .clicked()
-                {
-                    open_with = Some(None);
+                    clean = true;
                 }
 
                 ui.add_space(6.0);
@@ -7331,11 +7365,13 @@ impl GuiApp {
             });
         });
 
-        if close_active {
-            self.close_active_terminal();
+        if clean {
+            if let Some(session) = self.terminals.active_mut() {
+                session.clean_screen();
+            }
         }
-        if let Some(program) = open_with {
-            self.open_terminal(program);
+        if let Some(program) = replace_with {
+            self.replace_shell(program);
         }
 
         ui.add_space(4.0);
@@ -7345,13 +7381,36 @@ impl GuiApp {
             return;
         }
 
-        if self.terminals.is_empty() {
-            ui.label(
-                RichText::new("No terminal open - press + to start one.")
-                    .color(theme::text_faint())
-                    .size(11.5),
-            );
-            return;
+        // This workspace's shell, never another window's: with the strip of
+        // shell tabs gone, whatever `terminals.active` points at is only
+        // trustworthy after the pairing has been consulted.
+        match self.shell_here() {
+            Some(at) => {
+                if self.terminals.active != at {
+                    self.terminals.select(at);
+                    self.terminal_scroll_carry = 0.0;
+                }
+            }
+            None => {
+                ui.add_space(6.0);
+                ui.label(
+                    RichText::new("No shell in this workspace - pick one:")
+                        .color(theme::text_faint())
+                        .size(11.5),
+                );
+                let mut start: Option<String> = None;
+                ui.horizontal(|ui| {
+                    for candidate in &self.shells {
+                        if shell_choice(ui, candidate, false) {
+                            start = Some(candidate.clone());
+                        }
+                    }
+                });
+                if let Some(program) = start {
+                    self.open_terminal(Some(program));
+                }
+                return;
+            }
         }
 
         // Clicking the screen gives the shell the keyboard.
@@ -7387,7 +7446,7 @@ impl GuiApp {
 
     /// Feed the keyboard to the shell while the terminal has focus.
     fn terminal_input(&mut self, ctx: &egui::Context) {
-        if !self.terminal_focused || self.terminals.is_empty() {
+        if !self.terminal_focused || self.shell_here().is_none() {
             return;
         }
         // The key that handed the terminal the keyboard must not also be typed
@@ -7687,6 +7746,10 @@ impl GuiApp {
                 let right = right
                     .or_else(|| kept.map(|workspace| workspace.right.clone()))
                     .unwrap_or_else(|| panel.cwd.clone());
+                let shell_session = kept
+                    .and_then(|w| w.shell)
+                    .and_then(|id| self.terminals.at_id(id))
+                    .and_then(|at| self.terminals.sessions.get(at));
                 session::Workspace {
                     left: panel.cwd.clone(),
                     right,
@@ -7706,14 +7769,11 @@ impl GuiApp {
                     },
                     split: kept.map_or(0.5, |w| w.split),
                     synced: kept.is_none_or(|w| w.synced),
-                    // Where the shell stood, not the shell: the process is
+                    // The shell's kind and where it stood - the process is
                     // gone by the time this is read back, and the account
-                    // already holds what was run there.
-                    shell: kept
-                        .and_then(|w| w.shell)
-                        .and_then(|id| self.terminals.at_id(id))
-                        .and_then(|at| self.terminals.sessions.get(at))
-                        .map(|s| s.cwd.clone()),
+                    // already holds what was run in it.
+                    shell: shell_session.map(|s| s.cwd.clone()),
+                    shell_program: shell_session.map(|s| s.program.clone()),
                 }
             })
             .collect();
@@ -7724,15 +7784,20 @@ impl GuiApp {
     }
 
     /// Write the windows down, where the next run will find them.
-    pub fn save_session(&mut self) {
+    ///
+    /// Called whenever something happens *to* a workspace - opened, closed,
+    /// switched, moved, its shell replaced - not on a menu item and not on
+    /// exit. A session only written on the way out is a session lost to a
+    /// crash or a window closed with the mouse. The file is a few hundred
+    /// bytes and the events are human-paced, so writing the whole of it each
+    /// time costs nothing worth engineering around.
+    fn autosave_workspaces(&mut self) {
+        let Some(path) = self.session_path.clone() else {
+            return;
+        };
         let session = self.session();
-        let count = session.workspaces.len();
-        match session.save() {
-            Ok(()) => self.info(format!(
-                "Saved {count} workspace{}",
-                if count == 1 { "" } else { "s" }
-            )),
-            Err(e) => self.error(format!("Could not save the workspaces: {e}")),
+        if let Err(e) = session.save_to(&path) {
+            self.error(format!("Could not save the workspaces: {e}"));
         }
     }
 
@@ -7769,11 +7834,17 @@ impl GuiApp {
             right.reload();
             let id = self.workspace_id();
             self.parked.insert(id, right);
+            if let Some(dir) = &saved.shell {
+                // Owed a shell of the same kind, in the same place, opened
+                // when this window next comes up - restored means restored.
+                self.pending_shells
+                    .insert(id, (saved.shell_program.clone(), dir.clone()));
+            }
             self.workspaces.insert(
                 id,
                 Workspace {
-                    // No shell: the process is gone. Its directory is where
-                    // the next one opened here will start.
+                    // The process is gone; `pending_shells` holds what kind
+                    // and where, for arrival to open.
                     shell: None,
                     show_right: saved.show_right,
                     right: saved.right.clone(),
@@ -7926,6 +7997,41 @@ impl GuiApp {
         self.parked.insert(leaving, outgoing);
 
         self.restore_workspace();
+        self.open_pending_shell();
+        self.autosave_workspaces();
+    }
+
+    /// Swap this workspace's shell for a different one - or the same kind
+    /// again, which is how you restart it.
+    ///
+    /// One shell per workspace, so there is no "open another": a new shell
+    /// takes the old one's place, in the pane's directory.
+    pub fn replace_shell(&mut self, program: String) {
+        if let Some(at) = self.shell_here() {
+            self.terminals.close(at);
+            self.terminal_scroll_carry = 0.0;
+        }
+        self.open_terminal(Some(program));
+    }
+
+    /// Open the shell a restored or forked workspace is owed, on arrival.
+    fn open_pending_shell(&mut self) {
+        let id = self.workspace_id();
+        let Some((program, dir)) = self.pending_shells.remove(&id) else {
+            return;
+        };
+        if self.shell_here().is_some() {
+            return;
+        }
+        let program = program.unwrap_or_else(|| self.chosen_shell().0);
+        let focused_before = self.terminal_focused;
+        self.open_terminal_in(&program, &dir);
+        // Opening a shell normally hands it the keyboard; a shell that
+        // arrives as part of a window being put back should not steal it
+        // unless the window is nothing but the shell.
+        if self.half != Half::Shell {
+            self.terminal_focused = focused_before;
+        }
     }
 
     /// Put the workspace that is now on show fully on screen: its
@@ -7942,6 +8048,7 @@ impl GuiApp {
             // parked itself; nothing owns it any more.
             drop(stale);
         }
+        self.open_pending_shell();
     }
 
     /// Close a workspace: its tab, its record, and its parked pane.
@@ -7962,11 +8069,39 @@ impl GuiApp {
         }
         self.workspaces.remove(&closing);
         self.parked.remove(&closing);
+        self.pending_shells.remove(&closing);
+        self.close_orphaned_shells();
         if was_current {
             self.settle_in();
             self.sync_tree_view(Side::Left);
         }
+        self.autosave_workspaces();
         self.info("Workspace closed");
+    }
+
+    /// End every shell that no workspace claims any more.
+    ///
+    /// One shell per workspace means a workspace going away takes its shell
+    /// with it - otherwise the process keeps running with no window that can
+    /// reach it, invisible everywhere but the task manager.
+    fn close_orphaned_shells(&mut self) {
+        let claimed: Vec<u64> = self
+            .workspaces
+            .values()
+            .filter_map(|workspace| workspace.shell)
+            .collect();
+        let orphans: Vec<u64> = self
+            .terminals
+            .sessions
+            .iter()
+            .map(|session| session.id)
+            .filter(|id| !claimed.contains(id))
+            .collect();
+        for id in orphans {
+            if let Some(at) = self.terminals.at_id(id) {
+                self.terminals.close(at);
+            }
+        }
     }
 
     /// Tie the shell on show to the workspace on show.
@@ -7988,7 +8123,7 @@ impl GuiApp {
             match want {
                 Half::Shell => {
                     self.show_terminal = true;
-                    if self.terminals.is_empty() {
+                    if self.shell_here().is_none() {
                         self.open_terminal(None);
                     }
                     self.terminal_focused = true;
@@ -10438,6 +10573,7 @@ mod tests {
             split: 0.5,
             synced: true,
             shell: None,
+            shell_program: None,
         };
         // The window in front is the *second* saved one - and the first is
         // gone, so its index would now point at the wrong window.
@@ -10457,6 +10593,95 @@ mod tests {
             sub,
             "the one that was in front, not the one at its old index"
         );
+    }
+
+    #[test]
+    fn workspace_changes_are_written_down_as_they_happen() {
+        use keys::Action as A;
+        let (root, mut app) = fixture();
+        let file = root.path().join("workspaces.toml");
+        app.session_path = Some(file.clone());
+
+        // Opening one writes; there is no save button and no save-on-exit,
+        // because a session only written on the way out is a session lost to
+        // a crash or a window closed with the mouse.
+        app.run_action(A::NewTab);
+        let read = session::Session::load_from(&file).expect("written on the event");
+        assert_eq!(read.workspaces.len(), 2);
+        assert_eq!(read.at, 1, "and it knows which one is in front");
+
+        app.close_workspace(1);
+        let read = session::Session::load_from(&file).unwrap();
+        assert_eq!(read.workspaces.len(), 1);
+    }
+
+    #[test]
+    fn a_restored_shell_only_workspace_comes_back_as_a_shell() {
+        let (_root, mut app) = fixture();
+        let here = app.left.cwd().to_path_buf();
+        let session = session::Session {
+            workspaces: vec![session::Workspace {
+                left: here.clone(),
+                right: here.clone(),
+                show_right: false,
+                left_view: "list".into(),
+                right_view: "list".into(),
+                half: "shell".into(),
+                active: "left".into(),
+                split: 0.5,
+                synced: true,
+                shell: Some(here.clone()),
+                // No program named: the chosen default stands in, as it must
+                // for a file written before the field existed.
+                shell_program: None,
+            }],
+            at: 0,
+        };
+
+        app.open_session(&session);
+        // Restored means restored: the halves as they were, and a live shell
+        // of the saved kind standing where the old one stood.
+        assert_eq!(app.half, Half::Shell, "shell only comes back shell only");
+        let at = app.shell_here().expect("a shell, open and paired");
+        assert_eq!(app.terminals.sessions[at].cwd, here);
+        app.close_active_terminal();
+    }
+
+    #[test]
+    fn replacing_the_shell_keeps_one_per_workspace() {
+        let (_root, mut app) = fixture();
+        let (program, _) = app.chosen_shell();
+        app.open_terminal(None);
+        assert_eq!(app.terminals.sessions.len(), 1);
+        let first = app.terminals.active_id();
+
+        // The same kind again is how you restart it; either way it is a
+        // replacement, never a second shell.
+        app.replace_shell(program);
+        assert_eq!(app.terminals.sessions.len(), 1, "replaced, not added");
+        assert_ne!(app.terminals.active_id(), first, "a fresh process");
+        assert!(app.shell_here().is_some(), "and paired to this workspace");
+        app.close_active_terminal();
+    }
+
+    #[test]
+    fn a_closed_workspace_takes_its_shell_with_it() {
+        use keys::Action as A;
+        let (_root, mut app) = fixture();
+        app.open_terminal(None);
+        // The fork copies the shell's kind, so the new workspace opens its
+        // own - one shell per workspace, not one shell shared by two.
+        app.run_action(A::NewTab);
+        assert_eq!(app.terminals.sessions.len(), 2, "the fork got its own");
+        let forked = app.terminals.active_id();
+        assert_ne!(app.terminals.sessions[0].id, forked.unwrap());
+
+        // Closing the workspace ends its shell: a process no window can
+        // reach is invisible everywhere but the task manager.
+        app.close_workspace(1);
+        assert_eq!(app.terminals.sessions.len(), 1, "its shell went with it");
+        assert!(app.shell_here().is_some(), "the survivor keeps its own");
+        app.close_active_terminal();
     }
 
     #[test]
@@ -10517,6 +10742,7 @@ mod tests {
                     split: 0.5,
                     synced: true,
                     shell: None,
+                    shell_program: None,
                 },
                 session::Workspace {
                     left: root.path().join("was-here-yesterday"),
@@ -10529,6 +10755,7 @@ mod tests {
                     split: 0.5,
                     synced: true,
                     shell: None,
+                    shell_program: None,
                 },
             ],
             at: 1,

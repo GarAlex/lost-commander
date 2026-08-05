@@ -178,10 +178,17 @@ Switching workspaces puts all of it back, down to the cursor, the marks and
 the scroll position. `Ctrl-T` forks the workspace you are in. The rail's `>`
 widens it from a name to the whole path and the shell.
 
-*Save workspaces* on the view menu writes them down, and the next start with
-no arguments opens them again. A shell is not saved — the process is gone with
-it — but its directory is. A saved window whose directory has since gone is
-named rather than opened.
+Workspaces are written down as they change — opened, closed, switched,
+rearranged — and the next start with no arguments opens them again. The shell
+process is not saved; its kind and its directory are, and a fresh one of the
+same kind opens there when the window next comes up. A saved window whose
+directory has since gone is named rather than opened.
+
+**One shell per workspace.** The drawer has no `+`: the two things you can do
+to a shell are *replace* it — the picker names what is running, choosing
+another kind swaps it, and choosing the same kind again restarts it — and
+*clean* it, which wipes the screen and the scrollback. Closing a workspace
+ends its shell.
 
 Either row can have the window to itself: `Ctrl-O` gives it to the shell and
 `Ctrl-Shift-O` to the panes, and the same key hands it back. `Ctrl-Alt-O`
@@ -283,7 +290,7 @@ opens onto a line saying which of the two you have, and `Alt-O` changes it.
 ## Testing
 
 ```sh
-cargo test                     # all 1098, from the workspace root
+cargo test                     # all 1102, from the workspace root
 ```
 
 From the root that is everything, because the root is a virtual manifest and
@@ -295,7 +302,7 @@ Per crate, when you want a fast loop:
 
 ```sh
 cargo test -p lost-commander-core    # 650 - the engine, seconds to build
-cargo test -p lost-commander-egui    # 220 - the graphical view
+cargo test -p lost-commander-egui    # 224 - the graphical view
 cargo test -p lost-commander-tui     # 122 - the terminal view
 cargo test -p lost-commander-ffi     # 106 - the C ABI
 ```
@@ -351,7 +358,7 @@ Six things are kept, each in its own file:
 | `settings.toml` | how you like it | when you change something |
 | `bookmarks.toml` | places you saved | when you save or remove one |
 | `recent.toml` | places you have been | every time a pane moves |
-| `workspaces.toml` | the windows you had open | when you ask it to |
+| `workspaces.toml` | the windows you had open | as they change |
 | `journal/shell-*.jsonl` | what you ran | as each command is run |
 | `journal/files-*.jsonl` | what was done to files | as each thing happens |
 

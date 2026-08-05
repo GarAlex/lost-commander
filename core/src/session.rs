@@ -15,10 +15,10 @@
 //! either: it falls back to the ordinary listing, because a session file is
 //! not worth refusing to start over.
 //!
-//! A shell is not saved, because a shell cannot be reopened: the process is
-//! gone and its scrollback with it. Its *directory* is saved, which is the
-//! part that still means something - and the account already holds what was
-//! run there, so nothing about the work is lost.
+//! A shell process is not saved - it is gone, and its scrollback with it.
+//! Its *kind* and its *directory* are, and a fresh one of the same kind is
+//! opened there when the window next comes up; the account already holds
+//! what was run, so nothing about the work is lost.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -52,11 +52,15 @@ pub struct Workspace {
     /// Whether the shell followed the panes here.
     #[serde(default)]
     pub synced: bool,
-    /// Where this workspace's shell was standing, if it had one. Not which
-    /// shell: that is a setting, and the reader may well have changed it
-    /// between one run and the next.
+    /// Where this workspace's shell was standing, if it had one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shell: Option<PathBuf>,
+    /// Which shell it was. Restoring a window means the same kind of shell
+    /// in the same place - the process and its scrollback are gone, but
+    /// "PowerShell, standing in the build directory" is the part that was
+    /// arranged on purpose.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shell_program: Option<String>,
 }
 
 /// Every window, and which was on show.
@@ -149,6 +153,7 @@ mod tests {
             split: 0.4,
             synced: true,
             shell: Some(PathBuf::from(left)),
+            shell_program: Some("bash".into()),
         }
     }
 

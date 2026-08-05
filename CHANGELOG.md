@@ -9,6 +9,23 @@ Notable changes, newest first. Versions follow [semantic versioning]; until
 
 ### Changed
 
+- **One shell per workspace.** The drawer's `+` and `-` are gone: a workspace
+  has a shell, not a collection of them, so the two operations left are
+  *replace* - the picker names what is running, another kind swaps it, the
+  same kind again restarts it - and *clean*, which wipes the screen and the
+  scrollback. A fork opens its own shell of the same kind rather than sharing
+  the process, closing a workspace ends its shell, and a command typed while
+  the shell is running something is refused with a reason rather than typed
+  into whatever is running.
+- **Restoring a workspace restores its shell** - the kind and the directory,
+  opened when the window next comes up, so a shell-only window comes back as
+  a shell-only window rather than an empty one. The process and its
+  scrollback are gone, as they must be; the account holds what was run.
+- **Workspaces are saved automatically** as they change - opened, closed,
+  switched, moved, a shell replaced - and the *Save workspaces* menu item is
+  gone. A session written only on request or on a clean exit is one lost to
+  a crash or a window closed with the mouse.
+
 - **Recent locations moved out of `bookmarks.toml` into `recent.toml`, and are
   written as they happen.** They were saved only on a clean exit, so a crash
   or a window closed with the mouse lost them - and every step into a
