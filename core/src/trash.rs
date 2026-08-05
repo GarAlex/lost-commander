@@ -59,6 +59,232 @@ pub fn trash_info(original: &Path, deleted_at: &str) -> String {
     )
 }
 
+/// The inverse of [`url_encode`], for reading a trashinfo back.
+pub fn url_decode(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        if c != '%' {
+            out.push(c);
+            continue;
+        }
+        let pair: String = chars.by_ref().take(2).collect();
+        match u8::from_str_radix(&pair, 16) {
+            Ok(byte) => out.push(byte as char),
+            // Not an escape after all: kept as written, because a name with
+            // a stray percent in it is still a name.
+            Err(_) => {
+                out.push('%');
+                out.push_str(&pair);
+            }
+        }
+    }
+    out
+}
+
+/// One thing in the trash: what it was, where it came from, and when.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TrashedItem {
+    pub name: String,
+    pub original: PathBuf,
+    pub deleted_at: String,
+    /// How to reach it where it sits - the name inside `files/` on the XDG
+    /// side, the item's own path in the bin on Windows.
+    pub token: String,
+}
+
+/// What an XDG trash directory holds, newest first by deletion date.
+pub fn list_at(trash_dir: &Path) -> Vec<TrashedItem> {
+    let Ok(entries) = std::fs::read_dir(trash_dir.join("info")) else {
+        return Vec::new();
+    };
+    let mut items: Vec<TrashedItem> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let info_name = entry.file_name().to_string_lossy().to_string();
+            let token = info_name.strip_suffix(".trashinfo")?.to_string();
+            let text = std::fs::read_to_string(entry.path()).ok()?;
+            let mut original = None;
+            let mut deleted_at = String::new();
+            for line in text.lines() {
+                if let Some(path) = line.strip_prefix("Path=") {
+                    original = Some(PathBuf::from(url_decode(path)));
+                }
+                if let Some(when) = line.strip_prefix("DeletionDate=") {
+                    deleted_at = when.to_string();
+                }
+            }
+            Some(TrashedItem {
+                name: token.clone(),
+                original: original?,
+                deleted_at,
+                token,
+            })
+        })
+        .collect();
+    items.sort_by(|a, b| b.deleted_at.cmp(&a.deleted_at));
+    items
+}
+
+/// Put one thing back where it came from.
+///
+/// Refuses when the original seat is taken: silently replacing a file that
+/// exists now would turn a restore into an overwrite nobody asked for. The
+/// parent directories are remade if they have gone - the file's home coming
+/// back with it is what "restore" means.
+pub fn restore_at(trash_dir: &Path, item: &TrashedItem) -> io::Result<()> {
+    if item.original.exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "something else is where it came from",
+        ));
+    }
+    if let Some(parent) = item.original.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::rename(trash_dir.join("files").join(&item.token), &item.original)?;
+    let _ = std::fs::remove_file(
+        trash_dir
+            .join("info")
+            .join(format!("{}.trashinfo", item.token)),
+    );
+    Ok(())
+}
+
+/// Remove one thing from the trash for good.
+pub fn purge_at(trash_dir: &Path, item: &TrashedItem) -> io::Result<()> {
+    let path = trash_dir.join("files").join(&item.token);
+    if path.is_dir() {
+        std::fs::remove_dir_all(&path)?;
+    } else {
+        std::fs::remove_file(&path)?;
+    }
+    let _ = std::fs::remove_file(
+        trash_dir
+            .join("info")
+            .join(format!("{}.trashinfo", item.token)),
+    );
+    Ok(())
+}
+
+/// The script that lists the Windows Recycle Bin, one item per line as
+/// `path-in-bin|original-full-path|date`.
+///
+/// Column 1 of the bin's details is the original location and column 2 the
+/// deletion date - indexes, not names, so this does not depend on the
+/// display language.
+pub fn list_bin_script() -> String {
+    "$shell = New-Object -ComObject Shell.Application; \
+     $bin = $shell.Namespace(10); \
+     foreach ($item in $bin.Items()) { \
+       $where = $bin.GetDetailsOf($item, 1); \
+       $when = $bin.GetDetailsOf($item, 2); \
+       Write-Output ($item.Path + '|' + (Join-Path $where $item.Name) + '|' + $when) \
+     }"
+    .to_string()
+}
+
+/// Parse what [`list_bin_script`] printed.
+pub fn parse_bin_listing(stdout: &str) -> Vec<TrashedItem> {
+    stdout
+        .lines()
+        .filter_map(|line| {
+            let mut parts = line.trim().splitn(3, '|');
+            let token = parts.next()?.trim().to_string();
+            let original = PathBuf::from(parts.next()?.trim());
+            let deleted_at = parts.next().unwrap_or("").trim().to_string();
+            if token.is_empty() || original.as_os_str().is_empty() {
+                return None;
+            }
+            let name = original
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| token.clone());
+            Some(TrashedItem {
+                name,
+                original,
+                deleted_at,
+                token,
+            })
+        })
+        .collect()
+}
+
+/// The script that puts one bin item back, refusing a taken seat.
+pub fn restore_bin_script(item: &TrashedItem) -> String {
+    let token = crate::elevate::powershell_quote(&item.token);
+    let original = crate::elevate::powershell_quote(&item.original.display().to_string());
+    format!(
+        "if (Test-Path -LiteralPath {original}) {{ \
+           Write-Error 'something else is where it came from' \
+         }} else {{ \
+           $parent = Split-Path -Parent {original}; \
+           if ($parent) {{ New-Item -ItemType Directory -Force $parent | Out-Null }}; \
+           Move-Item -LiteralPath {token} -Destination {original} -ErrorAction Stop \
+         }}"
+    )
+}
+
+/// The script that removes one bin item for good.
+pub fn purge_bin_script(item: &TrashedItem) -> String {
+    let token = crate::elevate::powershell_quote(&item.token);
+    format!("Remove-Item -LiteralPath {token} -Recurse -Force -ErrorAction Stop")
+}
+
+/// Everything in the trash, wherever this platform keeps it.
+pub fn list() -> Vec<TrashedItem> {
+    if cfg!(windows) {
+        let launch = crate::elevate::powershell_command(&list_bin_script());
+        let Ok(output) = std::process::Command::new(&launch.program)
+            .args(&launch.args)
+            .output()
+        else {
+            return Vec::new();
+        };
+        parse_bin_listing(&String::from_utf8_lossy(&output.stdout))
+    } else {
+        home_trash().map(|dir| list_at(&dir)).unwrap_or_default()
+    }
+}
+
+fn run_bin_script(script: &str) -> io::Result<()> {
+    let launch = crate::elevate::powershell_command(script);
+    let output = std::process::Command::new(&launch.program)
+        .args(&launch.args)
+        .output()?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::other(
+            String::from_utf8_lossy(&output.stderr)
+                .lines()
+                .next()
+                .unwrap_or("the shell refused")
+                .to_string(),
+        ))
+    }
+}
+
+/// Put one thing back, wherever this platform keeps its trash.
+pub fn restore(item: &TrashedItem) -> io::Result<()> {
+    if cfg!(windows) {
+        run_bin_script(&restore_bin_script(item))
+    } else {
+        let dir = home_trash().ok_or_else(|| io::Error::other("no trash directory"))?;
+        restore_at(&dir, item)
+    }
+}
+
+/// Remove one thing for good, wherever this platform keeps its trash.
+pub fn purge(item: &TrashedItem) -> io::Result<()> {
+    if cfg!(windows) {
+        run_bin_script(&purge_bin_script(item))
+    } else {
+        let dir = home_trash().ok_or_else(|| io::Error::other("no trash directory"))?;
+        purge_at(&dir, item)
+    }
+}
+
 /// Local time in the form the spec asks for.
 pub fn now_stamp() -> String {
     chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string()
@@ -518,6 +744,88 @@ fn run_and_wait(command: &Launch) -> io::Result<()> {
     } else {
         detail.to_string()
     }))
+}
+
+#[cfg(test)]
+mod reading_tests {
+    use super::*;
+
+    fn seeded() -> (tempfile::TempDir, PathBuf, TrashedItem) {
+        let dir = tempfile::tempdir().unwrap();
+        let trash = dir.path().join("Trash");
+        std::fs::create_dir_all(trash.join("files")).unwrap();
+        std::fs::create_dir_all(trash.join("info")).unwrap();
+        let original = dir.path().join("home").join("a file.txt");
+        std::fs::write(trash.join("files").join("a file.txt"), "x").unwrap();
+        std::fs::write(
+            trash.join("info").join("a file.txt.trashinfo"),
+            trash_info(&original, "2026-08-01T10:00:00"),
+        )
+        .unwrap();
+        let item = list_at(&trash).remove(0);
+        (dir, trash, item)
+    }
+
+    #[test]
+    fn the_listing_reads_back_what_deletion_wrote() {
+        let (_dir, trash, item) = seeded();
+        assert_eq!(item.name, "a file.txt");
+        assert!(item.original.ends_with("a file.txt"));
+        assert_eq!(item.deleted_at, "2026-08-01T10:00:00");
+        assert_eq!(list_at(&trash).len(), 1);
+        // Round trip through the encoding: the space survived.
+        assert_eq!(url_decode(&url_encode("a file.txt")), "a file.txt");
+    }
+
+    #[test]
+    fn restore_puts_it_back_and_refuses_a_taken_seat() {
+        let (_dir, trash, item) = seeded();
+        restore_at(&trash, &item).unwrap();
+        assert!(item.original.exists(), "back home, home remade");
+        assert!(list_at(&trash).is_empty(), "and out of the trash");
+
+        // A second copy trashed later cannot land on the restored one.
+        std::fs::write(trash.join("files").join("a file.txt"), "y").unwrap();
+        std::fs::write(
+            trash.join("info").join("a file.txt.trashinfo"),
+            trash_info(&item.original, "2026-08-02T10:00:00"),
+        )
+        .unwrap();
+        let again = list_at(&trash).remove(0);
+        let refused = restore_at(&trash, &again).unwrap_err();
+        assert!(refused.to_string().contains("where it came from"));
+    }
+
+    #[test]
+    fn purge_is_for_good_and_says_so_by_leaving_nothing() {
+        let (_dir, trash, item) = seeded();
+        purge_at(&trash, &item).unwrap();
+        assert!(list_at(&trash).is_empty());
+        assert!(!trash.join("files").join("a file.txt").exists());
+    }
+
+    #[test]
+    fn the_bin_scripts_speak_for_themselves() {
+        let item = TrashedItem {
+            name: "a.txt".into(),
+            original: PathBuf::from(r"C:\src\a.txt"),
+            deleted_at: String::new(),
+            token: r"C:\$Recycle.Bin\S-1\x".into(),
+        };
+        assert!(list_bin_script().contains("Namespace(10)"));
+        let restore = restore_bin_script(&item);
+        assert!(
+            restore.contains("Test-Path"),
+            "a taken seat is refused, not replaced"
+        );
+        assert!(restore.contains("Move-Item"));
+        assert!(purge_bin_script(&item).contains("Remove-Item"));
+        let parsed = parse_bin_listing(
+            "C:\\$Recycle.Bin\\S-1\\x|C:\\src\\a.txt|01.08.2026 10:00\n\nnot-a-line\n",
+        );
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].name, "a.txt");
+    }
 }
 
 #[cfg(test)]
