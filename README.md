@@ -299,7 +299,13 @@ top of this folder's history, permanently; `pin` the same line again takes it
 off. The line is kept as typed, so a pinned `%f` template stays a template.
 In the window, right-clicking a history row pins it and right-clicking a
 pinned row unpins; the shelf sits above the history in both front-ends,
-marked. Pins live in `pinned.toml`.
+marked. Pins live in `pinned.toml`. A plain click on any history or pinned
+row puts the line on the command line — the safe verb — and `Ctrl`-click runs
+it, expanding a pinned template against the cursor first.
+
+On Windows the shell picker also offers WSL's default distribution when
+`wsl.exe` is present, and the panel-to-shell `cd` speaks WSL's language for
+it: `C:\src` becomes `/mnt/c/src`.
 
 In the window it is the bottom-right sector, under the places list; a filter
 box under its header narrows it as you type, and `Alt-R` puts the keyboard
@@ -328,7 +334,7 @@ opens onto a line saying which of the two you have, and `Alt-O` changes it.
 ## Testing
 
 ```sh
-cargo test                     # all 1136, from the workspace root
+cargo test                     # all 1138, from the workspace root
 ```
 
 From the root that is everything, because the root is a virtual manifest and
@@ -339,7 +345,7 @@ say `cargo test --workspace` there if you meant all of it.
 Per crate, when you want a fast loop:
 
 ```sh
-cargo test -p lost-commander-core    # 668 - the engine, seconds to build
+cargo test -p lost-commander-core    # 670 - the engine, seconds to build
 cargo test -p lost-commander-egui    # 235 - the graphical view
 cargo test -p lost-commander-tui     # 127 - the terminal view
 cargo test -p lost-commander-ffi     # 106 - the C ABI

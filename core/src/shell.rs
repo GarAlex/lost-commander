@@ -136,6 +136,9 @@ pub fn available_shells(
                 r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
                 r"C:\Program Files\PowerShell\7\pwsh.exe",
                 r"C:\Program Files\Git\bin\bash.exe",
+                // WSL's default distribution: a real bash on a Windows
+                // machine, and for many machines the best shell there is.
+                r"C:\Windows\System32\wsl.exe",
             ] {
                 push(candidate);
             }
@@ -991,10 +994,33 @@ mod tests {
 /// Here rather than in a front-end because it is a fact about shells, and
 /// because a second front-end wanting the same thing should not have to
 /// rediscover that `cmd` is different.
+/// A Windows path as WSL sees it: `C:\src\x` becomes `/mnt/c/src/x`.
+///
+/// Only paths with a drive letter translate; anything else is handed back
+/// unchanged, which at worst produces a cd that fails visibly rather than
+/// one that half-works.
+pub fn windows_path_for_wsl(path: &str) -> String {
+    let mut chars = path.chars();
+    let (Some(drive), Some(':')) = (chars.next(), chars.next()) else {
+        return path.replace('\\', "/");
+    };
+    if !drive.is_ascii_alphabetic() {
+        return path.replace('\\', "/");
+    }
+    let rest: String = chars.collect::<String>().replace('\\', "/");
+    format!("/mnt/{}{}", drive.to_ascii_lowercase(), rest)
+}
+
 pub fn cd_command(program: &str, path: &std::path::Path) -> String {
     let shown = path.display().to_string();
     match program_name(program).as_str() {
         "cmd" | "cmd.exe" => format!("cd /d \"{shown}\""),
+        // Inside WSL the panel's C:\ is /mnt/c: a cd with the Windows
+        // spelling would fail on every single directory.
+        "wsl" | "wsl.exe" => format!(
+            "cd '{}'",
+            windows_path_for_wsl(&shown).replace('\'', r"'\\''")
+        ),
         // Single quotes are literal in PowerShell as well, so a space or a
         // `$` in a name arrives intact - but the two families escape a quote
         // *inside* one differently, and a name that closed the quote early
@@ -1003,6 +1029,31 @@ pub fn cd_command(program: &str, path: &std::path::Path) -> String {
             format!("cd '{}'", shown.replace('\'', "''"))
         }
         _ => format!("cd '{}'", shown.replace('\'', r"'\''")),
+    }
+}
+
+#[cfg(test)]
+mod wsl_tests {
+    use super::*;
+
+    #[test]
+    fn a_windows_path_becomes_the_mnt_spelling() {
+        assert_eq!(
+            windows_path_for_wsl(r"C:\src\lost commander"),
+            "/mnt/c/src/lost commander"
+        );
+        assert_eq!(windows_path_for_wsl(r"D:\"), "/mnt/d/");
+        // No drive letter: handed back with the slashes fixed, so the
+        // failure, if any, is visible rather than half-working.
+        assert_eq!(windows_path_for_wsl(r"\\server\share"), "//server/share");
+    }
+
+    #[test]
+    fn a_cd_for_wsl_speaks_wsl() {
+        assert_eq!(
+            cd_command("wsl.exe", std::path::Path::new(r"C:\src\x")),
+            "cd '/mnt/c/src/x'"
+        );
     }
 }
 

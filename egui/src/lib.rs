@@ -2914,7 +2914,7 @@ impl GuiApp {
             section_label(ui, "PLACES");
             if self.bookmarks.locations.is_empty() {
                 ui.label(
-                    RichText::new("Nothing saved yet")
+                    RichText::new("Nothing saved yet - Ctrl-D bookmarks this folder")
                         .color(theme::text_faint())
                         .size(11.0),
                 );
@@ -8989,9 +8989,9 @@ impl GuiApp {
         if pins.is_empty() && shown.is_empty() {
             child.label(
                 RichText::new(if self.history_here_only {
-                    "nothing run here yet"
+                    "nothing run here yet - commands appear here, newest first"
                 } else {
-                    "nothing yet"
+                    "nothing yet - commands appear here, newest first"
                 })
                 .size(11.0)
                 .color(theme::text_faint()),
@@ -9016,7 +9016,9 @@ impl GuiApp {
             .collect();
 
         let mut reuse: Option<String> = None;
+        let mut run_now: Option<String> = None;
         let mut toggle: Option<String> = None;
+        let ctrl_held = child.input(|input| input.modifiers.ctrl);
         egui::ScrollArea::vertical()
             .id_salt("shell_history")
             .auto_shrink([false, false])
@@ -9039,7 +9041,11 @@ impl GuiApp {
                             "Pinned here - click puts it on the command line, right-click unpins",
                         );
                     if response.clicked() {
-                        reuse = Some(line.clone());
+                        if ctrl_held {
+                            run_now = Some(line.clone());
+                        } else {
+                            reuse = Some(line.clone());
+                        }
                     }
                     if response.secondary_clicked() {
                         toggle = Some(line.clone());
@@ -9067,10 +9073,15 @@ impl GuiApp {
                         .truncate()
                         .sense(Sense::click()),
                     );
-                    let response =
-                        response.on_hover_text(format!("{hint}\nRight-click pins it here"));
+                    let response = response.on_hover_text(format!(
+                        "{hint}\nCtrl-click runs it - right-click pins it here"
+                    ));
                     if response.clicked() {
-                        reuse = Some(line.clone());
+                        if ctrl_held {
+                            run_now = Some(line.clone());
+                        } else {
+                            reuse = Some(line.clone());
+                        }
                     }
                     if response.secondary_clicked() {
                         toggle = Some(line.clone());
@@ -9079,6 +9090,13 @@ impl GuiApp {
             });
         if let Some(line) = toggle {
             self.toggle_pin(line);
+        }
+        if let Some(line) = run_now {
+            // Ctrl-click is the run; the plain click stays the safe verb. A
+            // pinned template expands first, against whatever the cursor is
+            // on now - which is what a template is for.
+            let expanded = self.expand_command(&line);
+            self.run_in_terminal(&expanded, &expanded);
         }
         if let Some(line) = reuse {
             self.type_into_command_line(&line);

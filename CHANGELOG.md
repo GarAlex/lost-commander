@@ -9,6 +9,15 @@ Notable changes, newest first. Versions follow [semantic versioning]; until
 
 ### Added
 
+- **Ctrl-click runs a history or pinned line** in the window; the plain
+  click keeps pasting to the command line, because pasting is the safe verb.
+  A pinned template expands against the cursor before it runs.
+- **WSL in the shell picker.** On Windows the picker offers the default WSL
+  distribution when `wsl.exe` is present, and the panel-to-shell `cd`
+  translates the path - `C:\src` becomes `/mnt/c/src` - because a `cd` with
+  the Windows spelling would fail on every single directory.
+- **Empty states that teach.** The places column says how to fill it
+  (`Ctrl-D`), and the empty history column says what will appear there.
 - **The command palette.** `Ctrl-Shift-P` in the graphical view: every
   action, searchable by name or key, arrows to choose, Enter to run. It is
   the discoverability answer for everything that has no button - `Alt-H`,
