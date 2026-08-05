@@ -9,6 +9,14 @@ Notable changes, newest first. Versions follow [semantic versioning]; until
 
 ### Added
 
+- **Search over everything that has been run.** `Alt-R` in the terminal view
+  is a shell-style reverse search across the whole account, here first -
+  something no shell's own `Ctrl-R` can do, because no shell knows where you
+  were standing. Typing narrows, `Alt-R` steps, Enter takes the line without
+  running it, Escape gives back exactly what was typed. In the window the
+  history column grows a filter box that narrows it as you type, and `Alt-R`
+  puts the keyboard there, bringing the column up if it was hidden. `Ctrl-R`
+  stays what it has been since Norton: re-read the panels.
 - **`%f`, `%s` and `%d` on the command line**, in both front-ends: the file
   under the cursor, the marked names (or the cursor file when nothing is
   marked - the same reading of "the selection" as every F-key), and the other

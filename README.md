@@ -281,10 +281,15 @@ standing in; `all` is the rest, this directory first, with the ones from
 somewhere else drawn dimmer and naming their folder on hover. Clicking a line
 puts it on the command line without running it.
 
-In the window it is the bottom-right sector, under the places list; `hist`
-turns it off, and hiding the places list takes the column with it. In the
-terminal view it is beside the shell screen, and `Alt-P` / `Alt-N` walk the
-same list.
+In the window it is the bottom-right sector, under the places list; a filter
+box under its header narrows it as you type, and `Alt-R` puts the keyboard
+there, bringing the column up if it is hidden. `hist` turns the column off,
+and hiding the places list takes it along. In the terminal view it is beside
+the shell screen; `Alt-P` / `Alt-N` walk the same list, and `Alt-R` is a
+shell-style reverse search over the whole account, here first — something no
+shell's own `Ctrl-R` can do, because no shell knows where you were standing.
+`Alt-R` again steps to the next match, Enter takes the offer onto the command
+line without running it, Escape gives back exactly what was typed.
 
 **On the shell.** `lostc` keeps one shell running underneath the panels for
 the whole session, the way Midnight Commander does. Typing goes to the command
@@ -303,7 +308,7 @@ opens onto a line saying which of the two you have, and `Alt-O` changes it.
 ## Testing
 
 ```sh
-cargo test                     # all 1120, from the workspace root
+cargo test                     # all 1124, from the workspace root
 ```
 
 From the root that is everything, because the root is a virtual manifest and
@@ -314,9 +319,9 @@ say `cargo test --workspace` there if you meant all of it.
 Per crate, when you want a fast loop:
 
 ```sh
-cargo test -p lost-commander-core    # 661 - the engine, seconds to build
-cargo test -p lost-commander-egui    # 230 - the graphical view
-cargo test -p lost-commander-tui     # 123 - the terminal view
+cargo test -p lost-commander-core    # 662 - the engine, seconds to build
+cargo test -p lost-commander-egui    # 231 - the graphical view
+cargo test -p lost-commander-tui     # 125 - the terminal view
 cargo test -p lost-commander-ffi     # 106 - the C ABI
 ```
 

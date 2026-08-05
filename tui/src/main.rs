@@ -95,8 +95,10 @@ KEYS:
     Alt-O picks which shell that is, and says which of them can be recorded.
     On Windows the default is cmd, which cannot.
 
-    Alt-P and Alt-N walk back through what has been run, offering what was run
-    in this directory first - and the shell screen lists those beside it. That
+    Alt-R reverse-searches everything that has been run, here first: type to
+    narrow, Alt-R again for the next match, Enter to take the line, Esc to
+    give back what you had. Alt-P and Alt-N walk back through what has been
+    run, offering what was run in this directory first - and the shell screen lists those beside it. That
     works whatever shell you use: the line is known before it is handed over,
     so it needs no hook."
     );

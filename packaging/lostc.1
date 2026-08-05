@@ -46,6 +46,13 @@ the other panel's directory, and
 .B %%
 a literal percent. Each name is quoted for the shell, and the status row
 shows the expanded line before Enter runs it.
+.SH HISTORY SEARCH
+.B Alt\-R
+starts a reverse search over everything that has been run, offering matches
+from the current directory first; typing narrows it,
+.B Alt\-R
+again steps to the next match, Enter takes the offered line onto the command
+line without running it, and Escape gives back exactly what was typed before.
 .SH KEYS
 .TP
 .B Tab

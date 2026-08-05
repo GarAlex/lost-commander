@@ -135,6 +135,8 @@ pub enum Action {
     ShowWorkspace(usize),
     /// Back to the workspace that had the window before this one.
     LastWorkspace,
+    /// Put the keyboard in the history column's filter box.
+    SearchHistory,
     /// Send this tab, whole, to the other pane.
     MoveTabAcross,
 
@@ -258,6 +260,11 @@ pub fn action_for(key: Key, modifiers: Modifiers) -> Option<Action> {
         }
         if key == Key::Num0 {
             return Some(Action::LastWorkspace);
+        }
+        // Alt-R searches what has been run. Ctrl-R is Norton's re-read and
+        // the shells' own reverse-search, both older claims on the key.
+        if key == Key::R {
+            return Some(Action::SearchHistory);
         }
     }
 
@@ -579,6 +586,7 @@ pub const HELP: &[(&str, &str)] = &[
     ),
     ("Alt-1 .. Alt-9", "the nth workspace"),
     ("Alt-0", "the workspace you were just in"),
+    ("Alt-R", "search what has been run"),
     ("Alt-H", "history of this folder, in the other pane"),
     ("F11 / F12", "sidebar / show or hide the second pane"),
     ("Shift-Enter", "open with a chosen application"),
@@ -835,6 +843,7 @@ mod tests {
             Properties,
             ShowWorkspace(0),
             LastWorkspace,
+            SearchHistory,
         ];
 
         // The combinations the map actually uses, as well as the single

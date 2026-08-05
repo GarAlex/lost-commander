@@ -1115,6 +1115,24 @@ pub fn since(records: &[Record], days: i64) -> &[Record] {
     &records[start..]
 }
 
+/// The commands whose line contains the query, keeping the order they came
+/// in - which is here-first when they came from [`commands_before`], so a
+/// search finds the local `cargo test` before somebody else's.
+///
+/// Case-insensitive, because a search is a question about meaning and
+/// `Cargo` and `cargo` mean the same command. An empty query matches
+/// everything, which is what lets one code path serve both "the list" and
+/// "the list, narrowed".
+pub fn matching<'a>(past: &'a [Past], query: &str) -> Vec<&'a Past> {
+    if query.is_empty() {
+        return past.iter().collect();
+    }
+    let needle = query.to_lowercase();
+    past.iter()
+        .filter(|entry| entry.line.to_lowercase().contains(&needle))
+        .collect()
+}
+
 pub fn commands_before(records: &[Record], here: &Path) -> Vec<Past> {
     let mut here_first: Vec<Past> = Vec::new();
     let mut elsewhere: Vec<Past> = Vec::new();
@@ -1371,6 +1389,37 @@ pub fn new_group_id() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn matching_narrows_without_reordering_and_ignores_case() {
+        let past = vec![
+            Past {
+                line: "cargo test -p core".into(),
+                cwd: PathBuf::from("/here"),
+            },
+            Past {
+                line: "git status".into(),
+                cwd: PathBuf::from("/here"),
+            },
+            Past {
+                line: "Cargo build".into(),
+                cwd: PathBuf::from("/elsewhere"),
+            },
+        ];
+
+        let hits = matching(&past, "cargo");
+        assert_eq!(hits.len(), 2, "case is not meaning");
+        assert_eq!(
+            hits[0].line, "cargo test -p core",
+            "order kept: here-first stays here-first"
+        );
+        assert_eq!(
+            matching(&past, "").len(),
+            3,
+            "an empty query is the whole list"
+        );
+        assert!(matching(&past, "make").is_empty());
+    }
 
     #[test]
     fn the_account_answers_from_memory_once_read() {

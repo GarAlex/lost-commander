@@ -445,6 +445,14 @@ pub struct App {
     /// of every name. The second panel is a keystroke away and several
     /// things bring it up by themselves.
     pub show_right: bool,
+    /// A reverse search over the history, while one is running: the query
+    /// as typed, and which of its matches is being offered.
+    ///
+    /// `Alt-R` starts it and steps it, Enter takes the offered line onto the
+    /// command line, Escape gives back exactly what was typed before. The
+    /// search runs over the same list `Alt-P` walks - here first - so the
+    /// local `cargo test` is found before somebody else's.
+    pub history_search: Option<(String, usize)>,
     /// Commands offered back, and how far up them the reader has walked.
     ///
     /// Read when the walk starts rather than kept in step with the journal:
@@ -551,6 +559,7 @@ impl App {
             on_tree: [false, false],
             show_right: false,
             history: Vec::new(),
+            history_search: None,
             at_in_history: None,
             command: String::new(),
             pending_edit: None,
@@ -593,6 +602,76 @@ impl App {
             return out;
         }
         Location::local(path)
+    }
+
+    /// `Alt-R`: start a reverse search, or step to the next match of one.
+    pub fn step_history_search(&mut self) {
+        match &mut self.history_search {
+            None => {
+                // Only refresh where there is an account to refresh from -
+                // with none, whatever the list already holds is the answer.
+                if self.journal.is_some() {
+                    self.refresh_history();
+                }
+                if self.history.is_empty() {
+                    self.info("Nothing has been run yet");
+                    return;
+                }
+                self.history_search = Some((String::new(), 0));
+            }
+            Some((_, at)) => *at += 1,
+        }
+    }
+
+    /// The matches of the running search, here-first like the walk.
+    pub fn history_search_matches(&self) -> Vec<&journal::Past> {
+        match &self.history_search {
+            Some((query, _)) => journal::matching(&self.history, query),
+            None => Vec::new(),
+        }
+    }
+
+    /// The line a running search is offering, if it has one.
+    pub fn history_search_offer(&self) -> Option<&journal::Past> {
+        let (_, at) = self.history_search.as_ref()?;
+        let matches = self.history_search_matches();
+        // Clamped rather than wrapped: stepping past the last match keeps
+        // offering it, the way a shell's own reverse search behaves.
+        matches
+            .get((*at).min(matches.len().saturating_sub(1)))
+            .copied()
+    }
+
+    fn history_search_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Char(character) => {
+                if let Some((query, at)) = &mut self.history_search {
+                    query.push(character);
+                    *at = 0;
+                }
+            }
+            KeyCode::Backspace => {
+                if let Some((query, at)) = &mut self.history_search {
+                    query.pop();
+                    *at = 0;
+                }
+            }
+            KeyCode::Enter => {
+                // The offer becomes the command line, and is not run: taking
+                // a line back is one decision, running it is another.
+                if let Some(offer) = self.history_search_offer() {
+                    self.command = offer.line.clone();
+                    self.at_in_history = None;
+                }
+                self.history_search = None;
+            }
+            // Escape gives back exactly what was there before the search.
+            KeyCode::Esc => self.history_search = None,
+            // Any other key ends the search where it stands; the keystroke
+            // itself is deliberately swallowed, because acting on a key the
+            // reader aimed at a search that just closed would be a surprise.
+            _ => self.history_search = None,
+        }
     }
 
     /// `%f`, `%s` and `%d`, expanded against what the panels show.
@@ -3138,6 +3217,17 @@ impl App {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
 
+        // Alt-R: reverse search. Starting it, stepping it, and every key
+        // while it runs - before anything else can read the same keys.
+        if alt && key.code == KeyCode::Char('r') {
+            self.step_history_search();
+            return;
+        }
+        if self.history_search.is_some() {
+            self.history_search_key(key.code);
+            return;
+        }
+
         // The command line takes ordinary typing, as it does in Norton and
         // Midnight Commander. Function keys and anything with Ctrl or Alt
         // behind it still work the panels, which is why those are the
@@ -5522,6 +5612,70 @@ mod tests {
 
         assert!(app.status_is_error);
         assert!(app.status.contains("already exists"), "{}", app.status);
+    }
+
+    #[test]
+    fn alt_r_searches_the_history_and_enter_takes_the_offer() {
+        let (_root, mut app) = app_fixture();
+        let here = app.active_panel().cwd.clone();
+        app.history = vec![
+            lost_commander_core::journal::Past {
+                line: "cargo test -p core".into(),
+                cwd: here.clone(),
+            },
+            lost_commander_core::journal::Past {
+                line: "git status".into(),
+                cwd: here.clone(),
+            },
+            lost_commander_core::journal::Past {
+                line: "cargo build --release".into(),
+                cwd: here.clone(),
+            },
+        ];
+
+        // Alt-R opens the search; typing narrows it to the newest match.
+        app.on_key(alt('r'));
+        for c in "cargo".chars() {
+            app.on_key(key(KeyCode::Char(c)));
+        }
+        assert_eq!(
+            app.history_search_offer().unwrap().line,
+            "cargo test -p core"
+        );
+
+        // Alt-R again steps to the next match, and past the end it holds
+        // rather than wrapping - the way a shell's own reverse search does.
+        app.on_key(alt('r'));
+        assert_eq!(
+            app.history_search_offer().unwrap().line,
+            "cargo build --release"
+        );
+        app.on_key(alt('r'));
+        assert_eq!(
+            app.history_search_offer().unwrap().line,
+            "cargo build --release"
+        );
+
+        // Enter takes the offer onto the command line - and does not run it:
+        // taking a line back is one decision, running it is another.
+        app.on_key(key(KeyCode::Enter));
+        assert_eq!(app.command, "cargo build --release");
+        assert!(app.history_search.is_none());
+    }
+
+    #[test]
+    fn escape_gives_back_exactly_what_was_typed_before_the_search() {
+        let (_root, mut app) = app_fixture();
+        app.history = vec![lost_commander_core::journal::Past {
+            line: "cargo test".into(),
+            cwd: app.active_panel().cwd.clone(),
+        }];
+        app.command = "half a thou".into();
+
+        app.on_key(alt('r'));
+        app.on_key(key(KeyCode::Char('c')));
+        app.on_key(key(KeyCode::Esc));
+        assert_eq!(app.command, "half a thou", "the search never touched it");
     }
 
     #[test]

@@ -1739,6 +1739,24 @@ fn draw_tree(frame: &mut Frame, area: Rect, tree: &Tree, active: bool, here: &st
 /// The prompt is the directory being shown, because that is where a command
 /// will run.
 fn draw_command_line(frame: &mut Frame, area: Rect, app: &App) {
+    // A running reverse search takes the row over: the query, and the line
+    // it is offering. Enter takes the offer, Alt-R steps, Escape gives back.
+    if let Some((query, _)) = &app.history_search {
+        let offer = app
+            .history_search_offer()
+            .map(|past| past.line.clone())
+            .unwrap_or_default();
+        let line = Line::from(vec![
+            Span::styled(
+                format!("search '{query}': "),
+                Style::default().fg(theme::TITLE_FG),
+            ),
+            Span::styled(offer, Style::default().fg(theme::FILE_FG)),
+            Span::styled("\u{2588}", Style::default().fg(theme::CURSOR_FG)),
+        ]);
+        frame.render_widget(Paragraph::new(line).style(theme::base()), area);
+        return;
+    }
     let cwd = app.active_panel().cwd.display().to_string();
     // The tail of a long path, not the head: the end says which directory
     // this is, and the beginning only says which disk.

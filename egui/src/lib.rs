@@ -521,6 +521,10 @@ pub struct GuiApp {
     /// worth having in front of you. `Alt-P` in the terminal view offers the
     /// same list one line at a time; a window has room to show it.
     pub show_shell_history: bool,
+    /// Text the history column is narrowed by. Empty means all of it.
+    pub history_filter: String,
+    /// Set by `Alt-R`; the next frame hands the filter box the keyboard.
+    focus_history_filter: bool,
     /// Whether the history column is showing only this directory's commands.
     ///
     /// On to begin with, which is the half worth having in front of you: a
@@ -769,6 +773,8 @@ impl GuiApp {
             history_rows: Vec::new(),
             history_gen: u64::MAX,
             show_shell_history: true,
+            history_filter: String::new(),
+            focus_history_filter: false,
             history_here_only: true,
             shell_history_of: None,
             shell_history: Vec::new(),
@@ -4189,6 +4195,14 @@ impl GuiApp {
                 }
             }
             A::LastWorkspace => self.last_workspace(),
+            A::SearchHistory => {
+                // The filter box lives in the history column, and typing
+                // into something that is not on screen is the thing this
+                // program does not do - so the column comes up with it.
+                self.show_sidebar = true;
+                self.show_shell_history = true;
+                self.focus_history_filter = true;
+            }
             A::CloseTab => self.close_tab(side),
             A::CloseOtherTabs => self.close_other_tabs(side),
             A::NextTab => self.walk_tabs(side, true),
@@ -8733,6 +8747,39 @@ impl GuiApp {
         });
         self.history_here_only = here_only;
 
+        // The filter, under the header: typing narrows the list as it goes,
+        // and the cross gives the whole list back.
+        let mut filter = self.history_filter.clone();
+        let mut clear = false;
+        child.horizontal(|ui| {
+            let field = ui.add(
+                egui::TextEdit::singleline(&mut filter)
+                    .desired_width(ui.available_width() - 20.0)
+                    .hint_text("filter  (Alt-R)")
+                    .font(egui::TextStyle::Small),
+            );
+            if self.focus_history_filter {
+                field.request_focus();
+                self.focus_history_filter = false;
+            }
+            if !filter.is_empty()
+                && ui
+                    .add(
+                        egui::Button::new(
+                            RichText::new("\u{00d7}")
+                                .size(10.0)
+                                .color(theme::text_faint()),
+                        )
+                        .fill(Color32::TRANSPARENT)
+                        .min_size(Vec2::new(14.0, 14.0)),
+                    )
+                    .clicked()
+            {
+                clear = true;
+            }
+        });
+        self.history_filter = if clear { String::new() } else { filter };
+
         let shown = self.history_shown();
         if shown.is_empty() {
             child.label(
@@ -8804,9 +8851,11 @@ impl GuiApp {
     /// The lines the history column is showing, after the here/all filter.
     fn history_shown(&self) -> Vec<&journal::Past> {
         let here = self.shell_history_of.as_deref();
+        let needle = self.history_filter.to_lowercase();
         self.shell_history
             .iter()
             .filter(|past| !self.history_here_only || Some(past.cwd.as_path()) == here)
+            .filter(|past| needle.is_empty() || past.line.to_lowercase().contains(&needle))
             .collect()
     }
 
@@ -10810,6 +10859,43 @@ mod tests {
             sub,
             "the one that was in front, not the one at its old index"
         );
+    }
+
+    #[test]
+    fn the_history_filter_narrows_the_column_and_alt_r_brings_it_up() {
+        use keys::Action as A;
+        let (_root, mut app) = fixture();
+        let here = app.left.cwd().to_path_buf();
+        app.shell_history = vec![
+            journal::Past {
+                line: "cargo test".into(),
+                cwd: here.clone(),
+            },
+            journal::Past {
+                line: "git status".into(),
+                cwd: here.clone(),
+            },
+        ];
+        app.shell_history_of = Some(here);
+
+        app.history_filter = "CARGO".into();
+        let shown: Vec<&str> = app
+            .history_shown()
+            .into_iter()
+            .map(|past| past.line.as_str())
+            .collect();
+        assert_eq!(
+            shown,
+            vec!["cargo test"],
+            "narrowed, and case is not meaning"
+        );
+
+        // Alt-R with the column hidden brings it up: typing into something
+        // that is not on screen is the thing this program does not do.
+        app.show_sidebar = false;
+        app.show_shell_history = false;
+        app.run_action(A::SearchHistory);
+        assert!(app.show_sidebar && app.show_shell_history);
     }
 
     #[test]
