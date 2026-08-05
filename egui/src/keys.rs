@@ -90,6 +90,10 @@ pub enum Action {
     ToggleSecondPane,
     Bookmark,
     ToggleShellPanel,
+    /// Give the window to the shell, and take it back.
+    ShellOnly,
+    /// Give the window to the panes, and take it back.
+    FilesOnly,
     FocusTerminal,
     LeaveTerminal,
     FocusCommandLine,
@@ -232,6 +236,17 @@ pub fn action_for(key: Key, modifiers: Modifiers) -> Option<Action> {
     // Alt-H puts the other pane on this folder's history. Alt rather than
     // Ctrl because Ctrl-H is already "show hidden files", and one keystroke
     // that means two things is one nobody trusts.
+    // The other half of Ctrl-O: the panes with the whole window, and the
+    // shell out of the way. Ctrl-Alt-O is the third of the family: whether
+    // the bottom of the window is a shell that stays or a line that runs one
+    // command - a different question from which halves are on show, and the
+    // one Ctrl-O used to answer.
+    if ctrl && shift && key == Key::O {
+        return Some(Action::FilesOnly);
+    }
+    if ctrl && alt && key == Key::O {
+        return Some(Action::ToggleShellPanel);
+    }
     if alt && key == Key::H {
         return Some(Action::ViewHistory);
     }
@@ -250,7 +265,10 @@ pub fn action_for(key: Key, modifiers: Modifiers) -> Option<Action> {
             Key::T => Action::NewTab,
             Key::W => Action::CloseTab,
             Key::Q => Action::QuickView,
-            Key::O => Action::ToggleShellPanel,
+            // Ctrl-O is "let me see the shell" in every commander since
+            // Norton, and in this program's own terminal front-end. It used
+            // to fold the drawer away here, which is the opposite.
+            Key::O => Action::ShellOnly,
             Key::Backtick => Action::FocusTerminal,
             Key::Backslash => Action::Root,
             Key::K => Action::Theme,
@@ -525,6 +543,12 @@ pub const HELP: &[(&str, &str)] = &[
     ("Ctrl-Q", "quick view"),
     ("Ctrl-H, Alt-.", "show hidden files"),
     ("Ctrl-D", "bookmark this directory"),
+    ("Ctrl-O", "the shell alone, and back"),
+    ("Ctrl-Shift-O", "the panes alone, and back"),
+    (
+        "Ctrl-Alt-O",
+        "a shell that stays, or a one-shot command line",
+    ),
     ("Alt-H", "history of this folder, in the other pane"),
     ("F11 / F12", "sidebar / show or hide the second pane"),
     ("Shift-Enter", "open with a chosen application"),
@@ -763,6 +787,8 @@ mod tests {
             ToggleSecondPane,
             Bookmark,
             ToggleShellPanel,
+            ShellOnly,
+            FilesOnly,
             FocusTerminal,
             LeaveTerminal,
             FocusCommandLine,
@@ -779,11 +805,25 @@ mod tests {
             Properties,
         ];
 
+        // The combinations the map actually uses, as well as the single
+        // modifiers. A walk that only tried one at a time would report a key
+        // as unreachable when it is bound to two of them - which is what it
+        // did the moment Ctrl-Shift-O was added.
         let modifiers = [
             Modifiers::NONE,
             Modifiers::CTRL,
             Modifiers::SHIFT,
             Modifiers::ALT,
+            Modifiers {
+                ctrl: true,
+                shift: true,
+                ..Modifiers::NONE
+            },
+            Modifiers {
+                ctrl: true,
+                alt: true,
+                ..Modifiers::NONE
+            },
         ];
         let mut reachable = Vec::new();
         reachable.extend(

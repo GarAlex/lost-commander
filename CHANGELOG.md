@@ -9,6 +9,21 @@ Notable changes, newest first. Versions follow [semantic versioning]; until
 
 ### Changed
 
+- **Either half of the window can have all of it.** `Ctrl-O` gives it to the
+  shell and `Ctrl-Shift-O` to the panes, and the same key hands it back; both
+  are on the view menu. `Ctrl-O` used to fold the drawer away, which is the
+  opposite of what it means in this program's own terminal front-end and in
+  every commander since Norton - it is "let me see the shell" now.
+  `Ctrl-Alt-O` took over the old job of choosing between a shell that stays
+  and a one-shot command line.
+- **The two halves are independent while only one is showing.** A `cd` in a
+  shell nobody can see no longer moves a pane nobody is looking at, and the
+  pane walking off while the window belongs to the shell was the same
+  surprise from the other end. They fall back into step when both return, and
+  the half that had the window wins, because that is where the work just
+  happened. Typing a command, walking the history or sending a name to the
+  prompt brings the shell back by itself.
+
 - **The window is four sectors and two seams.** The places list moved to the
   right, and the shell now sits directly under the panes and exactly as wide
   as them - it was a panel of its own running the full width, so it was wider

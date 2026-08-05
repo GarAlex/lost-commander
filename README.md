@@ -182,6 +182,20 @@ width, so a shell is exactly as wide as the panes it belongs to, and the list
 of what was run here is exactly as wide as the places list above it. Both
 seams remember where you left them.
 
+Either row can have the window to itself: `Ctrl-O` gives it to the shell and
+`Ctrl-Shift-O` to the panes, and the same key hands it back. (`Ctrl-Alt-O` is
+the third of that family: whether the bottom is a shell that stays or a line
+that runs one command.) They are on the view menu too, so nothing here is
+keyboard-only.
+
+While only one half is up the two are **independent** — a `cd` in a shell
+nobody can see has no business moving a pane nobody is looking at, and the
+same in reverse. They fall back into step when both return, and the half that
+had the window is the one that wins: it is where the work just happened.
+Typing a command, walking the history or sending a name to the prompt brings
+the shell back on its own, because answering into a shell that is not on
+screen looks exactly like a swallowed keystroke.
+
 The second pane splits the top-left sector and nothing else; a tree splits a
 pane the other way, inside it. That is what keeps the arrangement stable: no
 matter how the panes are divided, the shell under them does not move.
@@ -297,7 +311,7 @@ changes it.
 ## Testing
 
 ```sh
-cargo test                     # all 1077, from the workspace root
+cargo test                     # all 1082, from the workspace root
 ```
 
 From the root that is everything, because the root is a virtual manifest and
@@ -309,7 +323,7 @@ Per crate, when you want a fast loop:
 
 ```sh
 cargo test -p lost-commander-core    # 642 - the engine, seconds to build
-cargo test -p lost-commander-egui    # 207 - the graphical view
+cargo test -p lost-commander-egui    # 212 - the graphical view
 cargo test -p lost-commander-tui     # 122 - the terminal view
 cargo test -p lost-commander-ffi     # 106 - the C ABI
 ```

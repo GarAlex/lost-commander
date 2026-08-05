@@ -344,6 +344,20 @@ fn selection_summary(
     format!("{count} items")
 }
 
+/// Which half of the window is on show.
+///
+/// The panes and the shell are two ways of working on the same directory,
+/// and there are times you want the whole window for one of them: reading a
+/// long listing, or watching a build. They are independent while only one is
+/// up - a `cd` in a shell nobody can see should not move a pane nobody is
+/// looking at either - and fall back into step when both are showing again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Half {
+    Both,
+    Files,
+    Shell,
+}
+
 pub struct GuiApp {
     pub left: Tabs,
     pub right: Tabs,
@@ -361,6 +375,8 @@ pub struct GuiApp {
     /// Norton, had no way to discover that F5 copies here too. The keys work
     /// either way; the bar is what says so.
     pub show_keys: bool,
+    /// Which halves of the window are on show.
+    pub half: Half,
     /// How wide the right-hand column is: the places list, and what was run
     /// here under it. Points, not a fraction - see [`Showing::column`].
     pub column_width: f32,
@@ -607,6 +623,7 @@ impl GuiApp {
             right_view: ViewMode::Details,
             show_sidebar: true,
             show_keys: true,
+            half: Half::Both,
             column_width: 210.0,
             row_height: 280.0,
             history_of: None,
@@ -1720,8 +1737,12 @@ impl eframe::App for GuiApp {
         }
 
         self.terminals.reap_finished();
-        self.follow_the_shell();
-        self.shell_follows_the_pane();
+        // Only while both are on screen. A `cd` in a shell nobody can see
+        // has no business moving a pane nobody is looking at, and the pane
+        // walking off while the window is given over to the shell is the
+        // same surprise from the other end. They are put back in step when
+        // both come back - see `show_half`.
+        self.sync_halves();
         self.terminal_input(ctx);
 
         egui::TopBottomPanel::top("toolbar")
@@ -1741,6 +1762,8 @@ impl eframe::App for GuiApp {
                 let cut = sectors(
                     full,
                     Showing {
+                        top: self.half != Half::Shell,
+                        bottom: self.half != Half::Files,
                         places: self.show_sidebar,
                         history: self.show_shell_history,
                         keys: self.show_keys,
@@ -1761,27 +1784,30 @@ impl eframe::App for GuiApp {
                 // Each sector paints its own background, which being a panel
                 // used to do for it.
                 let painter = ui.painter().clone();
-                painter.rect_filled(cut.shell, 0.0, theme::surface());
-                if let Some(keys) = cut.keys {
-                    painter.rect_filled(keys, 0.0, theme::surface());
+                for rect in [cut.shell, cut.keys].into_iter().flatten() {
+                    painter.rect_filled(rect, 0.0, theme::surface());
                 }
                 for rect in [cut.places, cut.history].into_iter().flatten() {
                     painter.rect_filled(rect, 0.0, theme::sidebar());
                 }
 
-                self.panes_in(ui, cut.panes);
+                if let Some(rect) = cut.panes {
+                    self.panes_in(ui, rect);
+                }
 
                 if let Some(rect) = cut.keys {
                     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
                     self.key_bar(&mut child);
                 }
 
-                let mut child =
-                    ui.new_child(egui::UiBuilder::new().max_rect(cut.shell.shrink2(CHROME_PAD)));
-                if self.show_terminal {
-                    self.terminal_panel(&mut child);
-                } else {
-                    self.console_panel(&mut child);
+                if let Some(rect) = cut.shell {
+                    let mut child =
+                        ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink2(CHROME_PAD)));
+                    if self.show_terminal {
+                        self.terminal_panel(&mut child);
+                    } else {
+                        self.console_panel(&mut child);
+                    }
                 }
 
                 if let Some(rect) = cut.places {
@@ -1801,17 +1827,20 @@ impl eframe::App for GuiApp {
                     }
                 }
                 // Only a drawer can be dragged taller; the one-shot command
-                // line is one line and there is nothing to give it.
-                if self.show_terminal {
-                    if let Some(pointer) = self.drag_seam(ui, "row_seam", cut.horizontal, false) {
-                        self.row_height = (full.max.y - pointer.y).max(ROW_MIN);
+                // line is one line and there is nothing to give it. With one
+                // half on show there is no seam at all.
+                if let Some(seam) = cut.horizontal {
+                    if self.show_terminal {
+                        if let Some(pointer) = self.drag_seam(ui, "row_seam", seam, false) {
+                            self.row_height = (full.max.y - pointer.y).max(ROW_MIN);
+                        }
+                    } else {
+                        ui.painter().hline(
+                            full.x_range(),
+                            seam.center().y,
+                            egui::Stroke::new(1.0, theme::border()),
+                        );
                     }
-                } else {
-                    ui.painter().hline(
-                        full.x_range(),
-                        cut.horizontal.center().y,
-                        egui::Stroke::new(1.0, theme::border()),
-                    );
                 }
             });
 
@@ -1863,7 +1892,15 @@ pub const SPLIT_MAX: f32 = 0.88;
 /// What the window is showing, for [`sectors`] to lay out.
 #[derive(Debug, Clone, Copy)]
 pub struct Showing {
-    /// The places list, which owns the right-hand column.
+    /// The top row: the panes, and the places list beside them.
+    pub top: bool,
+    /// The bottom row: the shell, and the history beside it.
+    ///
+    /// Both are on together nearly always. Either alone is the window given
+    /// over to one job - reading a directory, or working in a shell - which
+    /// is what `Ctrl-O` has meant in every commander since Norton.
+    pub bottom: bool,
+    /// The right-hand column: the places list, with the history under it.
     pub places: bool,
     /// What was run here, under the places list and the same width as it.
     pub history: bool,
@@ -1891,19 +1928,20 @@ pub struct Showing {
 #[derive(Debug, Clone, Copy)]
 pub struct Sectors {
     /// Top left: the panes. Split again by the second pane, and by a tree.
-    pub panes: Rect,
+    pub panes: Option<Rect>,
     /// The strip under the panes, when the key bar is on.
     pub keys: Option<Rect>,
     /// Bottom left: the shell, or the one-shot command line.
-    pub shell: Rect,
+    pub shell: Option<Rect>,
     /// Top right: the places list.
     pub places: Option<Rect>,
     /// Bottom right: what was run in the shell's directory.
     pub history: Option<Rect>,
     /// The full-height line between the columns.
     pub vertical: Option<Rect>,
-    /// The full-width line between the rows.
-    pub horizontal: Rect,
+    /// The full-width line between the rows. Only when there are two rows to
+    /// separate: with one, there is nothing to drag.
+    pub horizontal: Option<Rect>,
 }
 
 /// How short either row may be dragged, and how narrow the column.
@@ -1914,13 +1952,19 @@ pub const COLUMN_MAX: f32 = 420.0;
 /// The strip the function keys get, when they are on.
 pub const KEYS_HEIGHT: f32 = 26.0;
 
-/// Cut the window into its four sectors.
+/// Cut the window into its sectors.
 pub fn sectors(full: Rect, showing: Showing) -> Sectors {
     let half = GUTTER * 0.5;
+    // A window showing neither half would be an empty window. The panes are
+    // what it opens on, so they are what it falls back to.
+    let (top, bottom) = match (showing.top, showing.bottom) {
+        (false, false) => (true, false),
+        pair => pair,
+    };
 
-    // The right column only exists if the places list does: what was run here
-    // is drawn under that list and to its width, so with no list there is no
-    // column for it to be in. The shell takes the whole width instead.
+    // The right column is the places list with the history under it, so it
+    // stands or falls with that list being switched on - each row of it
+    // belongs to the row of the window beside it.
     let column = if showing.places {
         showing
             .column
@@ -1938,53 +1982,64 @@ pub fn sectors(full: Rect, showing: Showing) -> Sectors {
         .clamp(ROW_MIN, (full.height() - PANES_MIN).max(ROW_MIN));
     let seam_y = full.max.y - row;
 
-    let left = Rect::from_min_max(
-        full.min,
-        egui::pos2(
-            if showing.places {
-                seam_x - half
-            } else {
-                full.max.x
-            },
-            full.max.y,
-        ),
-    );
-
-    let top = Rect::from_min_max(left.min, egui::pos2(left.max.x, seam_y - half));
-    let (panes, keys) = if showing.keys && top.height() > KEYS_HEIGHT * 2.0 {
-        (
-            Rect::from_min_max(top.min, egui::pos2(top.max.x, top.max.y - KEYS_HEIGHT)),
-            Some(Rect::from_min_max(
-                egui::pos2(top.min.x, top.max.y - KEYS_HEIGHT),
-                top.max,
-            )),
-        )
+    let left_max_x = if showing.places {
+        seam_x - half
     } else {
-        (top, None)
+        full.max.x
+    };
+    let column_min_x = seam_x + half;
+
+    // With one row on show it takes the whole height: there is nothing to
+    // share the window with.
+    let (top_bottom, bottom_top) = match (top, bottom) {
+        (true, true) => (seam_y - half, seam_y + half),
+        _ => (full.max.y, full.min.y),
+    };
+
+    let top_left = top.then(|| Rect::from_min_max(full.min, egui::pos2(left_max_x, top_bottom)));
+    let (panes, keys) = match top_left {
+        Some(rect) if showing.keys && rect.height() > KEYS_HEIGHT * 2.0 => (
+            Some(Rect::from_min_max(
+                rect.min,
+                egui::pos2(rect.max.x, rect.max.y - KEYS_HEIGHT),
+            )),
+            Some(Rect::from_min_max(
+                egui::pos2(rect.min.x, rect.max.y - KEYS_HEIGHT),
+                rect.max,
+            )),
+        ),
+        other => (other, None),
     };
 
     Sectors {
         panes,
         keys,
-        shell: Rect::from_min_max(egui::pos2(left.min.x, seam_y + half), left.max),
-        places: showing.places.then(|| {
+        shell: bottom.then(|| {
             Rect::from_min_max(
-                egui::pos2(seam_x + half, full.min.y),
-                egui::pos2(full.max.x, seam_y - half),
+                egui::pos2(full.min.x, bottom_top),
+                egui::pos2(left_max_x, full.max.y),
             )
         }),
-        history: (showing.places && showing.history)
-            .then(|| Rect::from_min_max(egui::pos2(seam_x + half, seam_y + half), full.max)),
+        places: (showing.places && top).then(|| {
+            Rect::from_min_max(
+                egui::pos2(column_min_x, full.min.y),
+                egui::pos2(full.max.x, top_bottom),
+            )
+        }),
+        history: (showing.places && showing.history && bottom)
+            .then(|| Rect::from_min_max(egui::pos2(column_min_x, bottom_top), full.max)),
         vertical: showing.places.then(|| {
             Rect::from_min_max(
                 egui::pos2(seam_x - half, full.min.y),
                 egui::pos2(seam_x + half, full.max.y),
             )
         }),
-        horizontal: Rect::from_min_max(
-            egui::pos2(full.min.x, seam_y - half),
-            egui::pos2(full.max.x, seam_y + half),
-        ),
+        horizontal: (top && bottom).then(|| {
+            Rect::from_min_max(
+                egui::pos2(full.min.x, seam_y - half),
+                egui::pos2(full.max.x, seam_y + half),
+            )
+        }),
     }
 }
 
@@ -2390,8 +2445,22 @@ impl GuiApp {
                     matches!(looking, ViewMode::Preview | ViewMode::History),
                 );
                 let mut want: Option<keys::Action> = None;
+                let mut want_half: Option<Half> = None;
                 egui::Popup::menu(&views).show(|ui| {
                     ui.set_min_width(220.0);
+                    // Which halves of the window are on show. First, because
+                    // it is the coarsest thing on the menu: everything below
+                    // is about what goes in a half.
+                    for (half, label) in [
+                        (Half::Both, "Panes and shell    Ctrl-O / Ctrl-Shift-O"),
+                        (Half::Files, "Panes only         Ctrl-Shift-O"),
+                        (Half::Shell, "Shell only         Ctrl-O"),
+                    ] {
+                        if ui.selectable_label(self.half == half, label).clicked() {
+                            want_half = Some(half);
+                        }
+                    }
+                    ui.separator();
                     if ui
                         .selectable_label(looking == ViewMode::Preview, "Quick view    F3")
                         .clicked()
@@ -2407,6 +2476,15 @@ impl GuiApp {
                 });
                 if let Some(action) = want {
                     self.run_action(action);
+                }
+                if let Some(half) = want_half {
+                    // Straight to it from the menu: the keys toggle, because
+                    // a key you press to leave is the key you pressed to
+                    // arrive, but a menu names the state you are asking for.
+                    self.half = Half::Both;
+                    if half != Half::Both {
+                        self.show_half(half);
+                    }
                 }
 
                 if tool_button(
@@ -3690,6 +3768,7 @@ impl GuiApp {
 
     /// Send a typed character to the command line.
     pub fn type_into_command_line(&mut self, text: &str) {
+        self.shell_back_on_screen();
         if !self.show_terminal {
             self.command.push_str(text);
             return;
@@ -3997,6 +4076,8 @@ impl GuiApp {
                 }
                 self.info(format!("Bookmarked \"{name}\""));
             }
+            A::ShellOnly => self.show_half(Half::Shell),
+            A::FilesOnly => self.show_half(Half::Files),
             A::ToggleShellPanel => {
                 self.show_terminal = !self.show_terminal;
                 if !self.show_terminal {
@@ -7508,6 +7589,68 @@ impl GuiApp {
 
     // ---- status strip ------------------------------------------------------
 
+    /// Keep the two halves in step, which is only meaningful while both are
+    /// on screen. Called once a frame; split out so a test can drive it
+    /// without a window.
+    pub fn sync_halves(&mut self) {
+        if self.half == Half::Both {
+            self.follow_the_shell();
+            self.shell_follows_the_pane();
+        }
+    }
+
+    /// Give the window to one half, or hand it back to both.
+    ///
+    /// Pressing the same key again is how you get back, so this toggles
+    /// rather than sets: `Ctrl-O` twice leaves you where you started.
+    pub fn show_half(&mut self, want: Half) {
+        let was = self.half;
+        self.half = if was == want { Half::Both } else { want };
+        if self.half == want {
+            match want {
+                Half::Shell => {
+                    self.show_terminal = true;
+                    if self.terminals.is_empty() {
+                        self.open_terminal(None);
+                    }
+                    self.terminal_focused = true;
+                    self.terminal_taken = true;
+                    self.info("The shell has the window. Ctrl-O brings the panes back.");
+                }
+                Half::Files => {
+                    self.terminal_focused = false;
+                    self.info("The panes have the window. Ctrl-Shift-O brings the shell back.");
+                }
+                Half::Both => {}
+            }
+            return;
+        }
+
+        // Back to both, and back into step. Whichever half had the window is
+        // the one that is right about where you are: it is where the work
+        // just happened, and the other has been sitting still.
+        match was {
+            Half::Shell => {
+                self.terminal_focused = false;
+                self.follow_the_shell();
+            }
+            Half::Files => self.shell_follows_the_pane(),
+            Half::Both => {}
+        }
+    }
+
+    /// Put the shell back on screen, for something that is about to use it.
+    ///
+    /// Typing a command, completing one, walking the history, sending a name
+    /// to the prompt: all of them are answered by a shell, and answering
+    /// into one that is not on screen would look like the keystroke was
+    /// swallowed.
+    fn shell_back_on_screen(&mut self) {
+        if self.half == Half::Files {
+            self.show_half(Half::Files);
+        }
+    }
+
     /// The top-left sector: one pane, or two with a draggable line between.
     ///
     /// The second pane splits this sector and nothing else, which is what
@@ -10396,6 +10539,8 @@ mod tests {
 
     fn showing() -> Showing {
         Showing {
+            top: true,
+            bottom: true,
             places: true,
             history: true,
             keys: true,
@@ -10412,8 +10557,10 @@ mod tests {
         // belong together, a shell and the directory it is standing in, were
         // the two things that did not line up.
         let cut = sectors(window(), showing());
-        assert_eq!(cut.shell.min.x, cut.panes.min.x);
-        assert_eq!(cut.shell.max.x, cut.panes.max.x);
+        let panes = cut.panes.expect("the panes");
+        let shell = cut.shell.expect("the shell");
+        assert_eq!(shell.min.x, panes.min.x);
+        assert_eq!(shell.max.x, panes.max.x);
 
         let places = cut.places.expect("the places list");
         let history = cut.history.expect("what was run here");
@@ -10435,23 +10582,25 @@ mod tests {
 
         // The horizontal seam runs the whole width, and the two rows are the
         // same height on both sides of it.
-        assert_eq!(cut.horizontal.min.x, window().min.x);
-        assert_eq!(cut.horizontal.max.x, window().max.x);
-        assert_eq!(cut.shell.min.y, history.min.y);
-        assert_eq!(cut.shell.max.y, history.max.y);
+        let horizontal = cut.horizontal.expect("a seam between the rows");
+        assert_eq!(horizontal.min.x, window().min.x);
+        assert_eq!(horizontal.max.x, window().max.x);
+        assert_eq!(cut.shell.unwrap().min.y, history.min.y);
+        assert_eq!(cut.shell.unwrap().max.y, history.max.y);
         assert_eq!(places.max.y, cut.keys.expect("the key bar").max.y);
     }
 
     #[test]
     fn the_keys_are_a_strip_under_the_panes_inside_their_own_column() {
         let cut = sectors(window(), showing());
+        let panes = cut.panes.expect("the panes");
         let keys = cut.keys.expect("the key bar");
         assert_eq!(
-            keys.min.x, cut.panes.min.x,
+            keys.min.x, panes.min.x,
             "as wide as the panes, not the window"
         );
-        assert_eq!(keys.max.x, cut.panes.max.x);
-        assert_eq!(keys.min.y, cut.panes.max.y, "directly under them");
+        assert_eq!(keys.max.x, panes.max.x);
+        assert_eq!(keys.min.y, panes.max.y, "directly under them");
         assert!((keys.height() - KEYS_HEIGHT).abs() < 0.01);
 
         let without = sectors(
@@ -10463,7 +10612,7 @@ mod tests {
         );
         assert!(without.keys.is_none());
         assert!(
-            without.panes.height() > cut.panes.height(),
+            without.panes.unwrap().height() > panes.height(),
             "the strip goes back to the panes"
         );
     }
@@ -10483,8 +10632,65 @@ mod tests {
             cut.history.is_none(),
             "what was run here lives in that column, so it goes with it"
         );
-        assert_eq!(cut.panes.max.x, window().max.x);
-        assert_eq!(cut.shell.max.x, window().max.x);
+        assert_eq!(cut.panes.unwrap().max.x, window().max.x);
+        assert_eq!(cut.shell.unwrap().max.x, window().max.x);
+    }
+
+    #[test]
+    fn one_half_on_show_takes_the_whole_window() {
+        // The panes alone: no shell, no history under the places, and no
+        // seam between rows, because there is one row.
+        let files = sectors(
+            window(),
+            Showing {
+                bottom: false,
+                ..showing()
+            },
+        );
+        assert!(files.shell.is_none());
+        assert!(files.history.is_none());
+        assert!(files.horizontal.is_none());
+        assert_eq!(
+            files.keys.expect("the key bar").max.y,
+            window().max.y,
+            "the panes and their keys run to the bottom"
+        );
+        assert_eq!(files.places.expect("places").max.y, window().max.y);
+
+        // The shell alone: the places list belongs to the top row, so the
+        // column is the history for as long as that is what is showing.
+        let shell = sectors(
+            window(),
+            Showing {
+                top: false,
+                ..showing()
+            },
+        );
+        assert!(shell.panes.is_none());
+        assert!(shell.keys.is_none());
+        assert!(shell.places.is_none());
+        assert!(shell.horizontal.is_none());
+        assert_eq!(shell.shell.expect("the shell").min.y, window().min.y);
+        assert_eq!(shell.history.expect("history").min.y, window().min.y);
+        // The column is still the column: the history is exactly as wide as
+        // the places list was, so nothing jumps sideways when it comes back.
+        assert_eq!(shell.history.unwrap().min.x, files.places.unwrap().min.x);
+    }
+
+    #[test]
+    fn a_window_showing_neither_half_falls_back_to_the_panes() {
+        // Not reachable from the keys, which toggle rather than set - this is
+        // the guarantee that no combination of them can leave a blank window.
+        let cut = sectors(
+            window(),
+            Showing {
+                top: false,
+                bottom: false,
+                ..showing()
+            },
+        );
+        assert!(cut.panes.is_some());
+        assert!(cut.shell.is_none());
     }
 
     #[test]
@@ -10499,8 +10705,8 @@ mod tests {
                 ..showing()
             },
         );
-        assert!(squashed.panes.height() >= 1.0);
-        assert!(squashed.panes.width() >= window().width() * 0.4);
+        assert!(squashed.panes.unwrap().height() >= 1.0);
+        assert!(squashed.panes.unwrap().width() >= window().width() * 0.4);
 
         let flattened = sectors(
             window(),
@@ -10510,8 +10716,80 @@ mod tests {
                 ..showing()
             },
         );
-        assert!(flattened.shell.height() >= ROW_MIN - GUTTER);
+        assert!(flattened.shell.unwrap().height() >= ROW_MIN - GUTTER);
         assert!(flattened.places.expect("places").width() >= COLUMN_MIN - GUTTER);
+    }
+
+    #[test]
+    fn each_half_can_have_the_window_and_the_same_key_gives_it_back() {
+        use keys::Action as A;
+        let (_root, mut app) = fixture();
+        assert_eq!(app.half, Half::Both);
+
+        app.run_action(A::ShellOnly);
+        assert_eq!(app.half, Half::Shell);
+        // A shell to give the window to: asking for it with none open would
+        // be a window given over to nothing.
+        assert!(app.show_terminal);
+
+        // The key you press to leave is the key you pressed to arrive.
+        app.run_action(A::ShellOnly);
+        assert_eq!(app.half, Half::Both);
+
+        app.run_action(A::FilesOnly);
+        assert_eq!(app.half, Half::Files);
+        assert!(
+            !app.terminal_focused,
+            "the keyboard is not left in a shell nobody can see"
+        );
+        app.run_action(A::FilesOnly);
+        assert_eq!(app.half, Half::Both);
+    }
+
+    #[test]
+    fn the_halves_only_follow_each_other_while_both_are_showing() {
+        let (root, mut app) = fixture();
+        let elsewhere = root.path().join("left").join("sub");
+        app.open_terminal(None);
+
+        // With the panes alone, the shell is not dragged along behind them:
+        // it is not on screen, and moving it would be moving something the
+        // reader cannot see.
+        app.run_action(keys::Action::FilesOnly);
+        let before = app
+            .terminals
+            .active()
+            .map(|session| session.cwd.clone())
+            .expect("a shell");
+        app.left.current_mut().chdir(elsewhere.clone());
+        app.sync_halves();
+        assert_eq!(
+            app.terminals.active().map(|s| s.cwd.clone()),
+            Some(before.clone()),
+            "the shell stays where it was left"
+        );
+
+        // Both again: whichever half had the window is the one that is right
+        // about where you are, so the shell catches up to the pane.
+        app.run_action(keys::Action::FilesOnly);
+        assert_eq!(app.half, Half::Both);
+        assert_eq!(
+            app.terminals.active().map(|s| s.cwd.clone()),
+            Some(elsewhere.clone()),
+            "and catches up when it comes back"
+        );
+    }
+
+    #[test]
+    fn typing_a_command_brings_the_shell_back() {
+        let (_root, mut app) = fixture();
+        app.run_action(keys::Action::FilesOnly);
+        assert_eq!(app.half, Half::Files);
+
+        // Answering into a shell that is not on screen looks exactly like the
+        // keystroke was swallowed.
+        app.type_into_command_line("ls");
+        assert_eq!(app.half, Half::Both);
     }
 
     #[test]
