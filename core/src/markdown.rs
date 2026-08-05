@@ -463,6 +463,229 @@ fn push_run(
 }
 
 /// Whether a name is one the markdown viewer should render.
+/// Greedy word wrap, by characters. Terminal columns are what this is
+/// for, so counting `char`s is the honest cheap approximation.
+fn wrap(text: &str, width: usize) -> Vec<String> {
+    let width = width.max(10);
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    for word in text.split_whitespace() {
+        if !line.is_empty() && line.chars().count() + 1 + word.chars().count() > width {
+            lines.push(std::mem::take(&mut line));
+        }
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        line.push_str(word);
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
+}
+
+/// The document as plain text lines, for a screen that draws text and
+/// nothing else.
+///
+/// This is the terminal's rendering: headings underlined, lists marked and
+/// hung, quotes barred, code kept exactly as written, tables padded into
+/// columns. No colour and no bold, because the caller may not have them -
+/// structure carried by characters is structure everywhere.
+pub fn plain(blocks: &[Block], width: usize) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut index = 0;
+    while index < blocks.len() {
+        let block = &blocks[index];
+        let indent = "  ".repeat(block.depth as usize);
+        let room = width.saturating_sub(indent.chars().count());
+        match &block.kind {
+            Kind::Heading { level } => {
+                let text = block.text();
+                out.push(text.clone());
+                // Underlined rather than coloured: the two heading weights
+                // Setext gave the world, readable on any screen ever made.
+                let bar = if *level == 1 { '\u{2550}' } else { '\u{2500}' };
+                out.push(bar.to_string().repeat(text.chars().count().clamp(3, width)));
+                out.push(String::new());
+                index += 1;
+            }
+            Kind::Paragraph => {
+                out.extend(
+                    wrap(&block.text(), width)
+                        .into_iter()
+                        .map(|l| format!("{indent}{l}")),
+                );
+                out.push(String::new());
+                index += 1;
+            }
+            Kind::ListItem { .. } => {
+                let marker = block.marker();
+                let hang = " ".repeat(marker.chars().count() + 1);
+                for (nth, line) in wrap(&block.text(), room.saturating_sub(hang.len()))
+                    .into_iter()
+                    .enumerate()
+                {
+                    if nth == 0 {
+                        out.push(format!("{indent}{marker} {line}"));
+                    } else {
+                        out.push(format!("{indent}{hang} {line}"));
+                    }
+                }
+                index += 1;
+                // A blank only after the last item, so a list reads as one.
+                let list_goes_on = matches!(
+                    blocks.get(index).map(|b| &b.kind),
+                    Some(Kind::ListItem { .. })
+                );
+                if !list_goes_on {
+                    out.push(String::new());
+                }
+            }
+            Kind::Code { language } => {
+                if let Some(language) = language {
+                    out.push(format!("{indent}```{language}"));
+                } else {
+                    out.push(format!("{indent}```"));
+                }
+                for line in block.text().lines() {
+                    out.push(format!("{indent}    {line}"));
+                }
+                out.push(format!("{indent}```"));
+                out.push(String::new());
+                index += 1;
+            }
+            Kind::Quote => {
+                out.extend(
+                    wrap(&block.text(), room.saturating_sub(2))
+                        .into_iter()
+                        .map(|l| format!("{indent}\u{2502} {l}")),
+                );
+                out.push(String::new());
+                index += 1;
+            }
+            Kind::Rule => {
+                out.push("\u{2500}".repeat(width.min(40)));
+                out.push(String::new());
+                index += 1;
+            }
+            Kind::TableRow { .. } => {
+                // The whole run of rows at once: column widths are a fact
+                // about the table, not about any one row.
+                let start = index;
+                while matches!(
+                    blocks.get(index).map(|b| &b.kind),
+                    Some(Kind::TableRow { .. })
+                ) {
+                    index += 1;
+                }
+                let rows: Vec<Vec<String>> = blocks[start..index]
+                    .iter()
+                    .map(|row| {
+                        let mut cells = Vec::new();
+                        let mut bounds: Vec<usize> = row.cells.clone();
+                        bounds.push(row.runs.len());
+                        for pair in bounds.windows(2) {
+                            let cell: String = row.runs[pair[0]..pair[1]]
+                                .iter()
+                                .map(|run| run.text.as_str())
+                                .collect();
+                            cells.push(cell.trim().to_string());
+                        }
+                        cells
+                    })
+                    .collect();
+                let columns = rows.iter().map(|r| r.len()).max().unwrap_or(0);
+                let mut widths = vec![0usize; columns];
+                for row in &rows {
+                    for (i, cell) in row.iter().enumerate() {
+                        widths[i] = widths[i].max(cell.chars().count());
+                    }
+                }
+                for (nth, row) in rows.iter().enumerate() {
+                    let mut line = String::new();
+                    for (i, cell_width) in widths.iter().enumerate() {
+                        let cell = row.get(i).map(String::as_str).unwrap_or("");
+                        line.push_str(&format!("{cell:<cell_width$}"));
+                        if i + 1 < columns {
+                            line.push_str("  ");
+                        }
+                    }
+                    out.push(line.trim_end().to_string());
+                    let header =
+                        matches!(blocks[start + nth].kind, Kind::TableRow { header: true });
+                    if header {
+                        let total: usize =
+                            widths.iter().sum::<usize>() + 2 * columns.saturating_sub(1);
+                        out.push("\u{2500}".repeat(total.min(width)));
+                    }
+                }
+                out.push(String::new());
+            }
+            Kind::Html => {
+                // Rendering it would make this a browser; dropping it in
+                // silence would be lying about the document.
+                out.push(format!("{indent}[html omitted]"));
+                out.push(String::new());
+                index += 1;
+            }
+        }
+    }
+    while out.last().is_some_and(|line| line.is_empty()) {
+        out.pop();
+    }
+    out
+}
+
+#[cfg(test)]
+mod plain_tests {
+    use super::*;
+
+    #[test]
+    fn structure_is_carried_by_characters_alone() {
+        let doc = "# Title\n\nSome words that will wrap when the width is small enough to force it.\n\n- one\n- two\n\n> a quote\n\n```sh\ncargo test\n```\n";
+        let lines = plain(&parse(doc), 30);
+        assert_eq!(lines[0], "Title");
+        assert!(
+            lines[1].starts_with('\u{2550}'),
+            "an H1 is underlined double"
+        );
+        assert!(
+            lines
+                .iter()
+                .filter(|l| l.trim_start().starts_with("\u{2022} "))
+                .count()
+                == 2,
+            "two bullets, hung at their depth: {lines:?}"
+        );
+        assert!(lines
+            .iter()
+            .any(|l| l.trim_start().starts_with("\u{2502} a quote")));
+        assert!(
+            lines.iter().any(|l| l.contains("    cargo test")),
+            "code kept as written"
+        );
+        // The wrap happened: no line is wider than asked.
+        assert!(lines.iter().all(|l| l.chars().count() <= 34), "{lines:?}");
+    }
+
+    #[test]
+    fn a_table_is_padded_into_columns() {
+        let doc = "| name | size |\n|---|---|\n| a.txt | 12 |\n| longer.rs | 9 |\n";
+        let lines = plain(&parse(doc), 60);
+        let header = lines.iter().position(|l| l.starts_with("name")).unwrap();
+        let a = &lines[header + 2];
+        let b = &lines[header + 3];
+        assert_eq!(a.find("12"), b.find('9').map(|i| i).or(a.find("12")),);
+        // Columns line up: "size" starts where "12" and "9" start.
+        let column = lines[header].find("size").unwrap();
+        assert_eq!(a.rfind("12").unwrap(), column);
+        assert_eq!(b.rfind('9').unwrap(), column);
+    }
+}
+
 pub fn looks_like_markdown(name: &str) -> bool {
     matches!(
         name.rsplit_once('.')

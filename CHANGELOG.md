@@ -9,6 +9,14 @@ Notable changes, newest first. Versions follow [semantic versioning]; until
 
 ### Added
 
+- **Markdown rendered in the terminal view.** F3 on a markdown file shows
+  the document rather than the markup: headings underlined, lists hung at
+  their depth, quotes barred, code kept exactly as written, tables padded
+  into columns. No colour and no bold, because the terminal may not have
+  them - structure carried by characters is structure everywhere. `e` still
+  shows the raw bytes, as it does for everything else. The rendering is
+  `markdown::plain` in the engine, beside the parse that was always there -
+  which closes the last "not built for the terminal yet" row in the table.
 - **Undo and folder history in the terminal view.** `Alt-Z` offers the
   same reversal plan the window shows - through the confirm dialog, listing
   every step and every refusal - and `Alt-H` reads this folder's last week

@@ -291,7 +291,7 @@ portable one. What it does not do is mostly what a terminal cannot:
 | What was done in *this folder* | `Alt-H`, in the viewer | `Alt-H`, in the other pane |
 | Undo the last operation | `Alt-Z` | `Ctrl-Z` |
 | Workspaces | tabs per pane | a rail of windows |
-| Markdown rendered rather than shown as markup | — | yes |
+| Markdown rendered rather than shown as markup | yes — structure by characters | yes |
 
 Reading bytes as hex, the directory tree, tabs and the journal are in both.
 
@@ -349,7 +349,7 @@ opens onto a line saying which of the two you have, and `Alt-O` changes it.
 ## Testing
 
 ```sh
-cargo test                     # all 1151, from the workspace root
+cargo test                     # all 1153, from the workspace root
 ```
 
 From the root that is everything, because the root is a virtual manifest and
@@ -360,7 +360,7 @@ say `cargo test --workspace` there if you meant all of it.
 Per crate, when you want a fast loop:
 
 ```sh
-cargo test -p lost-commander-core    # 680 - the engine, seconds to build
+cargo test -p lost-commander-core    # 682 - the engine, seconds to build
 cargo test -p lost-commander-egui    # 236 - the graphical view
 cargo test -p lost-commander-tui     # 129 - the terminal view
 cargo test -p lost-commander-ffi     # 106 - the C ABI

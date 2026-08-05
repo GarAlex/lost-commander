@@ -2450,6 +2450,22 @@ impl App {
         }
         match fsops::read_preview(&path, PREVIEW_LIMIT, None) {
             Ok((lines, detected)) => {
+                // Markdown is rendered rather than shown as markup - the
+                // parse has been in the engine all along, and `e` still
+                // shows the raw bytes the way it does for everything else.
+                let markdown = lost_commander_core::markdown::looks_like_markdown(
+                    &path.file_name().unwrap_or_default().to_string_lossy(),
+                );
+                let (title, lines) = if markdown {
+                    let source = lines.join("\n");
+                    let blocks = lost_commander_core::markdown::parse(&source);
+                    (
+                        format!("{title}  (rendered - e for raw)"),
+                        lost_commander_core::markdown::plain(&blocks, 76),
+                    )
+                } else {
+                    (title, lines)
+                };
                 self.mode = Mode::Viewer {
                     title,
                     lines,
