@@ -65,6 +65,7 @@ USAGE:
 KEYS:
     Tab other panel       Enter open      Backspace parent
     F12 second panel on/off        Alt-F filter the listing
+    Alt-Z undo the last operation   Alt-H this folder's history
     F1 help    F2 rename  F3 view         F4 edit
     F5 copy    F6 move    F7 mkdir        F8 delete
     F9 sort    F10 quit   Space mark      Ctrl-H hidden files

@@ -70,6 +70,8 @@ pub enum ConfirmAction {
     },
     /// Opening this would run it rather than show it - see [`open::runs_code`].
     Run(PathBuf),
+    /// Reverse the last file operation, as planned from the account.
+    Undo(lost_commander_core::undo::Plan),
 }
 
 /// Which part of the find form has the keyboard.
@@ -666,6 +668,158 @@ impl App {
             .iter()
             .map(|pin| pin.line.clone())
             .collect()
+    }
+
+    /// `Alt-Z`: read the last operation out of the account and offer its
+    /// reversal, shown in full before anything moves.
+    pub fn offer_undo(&mut self) {
+        use lost_commander_core::undo::{self, Step, Undoable};
+        let Some(journal) = &self.journal else {
+            self.error("No account is being kept, so there is nothing to read back");
+            return;
+        };
+        let answer = journal.with_records(lost_commander_core::journal::Stream::Files, |records| {
+            undo::plan(records)
+        });
+        match answer {
+            Undoable::Nothing => self.info("Nothing to undo - the account is empty"),
+            Undoable::Refused { what, why } => {
+                self.error(format!("Cannot undo \"{what}\": {why}"));
+            }
+            Undoable::Plan(plan) => {
+                if plan.steps.is_empty() {
+                    let why = plan
+                        .refused
+                        .first()
+                        .map(|(_, why)| why.clone())
+                        .unwrap_or_else(|| "nothing left to reverse".into());
+                    self.error(format!("Cannot undo \"{}\": {why}", plan.what));
+                    return;
+                }
+                let mut message = String::new();
+                for step in &plan.steps {
+                    let line = match step {
+                        Step::RemoveCopied { copy } => {
+                            format!("remove the copy  {}", copy.display())
+                        }
+                        Step::MoveBack { now, was } => {
+                            format!("move back  {}  ->  {}", now.display(), was.display())
+                        }
+                        Step::RemoveMade { dir } => {
+                            format!("remove the directory (if empty)  {}", dir.display())
+                        }
+                        Step::RestoreFromTrash { item } => {
+                            format!("restore from the trash  {}", item.original.display())
+                        }
+                    };
+                    message.push_str(&line);
+                    message.push('\n');
+                }
+                for (path, why) in &plan.refused {
+                    message.push_str(&format!("left alone  {path}: {why}\n"));
+                }
+                self.mode = Mode::Confirm(ConfirmDialog {
+                    title: format!("Undo \"{}\"?", plan.what),
+                    message,
+                    action: ConfirmAction::Undo(plan),
+                });
+            }
+        }
+    }
+
+    fn apply_undo(&mut self, plan: &lost_commander_core::undo::Plan) {
+        use lost_commander_core::undo::{self, Step};
+        let failures = undo::apply(plan);
+        // The reversal is the newest operation now, recorded as what it
+        // literally did - which is what makes undoing an undo just Alt-Z
+        // again.
+        for step in &plan.steps {
+            let event = match step {
+                Step::RemoveCopied { copy } => journal::Event::new(journal::Kind::Delete, copy)
+                    .note("undo: the copy is removed"),
+                Step::MoveBack { now, was } => journal::Event::new(journal::Kind::Move, now)
+                    .to(was)
+                    .note("undo"),
+                Step::RemoveMade { dir } => journal::Event::new(journal::Kind::Delete, dir)
+                    .note("undo: the directory is removed"),
+                Step::RestoreFromTrash { item } => {
+                    journal::Event::new(journal::Kind::Move, &item.original)
+                        .note("undo: restored from the trash")
+                }
+            };
+            self.note(event);
+        }
+        self.reload_both();
+        if failures.is_empty() {
+            self.info(format!("Undone: {}", plan.what));
+        } else {
+            self.error(format!(
+                "Undo finished with {} failure{}: {}",
+                failures.len(),
+                if failures.len() == 1 { "" } else { "s" },
+                failures
+                    .iter()
+                    .map(|(path, why)| format!("{}: {why}", path.display()))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ));
+        }
+    }
+
+    /// `Alt-H`: what was done to the things in this folder, in the viewer.
+    ///
+    /// The viewer rather than a screen of its own: the answer is lines to
+    /// read and scroll, which is exactly what the viewer is.
+    pub fn open_folder_history(&mut self) {
+        let here = self.active_panel().cwd.clone();
+        let Some(journal) = &self.journal else {
+            self.error("No account is being kept, so there is nothing to read");
+            return;
+        };
+        let happenings =
+            journal.with_records(lost_commander_core::journal::Stream::Files, |records| {
+                lost_commander_core::journal::happened_in(
+                    lost_commander_core::journal::since(records, 7),
+                    &here,
+                )
+            });
+        if happenings.is_empty() {
+            self.info("Nothing recorded in this folder - the last week is what this reads");
+            return;
+        }
+        let lines: Vec<String> = happenings
+            .iter()
+            .map(|happening| {
+                let mut line = format!(
+                    "{}  {:<8} {}",
+                    lost_commander_core::journal::clock(happening.at),
+                    happening.kind.label(),
+                    happening.name
+                );
+                if let Some(other) = &happening.other {
+                    line.push_str(&format!(
+                        "  {} {}",
+                        if happening.incoming { "from" } else { "->" },
+                        other.display()
+                    ));
+                }
+                if let Some(why) = &happening.failed {
+                    line.push_str(&format!("  FAILED: {why}"));
+                }
+                line
+            })
+            .collect();
+        self.mode = Mode::Viewer {
+            title: format!("History of {}", here.display()),
+            lines,
+            scroll: 0,
+            path: here,
+            forced: None,
+            detected: lost_commander_core::encoding::Detected {
+                encoding: lost_commander_core::encoding::Encoding::Utf8,
+                confidence: lost_commander_core::encoding::Confidence::Certain,
+            },
+        };
     }
 
     /// `Alt-R`: start a reverse search, or step to the next match of one.
@@ -2613,6 +2767,7 @@ impl App {
             ConfirmAction::Delete { targets, to_trash } => {
                 self.start_job(Operation::Delete { targets, to_trash })
             }
+            ConfirmAction::Undo(plan) => self.apply_undo(&plan),
             ConfirmAction::Run(path) => {
                 let name = path
                     .file_name()
@@ -3461,6 +3616,10 @@ impl App {
             // Also a keystroke here rather than a signal; the main loop does
             // the actual stopping, because it owns the terminal.
             KeyCode::Char('z') if ctrl => self.pending_suspend = true,
+            // Ctrl-Z suspends here, as it does in every terminal program,
+            // so undo lives one modifier over.
+            KeyCode::Char('z') if alt => self.offer_undo(),
+            KeyCode::Char('h') if alt => self.open_folder_history(),
             KeyCode::Char('h') if ctrl => {
                 self.active_panel_mut().toggle_hidden();
                 let showing = self.active_panel().show_hidden;
@@ -5699,6 +5858,56 @@ mod tests {
 
         assert!(app.status_is_error);
         assert!(app.status.contains("already exists"), "{}", app.status);
+    }
+
+    #[test]
+    fn alt_z_offers_the_last_operation_and_yes_reverses_it() {
+        let (root, mut app) = app_fixture();
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("RCMD_JOURNAL_DIR", dir.path());
+        app.journal = Some(lost_commander_core::journal::Journal::at(
+            dir.path(),
+            lost_commander_core::journal::Keep::default(),
+        ));
+
+        let was = root.path().join("left").join("one.txt");
+        let moved = root.path().join("right").join("one.txt");
+        std::fs::rename(&was, &moved).unwrap();
+        app.note(journal::Event::new(journal::Kind::Move, &was).to(&moved));
+
+        app.on_key(alt('z'));
+        assert!(
+            matches!(&app.mode, Mode::Confirm(dialog) if dialog.title.contains("Undo")),
+            "the plan is shown before anything moves"
+        );
+        app.on_key(key(KeyCode::Enter));
+        assert!(was.exists() && !moved.exists(), "back where it started");
+        std::env::remove_var("RCMD_JOURNAL_DIR");
+    }
+
+    #[test]
+    fn alt_h_reads_this_folder_into_the_viewer() {
+        let (root, mut app) = app_fixture();
+        let dir = tempfile::tempdir().unwrap();
+        app.journal = Some(lost_commander_core::journal::Journal::at(
+            dir.path(),
+            lost_commander_core::journal::Keep::default(),
+        ));
+        let here = app.active_panel().cwd.clone();
+        app.note(
+            journal::Event::new(journal::Kind::Copy, here.join("one.txt"))
+                .to(root.path().join("right").join("one.txt")),
+        );
+
+        app.on_key(alt('h'));
+        let Mode::Viewer { title, lines, .. } = &app.mode else {
+            panic!("the viewer, showing this folder's history");
+        };
+        assert!(title.contains("History of"));
+        assert!(
+            lines.iter().any(|line| line.contains("one.txt")),
+            "{lines:?}"
+        );
     }
 
     #[test]

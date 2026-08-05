@@ -46,6 +46,14 @@ the other panel's directory, and
 .B %%
 a literal percent. Each name is quoted for the shell, and the status row
 shows the expanded line before Enter runs it.
+.SH UNDO
+.B Alt\-Z
+reads the last file operation out of the account and shows exactly what
+reversing it would do before anything moves; Enter goes ahead. A copy
+changed since is left alone, a move whose original seat is taken is left
+alone, and each is said with its reason.
+.B Alt\-H
+shows what was done to the things in the current folder, in the viewer.
 .SH QUICK FILTER
 .B Alt\-F
 narrows the listing to names containing what you type; Enter keeps the

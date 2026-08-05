@@ -9,6 +9,11 @@ Notable changes, newest first. Versions follow [semantic versioning]; until
 
 ### Added
 
+- **Undo and folder history in the terminal view.** `Alt-Z` offers the
+  same reversal plan the window shows - through the confirm dialog, listing
+  every step and every refusal - and `Alt-H` reads this folder's last week
+  into the viewer. Same engine, same account, drawn with what the terminal
+  already had.
 - **The trash is a place.** `Alt-B`, and a row in the places column:
   everything deletion kept, each with where it came from and when. Restore
   puts a thing back - refusing a taken seat, remaking its home if that has

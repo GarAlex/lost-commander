@@ -83,7 +83,7 @@ pub fn url_decode(text: &str) -> String {
 }
 
 /// One thing in the trash: what it was, where it came from, and when.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrashedItem {
     pub name: String,
     pub original: PathBuf,

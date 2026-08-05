@@ -288,7 +288,8 @@ portable one. What it does not do is mostly what a terminal cannot:
 | Named colour schemes | one | several |
 | Function keys along the bottom | yes | yes |
 | What was run here, beside the shell | yes | yes |
-| What was done in *this folder* | the journal, by day (`Ctrl-J`) | that, and a pane beside it (`Alt-H`) |
+| What was done in *this folder* | `Alt-H`, in the viewer | `Alt-H`, in the other pane |
+| Undo the last operation | `Alt-Z` | `Ctrl-Z` |
 | Workspaces | tabs per pane | a rail of windows |
 | Markdown rendered rather than shown as markup | — | yes |
 
@@ -348,7 +349,7 @@ opens onto a line saying which of the two you have, and `Alt-O` changes it.
 ## Testing
 
 ```sh
-cargo test                     # all 1149, from the workspace root
+cargo test                     # all 1151, from the workspace root
 ```
 
 From the root that is everything, because the root is a virtual manifest and
@@ -361,7 +362,7 @@ Per crate, when you want a fast loop:
 ```sh
 cargo test -p lost-commander-core    # 680 - the engine, seconds to build
 cargo test -p lost-commander-egui    # 236 - the graphical view
-cargo test -p lost-commander-tui     # 127 - the terminal view
+cargo test -p lost-commander-tui     # 129 - the terminal view
 cargo test -p lost-commander-ffi     # 106 - the C ABI
 ```
 

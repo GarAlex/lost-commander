@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use crate::journal::{Kind, Record, MAX_EVENTS_PER_GROUP};
 
 /// One reversal, ready to be applied.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Step {
     /// A copy's product: remove it. Folders the copy created are left if
     /// they are not empty, which the plan says out loud.
@@ -33,7 +33,7 @@ pub enum Step {
 }
 
 /// What undoing the last operation would mean.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Plan {
     /// The operation being reversed, in its own words.
     pub what: String,
