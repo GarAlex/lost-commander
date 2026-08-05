@@ -9,6 +9,14 @@ Notable changes, newest first. Versions follow [semantic versioning]; until
 
 ### Added
 
+- **Pinned commands.** `pin cargo test` on the command line - the file
+  manager's own verb, like `cd` - keeps that line on top of the current
+  folder's history until the same `pin` takes it off. The reuse of commands
+  made deliberate rather than incidental: a project's build command stops
+  having to be re-earned every twenty history entries. Kept as typed, so a
+  `%f` template stays a template; right-click pins and unpins in the window;
+  stored in `pinned.toml`, the eighth kept thing, because a pin is a choice
+  and history is a record.
 - **Search over everything that has been run.** `Alt-R` in the terminal view
   is a shell-style reverse search across the whole account, here first -
   something no shell's own `Ctrl-R` can do, because no shell knows where you

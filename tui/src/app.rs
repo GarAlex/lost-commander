@@ -453,6 +453,10 @@ pub struct App {
     /// search runs over the same list `Alt-P` walks - here first - so the
     /// local `cargo test` is found before somebody else's.
     pub history_search: Option<(String, usize)>,
+    /// The commands pinned to directories - "this line, this folder, always
+    /// on top" - and where they are written.
+    pub pinned: lost_commander_core::pinned::Pinned,
+    pub pinned_path: Option<PathBuf>,
     /// Commands offered back, and how far up them the reader has walked.
     ///
     /// Read when the walk starts rather than kept in step with the journal:
@@ -509,6 +513,8 @@ impl App {
         app.bookmarks = Bookmarks::load();
         app.bookmarks_path = Bookmarks::config_path();
         app.recent_path = Bookmarks::recent_path();
+        app.pinned = lost_commander_core::pinned::Pinned::load();
+        app.pinned_path = lost_commander_core::pinned::Pinned::path();
         // The account, and a sweep of what has aged out of it. Once at
         // startup: it is the only moment the program is certainly not in the
         // middle of writing to it.
@@ -560,6 +566,8 @@ impl App {
             show_right: false,
             history: Vec::new(),
             history_search: None,
+            pinned: lost_commander_core::pinned::Pinned::default(),
+            pinned_path: None,
             at_in_history: None,
             command: String::new(),
             pending_edit: None,
@@ -602,6 +610,33 @@ impl App {
             return out;
         }
         Location::local(path)
+    }
+
+    /// Pin a line to this directory, or unpin it - and write the shelf down.
+    pub fn toggle_pin(&mut self, line: &str) {
+        let here = self.active_panel().cwd.clone();
+        let pinned_now = self.pinned.toggle(&here, line);
+        if let Some(path) = &self.pinned_path {
+            if let Err(e) = self.pinned.save_to(path) {
+                self.error(format!("Could not save the pins: {e}"));
+                return;
+            }
+        }
+        self.info(if pinned_now {
+            "Pinned - it stays on top of this folder's history"
+        } else {
+            "Unpinned"
+        });
+    }
+
+    /// This folder's shelf, for the column beside the shell.
+    pub fn pins_here(&self) -> Vec<String> {
+        let here = self.active_panel().cwd.clone();
+        self.pinned
+            .here(&here)
+            .iter()
+            .map(|pin| pin.line.clone())
+            .collect()
     }
 
     /// `Alt-R`: start a reverse search, or step to the next match of one.
@@ -3181,6 +3216,17 @@ impl App {
         if line.is_empty() {
             return;
         }
+        // `pin <command>` is the file manager's, like `cd`: it puts the rest
+        // of the line on this folder's shelf, or takes it back off. The line
+        // is kept as typed - a template with %f stays a template.
+        if let Some(rest) = line.strip_prefix("pin ") {
+            self.toggle_pin(rest);
+            return;
+        }
+        if line == "pin" {
+            self.info("pin <command> keeps that line on top of this folder's history");
+            return;
+        }
         // %f, %s and %d become the names the panels are showing, before the
         // account sees the line: the record holds what actually ran, which is
         // the version worth offering back later.
@@ -5612,6 +5658,30 @@ mod tests {
 
         assert!(app.status_is_error);
         assert!(app.status.contains("already exists"), "{}", app.status);
+    }
+
+    #[test]
+    fn pin_on_the_command_line_builds_this_folder_s_shelf() {
+        let (root, mut app) = app_fixture();
+        let file = root.path().join("pinned.toml");
+        app.pinned_path = Some(file.clone());
+
+        for c in "pin cargo test".chars() {
+            app.on_key(key(KeyCode::Char(c)));
+        }
+        app.on_key(key(KeyCode::Enter));
+        assert_eq!(app.pins_here(), vec!["cargo test"]);
+        assert!(
+            lost_commander_core::pinned::Pinned::load_from(&file)
+                .unwrap()
+                .is_pinned(&app.active_panel().cwd, "cargo test"),
+            "written as it happens, like everything else"
+        );
+
+        // Another directory has its own shelf.
+        select(&mut app, "sub");
+        app.on_key(key(KeyCode::Enter));
+        assert!(app.pins_here().is_empty());
     }
 
     #[test]

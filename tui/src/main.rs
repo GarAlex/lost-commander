@@ -95,6 +95,8 @@ KEYS:
     Alt-O picks which shell that is, and says which of them can be recorded.
     On Windows the default is cmd, which cannot.
 
+    'pin <command>' keeps that line on top of this folder's history until the
+    same 'pin' takes it off again; the shelf shows beside the shell.
     Alt-R reverse-searches everything that has been run, here first: type to
     narrow, Alt-R again for the next match, Enter to take the line, Esc to
     give back what you had. Alt-P and Alt-N walk back through what has been

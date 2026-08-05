@@ -521,6 +521,10 @@ pub struct GuiApp {
     /// worth having in front of you. `Alt-P` in the terminal view offers the
     /// same list one line at a time; a window has room to show it.
     pub show_shell_history: bool,
+    /// The commands pinned to directories - "this line, this folder, always
+    /// on top" - and where they are written.
+    pub pinned: lost_commander_core::pinned::Pinned,
+    pub pinned_path: Option<PathBuf>,
     /// Text the history column is narrowed by. Empty means all of it.
     pub history_filter: String,
     /// Set by `Alt-R`; the next frame hands the filter box the keyboard.
@@ -705,6 +709,8 @@ impl GuiApp {
         app.bookmarks_path = Bookmarks::config_path();
         app.recent_path = Bookmarks::recent_path();
         app.session_path = session::Session::path();
+        app.pinned = lost_commander_core::pinned::Pinned::load();
+        app.pinned_path = lost_commander_core::pinned::Pinned::path();
         app.settings = Settings::load();
         // How the reader left the window arranged. Clamped rather than
         // trusted: a settings file is a text file somebody can edit, and a
@@ -773,6 +779,8 @@ impl GuiApp {
             history_rows: Vec::new(),
             history_gen: u64::MAX,
             show_shell_history: true,
+            pinned: lost_commander_core::pinned::Pinned::default(),
+            pinned_path: None,
             history_filter: String::new(),
             focus_history_filter: false,
             history_here_only: true,
@@ -1782,6 +1790,20 @@ impl GuiApp {
         if line.is_empty() {
             return;
         }
+        // `pin <command>` is the file manager's, like `cd`: it puts the rest
+        // of the line on this folder's shelf, or takes it back off. The line
+        // is kept as typed - a template with %f stays a template.
+        if let Some(rest) = line.strip_prefix("pin ") {
+            self.toggle_pin(rest.to_string());
+            self.command.clear();
+            return;
+        }
+        if line == "pin" {
+            self.info("pin <command> keeps that line on top of this folder's history");
+            self.command.clear();
+            return;
+        }
+
         // %f, %s and %d become the names the panels are showing - only here,
         // where a person typed the line. Lines this program builds for
         // itself carry real paths, and a name with a percent in it must not
@@ -8780,8 +8802,9 @@ impl GuiApp {
         });
         self.history_filter = if clear { String::new() } else { filter };
 
+        let pins = self.pins_here();
         let shown = self.history_shown();
-        if shown.is_empty() {
+        if pins.is_empty() && shown.is_empty() {
             child.label(
                 RichText::new(if self.history_here_only {
                     "nothing run here yet"
@@ -8811,10 +8834,35 @@ impl GuiApp {
             .collect();
 
         let mut reuse: Option<String> = None;
+        let mut toggle: Option<String> = None;
         egui::ScrollArea::vertical()
             .id_salt("shell_history")
             .auto_shrink([false, false])
             .show(&mut child, |ui| {
+                // The shelf first: what was pinned here outranks what merely
+                // happened here, which is the whole point of pinning it.
+                for line in &pins {
+                    let response = ui
+                        .add(
+                            egui::Label::new(
+                                RichText::new(format!("\u{2022} {line}"))
+                                    .monospace()
+                                    .size(11.0)
+                                    .color(theme::accent_dim()),
+                            )
+                            .truncate()
+                            .sense(Sense::click()),
+                        )
+                        .on_hover_text(
+                            "Pinned here - click puts it on the command line, right-click unpins",
+                        );
+                    if response.clicked() {
+                        reuse = Some(line.clone());
+                    }
+                    if response.secondary_clicked() {
+                        toggle = Some(line.clone());
+                    }
+                }
                 for (line, elsewhere) in &rows {
                     // Where it ran, when that is not where you are. The same
                     // words in another directory are about other work, and a
@@ -8837,15 +8885,54 @@ impl GuiApp {
                         .truncate()
                         .sense(Sense::click()),
                     );
-                    if response.on_hover_text(hint).clicked() {
+                    let response =
+                        response.on_hover_text(format!("{hint}\nRight-click pins it here"));
+                    if response.clicked() {
                         reuse = Some(line.clone());
+                    }
+                    if response.secondary_clicked() {
+                        toggle = Some(line.clone());
                     }
                 }
             });
+        if let Some(line) = toggle {
+            self.toggle_pin(line);
+        }
         if let Some(line) = reuse {
             self.type_into_command_line(&line);
             self.terminal_focused = true;
         }
+    }
+
+    /// Pin a line to this directory, or unpin it - and write the shelf down.
+    pub fn toggle_pin(&mut self, line: String) {
+        let here = self.panel(self.active).cwd.clone();
+        let pinned_now = self.pinned.toggle(&here, &line);
+        if let Some(path) = &self.pinned_path {
+            if let Err(e) = self.pinned.save_to(path) {
+                self.error(format!("Could not save the pins: {e}"));
+                return;
+            }
+        }
+        self.info(if pinned_now {
+            "Pinned - it stays on top of this folder's history"
+        } else {
+            "Unpinned"
+        });
+    }
+
+    /// This folder's shelf, narrowed by the same filter as the history.
+    pub fn pins_here(&self) -> Vec<String> {
+        let Some(here) = self.shell_history_of.as_deref() else {
+            return Vec::new();
+        };
+        let needle = self.history_filter.to_lowercase();
+        self.pinned
+            .here(here)
+            .iter()
+            .filter(|pin| needle.is_empty() || pin.line.to_lowercase().contains(&needle))
+            .map(|pin| pin.line.clone())
+            .collect()
     }
 
     /// The lines the history column is showing, after the here/all filter.
@@ -10859,6 +10946,39 @@ mod tests {
             sub,
             "the one that was in front, not the one at its old index"
         );
+    }
+
+    #[test]
+    fn pin_puts_a_line_on_this_folder_s_shelf_and_pin_again_takes_it_off() {
+        let (root, mut app) = fixture();
+        let file = root.path().join("pinned.toml");
+        app.pinned_path = Some(file.clone());
+        let here = app.left.cwd().to_path_buf();
+        app.shell_history_of = Some(here.clone());
+
+        // Typed on the command line, like cd: the file manager's own verb.
+        app.command = "pin cargo test %f".into();
+        app.run_command();
+        assert_eq!(
+            app.pins_here(),
+            vec!["cargo test %f"],
+            "as typed - the template survives"
+        );
+        assert!(app.command.is_empty());
+
+        // On disk already, in its own file.
+        let read = lost_commander_core::pinned::Pinned::load_from(&file).unwrap();
+        assert!(read.is_pinned(&here, "cargo test %f"));
+
+        // The shelf respects the same filter as the history.
+        app.history_filter = "clippy".into();
+        assert!(app.pins_here().is_empty());
+        app.history_filter.clear();
+
+        // pin again is unpin: said twice, it ends where it started.
+        app.command = "pin cargo test %f".into();
+        app.run_command();
+        assert!(app.pins_here().is_empty());
     }
 
     #[test]

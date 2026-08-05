@@ -46,6 +46,14 @@ the other panel's directory, and
 .B %%
 a literal percent. Each name is quoted for the shell, and the status row
 shows the expanded line before Enter runs it.
+.SH PINNED COMMANDS
+.B pin <command>
+on the command line keeps that line on top of the current folder's history,
+until the same
+.B pin
+takes it off again. The line is kept as typed, so a template with
+.B %f
+in it stays a template.
 .SH HISTORY SEARCH
 .B Alt\-R
 starts a reverse search over everything that has been run, offering matches

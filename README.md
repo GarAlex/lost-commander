@@ -281,6 +281,13 @@ standing in; `all` is the rest, this directory first, with the ones from
 somewhere else drawn dimmer and naming their folder on hover. Clicking a line
 puts it on the command line without running it.
 
+**Pinned commands.** `pin cargo test` on the command line puts that line on
+top of this folder's history, permanently; `pin` the same line again takes it
+off. The line is kept as typed, so a pinned `%f` template stays a template.
+In the window, right-clicking a history row pins it and right-clicking a
+pinned row unpins; the shelf sits above the history in both front-ends,
+marked. Pins live in `pinned.toml`.
+
 In the window it is the bottom-right sector, under the places list; a filter
 box under its header narrows it as you type, and `Alt-R` puts the keyboard
 there, bringing the column up if it is hidden. `hist` turns the column off,
@@ -308,7 +315,7 @@ opens onto a line saying which of the two you have, and `Alt-O` changes it.
 ## Testing
 
 ```sh
-cargo test                     # all 1124, from the workspace root
+cargo test                     # all 1129, from the workspace root
 ```
 
 From the root that is everything, because the root is a virtual manifest and
@@ -319,9 +326,9 @@ say `cargo test --workspace` there if you meant all of it.
 Per crate, when you want a fast loop:
 
 ```sh
-cargo test -p lost-commander-core    # 662 - the engine, seconds to build
-cargo test -p lost-commander-egui    # 231 - the graphical view
-cargo test -p lost-commander-tui     # 125 - the terminal view
+cargo test -p lost-commander-core    # 665 - the engine, seconds to build
+cargo test -p lost-commander-egui    # 232 - the graphical view
+cargo test -p lost-commander-tui     # 126 - the terminal view
 cargo test -p lost-commander-ffi     # 106 - the C ABI
 ```
 
@@ -369,7 +376,7 @@ One directory per platform:
 | macOS | `~/Library/Application Support/lost-commander/` |
 | Windows | `%APPDATA%\lost-commander\` |
 
-Six things are kept, each in its own file:
+Seven things are kept, each in its own file:
 
 | | | |
 |---|---|---|
@@ -377,6 +384,7 @@ Six things are kept, each in its own file:
 | `bookmarks.toml` | places you saved | when you save or remove one |
 | `recent.toml` | places you have been | every time a pane moves |
 | `workspaces.toml` | the windows you had open | as they change |
+| `pinned.toml` | commands kept on top, per folder | when you pin or unpin |
 | `journal/shell-*.jsonl` | what you ran | as each command is run |
 | `journal/files-*.jsonl` | what was done to files | as each thing happens |
 

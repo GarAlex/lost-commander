@@ -2590,6 +2590,17 @@ fn draw_history_here(
         .and_then(|at| app.history.get(at))
         .map(|past| past.line.clone());
 
+    // The shelf first: what was pinned here outranks what merely happened
+    // here, which is the whole point of pinning it.
+    let pins = app.pins_here();
+    let pinned_items = pins.iter().map(|line| {
+        ListItem::new(format!(
+            "*{}",
+            fit(line, area.width.saturating_sub(2) as usize)
+        ))
+        .style(Style::default().bg(theme::BG).fg(theme::MARK_FG))
+    });
+
     let items: Vec<ListItem> = here
         .iter()
         .map(|past| {
@@ -2611,5 +2622,6 @@ fn draw_history_here(
             )))
         })
         .collect();
+    let items: Vec<ListItem> = pinned_items.chain(items).collect();
     frame.render_widget(List::new(items).style(theme::base()), split[1]);
 }
