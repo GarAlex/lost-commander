@@ -321,7 +321,16 @@ impl Answering {
 }
 
 /// One shell on one pty.
+/// Hands out the next shell identity. See [`PtySession::id`].
+static NEXT_SESSION_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 pub struct PtySession {
+    /// What this shell is, for as long as it runs.
+    ///
+    /// An index is not an identity - closing the second of three shells
+    /// renumbers the third - and something has to be able to say "the shell
+    /// that belongs to this directory" and still be right afterwards.
+    pub id: u64,
     /// What to call it in the tab strip.
     pub title: String,
     /// The shell binary this session is running.
@@ -509,6 +518,7 @@ impl PtySession {
         });
 
         Ok(PtySession {
+            id: NEXT_SESSION_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             title: crate::shell::program_name(program),
             program: program.to_string(),
             cwd: cwd.to_path_buf(),
@@ -812,6 +822,16 @@ pub struct Terminals {
 }
 
 impl Terminals {
+    /// Where the shell with this identity is now, if it is still running.
+    pub fn at_id(&self, id: u64) -> Option<usize> {
+        self.sessions.iter().position(|session| session.id == id)
+    }
+
+    /// The identity of the shell on show.
+    pub fn active_id(&self) -> Option<u64> {
+        self.sessions.get(self.active).map(|session| session.id)
+    }
+
     pub fn is_empty(&self) -> bool {
         self.sessions.is_empty()
     }

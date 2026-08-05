@@ -344,6 +344,34 @@ fn selection_summary(
     format!("{count} items")
 }
 
+/// Everything about a window except the files on the disk.
+///
+/// A tab is not a directory - it is a window you would otherwise have opened
+/// another copy of the program for. It carries how the panes are arranged,
+/// what each of them is drawing, which one you were in, and which shell was
+/// standing there. Switching tabs puts all of it back.
+///
+/// Kept beside the tabs rather than inside `Panel`, because none of it is a
+/// fact about a directory and the engine has no business knowing about
+/// views, shells or how many panes a front-end has.
+#[derive(Debug, Clone)]
+pub struct Workspace {
+    /// The shell standing in this workspace, by identity. `None` means one
+    /// has not been started here yet, which the rail says out loud.
+    pub shell: Option<u64>,
+    pub show_right: bool,
+    /// Where the second pane was. Its cursor and marks are not kept: it is
+    /// the secondary pane, and it is re-read on the way in anyway.
+    pub right: PathBuf,
+    pub left_view: ViewMode,
+    pub right_view: ViewMode,
+    /// Which pane you were working in.
+    pub active: Side,
+    /// Whether the shell here follows the panes, and they follow it.
+    pub synced: bool,
+    pub split: f32,
+}
+
 /// Which half of the window is on show.
 ///
 /// The panes and the shell are two ways of working on the same directory,
@@ -377,6 +405,21 @@ pub struct GuiApp {
     pub show_keys: bool,
     /// Which halves of the window are on show.
     pub half: Half,
+    /// Which shell belongs to which tab: a workspace is a directory and the
+    /// shell standing in it.
+    ///
+    /// By identity rather than by index, because both lists are reordered by
+    /// ordinary use - a tab opened beside this one, a shell closed from the
+    /// middle - and a pairing held by position would quietly come to mean a
+    /// different pair. Entries whose shell has since gone are dropped when
+    /// they are next looked at rather than swept: the shell can end at any
+    /// moment, so any sweep would have to run every frame anyway.
+    pub workspaces: std::collections::HashMap<u64, Workspace>,
+    /// The rail down the left: the workspaces, and how much of each is shown.
+    pub show_rail: bool,
+    /// Wide enough for the whole path and the shell's name, or narrow enough
+    /// for an icon and the directory's own name.
+    pub rail_wide: bool,
     /// How wide the right-hand column is: the places list, and what was run
     /// here under it. Points, not a fraction - see [`Showing::column`].
     pub column_width: f32,
@@ -624,6 +667,9 @@ impl GuiApp {
             show_sidebar: true,
             show_keys: true,
             half: Half::Both,
+            workspaces: std::collections::HashMap::new(),
+            show_rail: true,
+            rail_wide: false,
             column_width: 210.0,
             row_height: 280.0,
             history_of: None,
@@ -725,11 +771,22 @@ impl GuiApp {
 
     /// `Ctrl-T`: another tab, on the directory this one is showing.
     fn new_tab(&mut self, side: Side) {
+        // A fork, not a blank window. Everything about how you have this one
+        // arranged - one pane or two, what each is drawing, which shell is
+        // standing here - is what you were about to set up again by hand.
+        let forked = (side == Side::Left).then(|| {
+            self.remember_workspace();
+            self.workspaces.get(&self.workspace_id()).cloned()
+        });
         let panel = self.tabs(side).duplicate();
         self.tabs_mut(side).open(panel);
         self.active = side;
+        if let Some(Some(carried)) = forked {
+            let id = self.workspace_id();
+            self.workspaces.insert(id, carried);
+        }
         let where_ = self.panel(side).cwd.display().to_string();
-        self.info(format!("New tab: {where_}"));
+        self.info(format!("New workspace: {where_}"));
     }
 
     /// `Ctrl-W`: close the tab on show.
@@ -754,14 +811,21 @@ impl GuiApp {
             )),
         }
     }
-
-    fn activate_tab(&mut self, side: Side, index: usize) {
-        self.tabs_mut(side).activate(index);
-        self.sync_tree_view(side);
-        self.active = side;
-    }
-
     fn walk_tabs(&mut self, side: Side, forward: bool) {
+        // The left pane's tabs are the workspaces, so walking them is
+        // walking windows: the arrangement goes with them.
+        if side == Side::Left {
+            let at = self.left.active();
+            let count = self.left.len();
+            let next = if forward {
+                (at + 1) % count
+            } else {
+                (at + count - 1) % count
+            };
+            self.show_workspace(next);
+            self.sync_tree_view(side);
+            return;
+        }
         if forward {
             self.tabs_mut(side).next();
         } else {
@@ -1082,6 +1146,10 @@ impl GuiApp {
             Ok(()) => {
                 self.show_terminal = true;
                 self.terminal_focused = true;
+                // Started while this workspace was on show, so it is this
+                // workspace's shell - which is what makes coming back to a
+                // window bring its shell with it.
+                self.pair_shell_here();
                 self.note_unrecorded_shell(&program, &cwd);
                 self.info(format!("Opened {program} in {}", cwd.display()));
             }
@@ -1762,6 +1830,8 @@ impl eframe::App for GuiApp {
                 let cut = sectors(
                     full,
                     Showing {
+                        rail: self.show_rail,
+                        rail_wide: self.rail_wide,
                         top: self.half != Half::Shell,
                         bottom: self.half != Half::Files,
                         places: self.show_sidebar,
@@ -1784,11 +1854,18 @@ impl eframe::App for GuiApp {
                 // Each sector paints its own background, which being a panel
                 // used to do for it.
                 let painter = ui.painter().clone();
+                if let Some(rect) = cut.rail {
+                    painter.rect_filled(rect, 0.0, theme::sidebar());
+                }
                 for rect in [cut.shell, cut.keys].into_iter().flatten() {
                     painter.rect_filled(rect, 0.0, theme::surface());
                 }
                 for rect in [cut.places, cut.history].into_iter().flatten() {
                     painter.rect_filled(rect, 0.0, theme::sidebar());
+                }
+
+                if let Some(rect) = cut.rail {
+                    self.rail(ui, rect);
                 }
 
                 if let Some(rect) = cut.panes {
@@ -1892,6 +1969,10 @@ pub const SPLIT_MAX: f32 = 0.88;
 /// What the window is showing, for [`sectors`] to lay out.
 #[derive(Debug, Clone, Copy)]
 pub struct Showing {
+    /// The rail of workspaces, down the left of everything.
+    pub rail: bool,
+    /// Wide enough for a path and a shell name, or narrow enough for a name.
+    pub rail_wide: bool,
     /// The top row: the panes, and the places list beside them.
     pub top: bool,
     /// The bottom row: the shell, and the history beside it.
@@ -1927,6 +2008,8 @@ pub struct Showing {
 /// the drawer came to be a different width from the panes it belonged to.
 #[derive(Debug, Clone, Copy)]
 pub struct Sectors {
+    /// The full-height rail of workspaces, down the left.
+    pub rail: Option<Rect>,
     /// Top left: the panes. Split again by the second pane, and by a tree.
     pub panes: Option<Rect>,
     /// The strip under the panes, when the key bar is on.
@@ -1951,10 +2034,36 @@ pub const COLUMN_MIN: f32 = 140.0;
 pub const COLUMN_MAX: f32 = 420.0;
 /// The strip the function keys get, when they are on.
 pub const KEYS_HEIGHT: f32 = 26.0;
+/// The rail, narrow and wide. Two widths rather than a seam to drag: it has
+/// exactly two things to show - a name, or a name with its path and shell -
+/// and a width in between shows neither of them properly.
+pub const RAIL_NARROW: f32 = 96.0;
+pub const RAIL_WIDE: f32 = 210.0;
 
 /// Cut the window into its sectors.
 pub fn sectors(full: Rect, showing: Showing) -> Sectors {
     let half = GUTTER * 0.5;
+
+    // The rail comes off the left before anything else is measured: it is
+    // outside the arrangement rather than part of it, which is the point of
+    // moving the tabs out of the panes and out of the shell.
+    let (rail, full) = if showing.rail {
+        let width = if showing.rail_wide {
+            RAIL_WIDE
+        } else {
+            RAIL_NARROW
+        }
+        .min(full.width() * 0.4);
+        (
+            Some(Rect::from_min_max(
+                full.min,
+                egui::pos2(full.min.x + width, full.max.y),
+            )),
+            Rect::from_min_max(egui::pos2(full.min.x + width + half, full.min.y), full.max),
+        )
+    } else {
+        (None, full)
+    };
     // A window showing neither half would be an empty window. The panes are
     // what it opens on, so they are what it falls back to.
     let (top, bottom) = match (showing.top, showing.bottom) {
@@ -2012,6 +2121,7 @@ pub fn sectors(full: Rect, showing: Showing) -> Sectors {
     };
 
     Sectors {
+        rail,
         panes,
         keys,
         shell: bottom.then(|| {
@@ -2185,66 +2295,6 @@ fn diff_cell(ui: &mut egui::Ui, side: Option<(usize, &str)>, numbers: usize, ink
             .selectable(true),
     );
 }
-
-/// One tab: a rounded chip, filled when it is the one on show.
-///
-/// The tab on show wears the palette's tab colour, and a pane that does not
-/// have the keyboard wears the muted one - the same distinction the cursor bar
-/// makes, so at a glance the tab you are in and the row you are on are marked
-/// the same way and the idle pane recedes.
-fn tab_chip(
-    ui: &mut egui::Ui,
-    text: &str,
-    current: bool,
-    focused: bool,
-    opened: lost_commander_core::panel::Opened,
-) -> egui::Response {
-    // A tab the program opened - to show where something in the account
-    // happened - is written in the colour marks use, so a reader can tell at
-    // a glance which tabs they asked for. The colour rather than a word in
-    // the title, because the title is where the directory's name goes.
-    let mine = opened == lost_commander_core::panel::Opened::ByHand;
-    let ink = match (current, focused) {
-        _ if !mine => theme::marked_text(),
-        (true, true) => theme::text(),
-        (true, false) => theme::text_dim(),
-        (false, _) => theme::text_faint(),
-    };
-    let font = FontId::proportional(11.5);
-    let galley = ui
-        .painter()
-        .layout_no_wrap(text.to_string(), font, ink)
-        .clone();
-    let size = Vec2::new(galley.size().x + 16.0, 21.0);
-    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-
-    // The tab on show keeps its colour whether or not the pane has the
-    // keyboard: which directory a pane is showing is not a thing that should
-    // become hard to see because you looked at the other pane. Focus is the
-    // pane's own border, and the text one shade quieter.
-    let fill = if current {
-        theme::tab_active()
-    } else {
-        theme::tab()
-    };
-    let fill = if !current && response.hovered() {
-        theme::hover()
-    } else {
-        fill
-    };
-    // Square at the bottom, where the tab meets the pane it belongs to.
-    let corners = CornerRadius {
-        nw: 5,
-        ne: 5,
-        sw: 0,
-        se: 0,
-    };
-    ui.painter().rect_filled(rect, corners, fill);
-    let at = rect.center() - galley.size() / 2.0;
-    ui.painter().galley(at, galley, ink);
-    response
-}
-
 /// One side of a comparison row: how big it is and when it changed.
 ///
 /// Blank where that side has nothing, which is what says "only the other one
@@ -2648,7 +2698,8 @@ impl GuiApp {
                 .layout(Layout::top_down(Align::Min)),
         );
 
-        self.tab_strip(&mut inner, side);
+        // No tab strip here any more: tabs are workspaces and they live in
+        // the rail, out of the panes and out of the shell.
 
         // Pane header: where you are, and how much is here.
         let current = self.view(side);
@@ -2906,106 +2957,6 @@ impl GuiApp {
             self.panel_mut(side).cursor_to(index);
         }
     }
-
-    /// The pane's tabs, when it has more than one.
-    ///
-    /// A single tab draws nothing: a strip saying "here is the one directory
-    /// this pane is showing" costs a row of listing to repeat what the header
-    /// says. `Ctrl-T` is how the second one arrives, and once there are two,
-    /// the `+` at the end of the strip does the same job with a pointer.
-    fn tab_strip(&mut self, ui: &mut egui::Ui, side: Side) {
-        if self.tabs(side).len() < 2 {
-            return;
-        }
-        let paths: Vec<PathBuf> = self
-            .tabs(side)
-            .all()
-            .iter()
-            .map(|p| p.cwd.clone())
-            .collect();
-        let names = tabs::titles(&paths);
-        let current = self.tabs(side).active();
-        let focused = self.active == side;
-
-        let (mut go, mut close) = (None, false);
-        let (mut others, mut across, mut fresh) = (false, false, false);
-
-        egui::ScrollArea::horizontal()
-            .id_salt(match side {
-                Side::Left => "tabs_left",
-                Side::Right => "tabs_right",
-            })
-            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 3.0;
-                    for (index, name) in names.iter().enumerate() {
-                        let chip = tab_chip(
-                            ui,
-                            name,
-                            index == current,
-                            focused,
-                            self.tabs(side)
-                                .get(index)
-                                .map(|panel| panel.opened)
-                                .unwrap_or_default(),
-                        )
-                        .on_hover_text(paths[index].display().to_string());
-                        if chip.clicked() {
-                            go = Some(index);
-                        }
-                        // Middle-click closes, as it does on a tab anywhere
-                        // else.
-                        if chip.middle_clicked() {
-                            go = Some(index);
-                            close = true;
-                        }
-                        chip.context_menu(|ui| {
-                            if ui.button("Close").clicked() {
-                                go = Some(index);
-                                close = true;
-                                ui.close();
-                            }
-                            if ui.button("Close the others").clicked() {
-                                go = Some(index);
-                                others = true;
-                                ui.close();
-                            }
-                            if ui.button("Move to the other pane").clicked() {
-                                go = Some(index);
-                                across = true;
-                                ui.close();
-                            }
-                        });
-                    }
-                    if ui
-                        .add(egui::Button::new(RichText::new("+").size(13.0)).frame(false))
-                        .on_hover_text("Another tab (Ctrl-T)")
-                        .clicked()
-                    {
-                        fresh = true;
-                    }
-                });
-            });
-
-        // Applied after the strip is drawn, so nothing moves underneath it
-        // mid-frame. The order matters: whatever was clicked becomes the tab
-        // on show first, and then what was asked happens to that tab.
-        if let Some(index) = go {
-            self.activate_tab(side, index);
-        }
-        if close {
-            self.close_tab(side);
-        } else if others {
-            self.close_other_tabs(side);
-        } else if across {
-            self.move_tab_across(side);
-        } else if fresh {
-            self.new_tab(side);
-        }
-        ui.add_space(4.0);
-    }
-
     /// The directory hierarchy for this pane, opened to where it is.
     ///
     /// Clicking a row moves the pane there and the tree stays put, so it doubles
@@ -7066,55 +7017,15 @@ impl GuiApp {
         ui.set_min_height(ui.available_height());
 
         let mut open_with: Option<Option<String>> = None;
-        let mut close: Option<usize> = None;
         let mut close_active = false;
-        let mut select: Option<usize> = None;
 
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
 
-            for (index, session) in self.terminals.sessions.iter().enumerate() {
-                let is_active = index == self.terminals.active;
-                let fill = if is_active {
-                    theme::surface_hi()
-                } else {
-                    theme::surface()
-                };
-                let colour = if is_active {
-                    theme::text()
-                } else {
-                    theme::text_dim()
-                };
-
-                if ui
-                    .add(
-                        egui::Button::new(RichText::new(&session.title).size(11.5).color(colour))
-                            .fill(fill)
-                            .corner_radius(CornerRadius::same(4))
-                            .min_size(Vec2::new(0.0, 20.0)),
-                    )
-                    .on_hover_text(session.cwd.display().to_string())
-                    .clicked()
-                {
-                    select = Some(index);
-                }
-                if ui
-                    .add(
-                        egui::Button::new(RichText::new("x").size(11.5).color(colour))
-                            .fill(fill)
-                            .corner_radius(CornerRadius::same(4))
-                            .min_size(Vec2::new(18.0, 20.0)),
-                    )
-                    .on_hover_text("Close this terminal")
-                    .clicked()
-                {
-                    close = Some(index);
-                }
-            }
-
-            // The buttons live at the far end rather than after the last tab,
-            // so they stay put: opening three terminals should not mean
-            // chasing a + that walks right every time it is clicked.
+            // The shells are listed in the rail, beside the directories they
+            // are standing in - a shell and a folder are one thing here, and
+            // they were being drawn as two lists that knew nothing of each
+            // other.
             //
             // Right-to-left, so the first added sits furthest right.
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -7271,15 +7182,6 @@ impl GuiApp {
             });
         });
 
-        if let Some(index) = select {
-            self.terminals.select(index);
-            // Half a row of leftover gesture would jump the tab you arrive on.
-            self.terminal_scroll_carry = 0.0;
-            self.terminal_focused = true;
-        }
-        if let Some(index) = close {
-            self.terminals.close(index);
-        }
         if close_active {
             self.close_active_terminal();
         }
@@ -7599,6 +7501,95 @@ impl GuiApp {
         }
     }
 
+    /// Which workspace is on show: the identity of the left pane's tab.
+    ///
+    /// The left pane, because that is the one that is always there - the
+    /// second is part of the arrangement a workspace *carries*, so it cannot
+    /// also be what identifies one.
+    pub fn workspace_id(&self) -> u64 {
+        self.left.current().id
+    }
+
+    /// The shell standing in this workspace, if it is still running.
+    ///
+    /// Looked up rather than trusted: a shell can end at any moment, and a
+    /// pairing that outlived one would send you to somebody else's.
+    pub fn shell_here(&self) -> Option<usize> {
+        let shell = self.workspaces.get(&self.workspace_id())?.shell?;
+        self.terminals.at_id(shell)
+    }
+
+    /// Write down how the window is arranged now, against this workspace.
+    ///
+    /// Called on the way out of one, and whenever something that belongs to
+    /// a workspace changes while it is on show.
+    pub fn remember_workspace(&mut self) {
+        let id = self.workspace_id();
+        let now = Workspace {
+            shell: self.terminals.active_id(),
+            show_right: self.show_right,
+            right: self.right.current().cwd.clone(),
+            left_view: self.left_view,
+            right_view: self.right_view,
+            active: self.active,
+            synced: !self.terminals.is_pinned(self.terminals.active),
+            split: self.split,
+        };
+        // A shell is only this workspace's if one is actually running: with
+        // none open, `active_id` is None and the entry says so.
+        self.workspaces.insert(id, now);
+    }
+
+    /// Put a workspace's arrangement back, having shown its tab.
+    fn restore_workspace(&mut self) {
+        let Some(want) = self.workspaces.get(&self.workspace_id()).cloned() else {
+            // Never been left before - a tab from before workspaces existed,
+            // or one just forked. What is on screen is as good as anything.
+            return;
+        };
+        self.show_right = want.show_right;
+        self.left_view = want.left_view;
+        self.right_view = want.right_view;
+        self.split = want.split;
+        self.active = if want.show_right {
+            want.active
+        } else {
+            Side::Left
+        };
+        self.on_tree = [
+            want.left_view == ViewMode::Tree,
+            want.right_view == ViewMode::Tree,
+        ];
+        if self.right.current().cwd != want.right {
+            self.right.current_mut().chdir(want.right.clone());
+        }
+        if let Some(at) = want.shell.and_then(|id| self.terminals.at_id(id)) {
+            self.terminals.select(at);
+            self.terminal_scroll_carry = 0.0;
+            if at < self.terminals.pinned.len() {
+                self.terminals.pinned[at] = !want.synced;
+            }
+        }
+    }
+
+    /// Show a workspace: its directory, its arrangement, and its shell.
+    pub fn show_workspace(&mut self, index: usize) {
+        if index == self.left.active() {
+            return;
+        }
+        self.remember_workspace();
+        self.left.activate(index);
+        self.restore_workspace();
+    }
+
+    /// Tie the shell on show to the workspace on show.
+    ///
+    /// The pairing is made by using them together, which is the only moment
+    /// anybody could have meant it.
+    pub fn pair_shell_here(&mut self) {
+        self.remember_workspace();
+    }
+
     /// Give the window to one half, or hand it back to both.
     ///
     /// Pressing the same key again is how you get back, so this toggles
@@ -7648,6 +7639,171 @@ impl GuiApp {
     fn shell_back_on_screen(&mut self) {
         if self.half == Half::Files {
             self.show_half(Half::Files);
+        }
+    }
+
+    /// The rail: every workspace, out of the panes and out of the shell.
+    ///
+    /// Tabs used to be drawn twice, in two strips that knew nothing of each
+    /// other: directories along the top of a pane and shells along the top of
+    /// the drawer. They are one thing - a place you are working, and the
+    /// shell standing in it - and this is the one list of them.
+    fn rail(&mut self, ui: &mut egui::Ui, area: Rect) {
+        let side = self.active;
+        let wide = self.rail_wide;
+        let mut child = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(area.shrink2(CHROME_PAD))
+                .layout(Layout::top_down(Align::Min)),
+        );
+
+        child.horizontal(|ui| {
+            if wide {
+                ui.label(
+                    RichText::new("WORKSPACES")
+                        .size(9.5)
+                        .color(theme::text_faint()),
+                );
+            }
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if ui
+                    .add(
+                        egui::Button::new(
+                            RichText::new(if wide { "<" } else { ">" })
+                                .size(10.5)
+                                .color(theme::text_faint()),
+                        )
+                        .fill(Color32::TRANSPARENT)
+                        .min_size(Vec2::new(0.0, 14.0)),
+                    )
+                    .on_hover_text(if wide {
+                        "Narrow: an icon and the folder's own name"
+                    } else {
+                        "Wide: the whole path, and the shell standing in it"
+                    })
+                    .clicked()
+                {
+                    self.rail_wide = !wide;
+                }
+            });
+        });
+        child.add_space(2.0);
+
+        // Read out before drawing: the rows need `self` and so cannot hold a
+        // borrow of the tabs while they are drawn.
+        let rows: Vec<(usize, String, String, Option<String>, bool)> = self
+            .tabs(side)
+            .all()
+            .iter()
+            .enumerate()
+            .map(|(index, panel)| {
+                let shell = self
+                    .workspaces
+                    .get(&panel.id)
+                    .and_then(|workspace| workspace.shell)
+                    .and_then(|id| self.terminals.at_id(id))
+                    .and_then(|at| self.terminals.sessions.get(at))
+                    .map(|session| session.title.clone());
+                (
+                    index,
+                    tabs::title(&panel.cwd),
+                    lost_commander_core::paths::undecorated(&panel.cwd)
+                        .display()
+                        .to_string(),
+                    shell,
+                    index == self.tabs(side).active(),
+                )
+            })
+            .collect();
+
+        let mut want: Option<usize> = None;
+        let mut close: Option<usize> = None;
+        egui::ScrollArea::vertical()
+            .id_salt("rail")
+            .auto_shrink([false, false])
+            .show(&mut child, |ui| {
+                for (index, name, path, shell, current) in &rows {
+                    let colour = if *current {
+                        theme::text()
+                    } else {
+                        theme::text_dim()
+                    };
+                    let fill = if *current {
+                        theme::surface_hi()
+                    } else {
+                        Color32::TRANSPARENT
+                    };
+                    let response = egui::Frame::NONE
+                        .fill(fill)
+                        .corner_radius(CornerRadius::same(4))
+                        .inner_margin(egui::Margin::symmetric(5, 3))
+                        .show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            ui.vertical(|ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label(RichText::new("\u{1F5C0}").size(11.0).color(colour));
+                                    ui.label(RichText::new(name).size(11.5).color(colour));
+                                });
+                                if wide {
+                                    ui.label(
+                                        RichText::new(path).size(9.5).color(theme::text_faint()),
+                                    );
+                                    // What the shell is, or that there is not
+                                    // one: a workspace with no shell is worth
+                                    // saying, since Ctrl-O will start one.
+                                    ui.horizontal(|ui| {
+                                        ui.label(
+                                            RichText::new(match shell {
+                                                Some(name) => format!("> {name}"),
+                                                None => "> no shell".to_string(),
+                                            })
+                                            .size(9.5)
+                                            .color(
+                                                if shell.is_some() {
+                                                    theme::accent_dim()
+                                                } else {
+                                                    theme::text_faint()
+                                                },
+                                            ),
+                                        );
+                                    });
+                                }
+                            });
+                        })
+                        .response;
+
+                    let hit = ui.interact(
+                        response.rect,
+                        ui.id().with(("rail_row", index)),
+                        Sense::click(),
+                    );
+                    if hit.clicked() {
+                        want = Some(*index);
+                    }
+                    // Middle-click closes, as it does on every tab strip
+                    // there has ever been. The wide view has no room for a
+                    // cross without pushing the path out of it.
+                    if hit.middle_clicked() {
+                        close = Some(*index);
+                    }
+                    let _ = hit.on_hover_text(format!(
+                        "{path}\n{}",
+                        match shell {
+                            Some(name) => format!("shell: {name}"),
+                            None => "no shell yet".to_string(),
+                        }
+                    ));
+                }
+            });
+
+        if let Some(index) = want {
+            self.show_workspace(index);
+        }
+        if let Some(index) = close {
+            self.tabs_mut(side).activate(index);
+            if !self.tabs_mut(side).close() {
+                self.error("That is the only workspace in this pane");
+            }
         }
     }
 
@@ -7776,11 +7932,12 @@ impl GuiApp {
     /// yesterday may want a different flag today, and running it on one click
     /// would be a keystroke that deletes something.
     fn shell_history_column(&mut self, ui: &mut egui::Ui, area: Rect) {
-        let here = self
-            .terminals
-            .active()
-            .map(|session| session.cwd.clone())
-            .unwrap_or_else(|| self.panel(self.active).cwd.clone());
+        // The directory the *pane* is showing, not the shell's. "Here" has to
+        // mean the same thing as the workspace you are looking at, or
+        // switching tabs would leave the list answering about the last place
+        // a shell happened to be standing. With a shell in step the two are
+        // the same anyway; when they are not, the pane is what you can see.
+        let here = self.panel(self.active).cwd.clone();
         let now = ui.input(|input| input.time);
         if self.shell_history_of.as_deref() != Some(here.as_path())
             || now - self.shell_history_read_at > 1.0
@@ -9761,24 +9918,29 @@ mod tests {
     }
 
     #[test]
-    fn switching_tabs_settles_what_the_pane_says_it_is_showing() {
+    fn each_workspace_keeps_its_own_arrangement() {
         use keys::Action as A;
         let (_root, mut app) = fixture();
-        app.run_action(A::NewTab);
+        // A workspace is a window: how it is arranged is part of what you
+        // are coming back to. The pane's view used to be carried across
+        // tabs, which meant a tree in one made a tree of all of them.
         app.run_action(A::ViewTree);
         assert!(app.left.current().in_tree_mode());
 
-        // The tree belongs to the panel and the view to the pane, so the tab
-        // that comes forward has to be brought into line with what the pane
-        // says it is showing.
-        app.run_action(A::NextTab);
+        app.run_action(A::NewTab);
+        app.run_action(A::ViewDetails);
+        assert!(!app.left.current().in_tree_mode());
+
+        app.run_action(A::PreviousTab);
         assert!(
             app.left.current().in_tree_mode(),
-            "the pane says tree, so the tab that came forward is a tree"
+            "the workspace that was a tree is still a tree"
         );
-        app.run_action(A::ViewDetails);
         app.run_action(A::NextTab);
-        assert!(!app.left.current().in_tree_mode());
+        assert!(
+            !app.left.current().in_tree_mode(),
+            "and the one that was a listing is still a listing"
+        );
     }
 
     #[test]
@@ -10539,6 +10701,8 @@ mod tests {
 
     fn showing() -> Showing {
         Showing {
+            rail: true,
+            rail_wide: false,
             top: true,
             bottom: true,
             places: true,
@@ -10582,8 +10746,10 @@ mod tests {
 
         // The horizontal seam runs the whole width, and the two rows are the
         // same height on both sides of it.
+        // The horizontal seam runs the whole width of the arrangement - which
+        // starts where the rail ends, since the rail is outside it.
         let horizontal = cut.horizontal.expect("a seam between the rows");
-        assert_eq!(horizontal.min.x, window().min.x);
+        assert_eq!(horizontal.min.x, cut.panes.unwrap().min.x);
         assert_eq!(horizontal.max.x, window().max.x);
         assert_eq!(cut.shell.unwrap().min.y, history.min.y);
         assert_eq!(cut.shell.unwrap().max.y, history.max.y);

@@ -372,7 +372,19 @@ impl Inside {
     }
 }
 
+/// Hands out the next tab identity. See [`Panel::id`].
+static NEXT_PANEL_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 pub struct Panel {
+    /// What this tab is, for as long as it exists.
+    ///
+    /// An index is not an identity: tabs are opened beside each other, closed
+    /// from the middle and handed between panes, and anything remembered
+    /// about "the third tab" is about a different tab a moment later. A shell
+    /// is paired with a directory by this, so the pairing survives all of it,
+    /// including the tab being moved to the other pane - which is exactly
+    /// when you would not want the shell left behind.
+    pub id: u64,
     pub cwd: PathBuf,
     pub entries: Vec<Entry>,
     pub cursor: usize,
@@ -428,6 +440,7 @@ pub enum Opened {
 impl Panel {
     pub fn new(path: PathBuf) -> Self {
         let mut panel = Panel {
+            id: NEXT_PANEL_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             cwd: path,
             opened: Opened::default(),
             entries: Vec::new(),

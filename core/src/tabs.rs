@@ -166,6 +166,42 @@ impl Tabs {
     }
 }
 
+#[cfg(test)]
+mod identity_tests {
+    use super::*;
+
+    #[test]
+    fn a_tab_keeps_its_identity_through_everything_that_moves_it() {
+        // The pairing between a directory and its shell hangs off this. An
+        // index would do for as long as nobody opened, closed or moved a tab,
+        // which is to say not at all.
+        let mut left = Tabs::new(Panel::new(PathBuf::from(".")));
+        let first = left.current().id;
+        left.open(Panel::new(PathBuf::from(".")));
+        let second = left.current().id;
+        assert_ne!(first, second, "two tabs, two identities");
+
+        // Opened beside it, so the first is now the tab *before* this one -
+        // a different index, the same tab.
+        left.prev();
+        assert_eq!(left.current().id, first);
+
+        // Handed to the other pane, where it is a different index again in a
+        // different list. This is the case the pairing most needs to survive:
+        // sending a tab across should not leave its shell behind.
+        left.next();
+        let moved = left.take().expect("two tabs, so one can go");
+        assert_eq!(moved.id, second);
+        let mut right = Tabs::new(Panel::new(PathBuf::from(".")));
+        right.accept(moved);
+        assert_eq!(right.current().id, second);
+
+        // And closing one does not hand its identity to its neighbour.
+        right.close();
+        assert_ne!(right.current().id, second);
+    }
+}
+
 /// What a tab is labelled: the name of the directory it is showing.
 ///
 /// The whole path would not fit and would be mostly prefix anyway; the last
