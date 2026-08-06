@@ -547,11 +547,8 @@ pub unsafe extern "C" fn rcmd_job_start(request: *const c_char) -> *mut RcmdJob 
         // front-end that used `Job::spawn` would do the work and write none of
         // it down, leaving the journal empty and saying nothing had happened.
         // Which is what it did, until a viewer was built and showed it.
-        Some(match journal_dir() {
-            Some(dir) => Job::spawn_recorded(
-                operation,
-                journal::Journal::at(dir, journal::Keep::default()),
-            ),
+        Some(match account() {
+            Some(book) => Job::spawn_recorded(operation, book),
             // Nowhere to write one: the work still goes ahead. An account is
             // worth keeping, and not worth refusing to copy a file over.
             None => Job::spawn(operation),
@@ -1581,11 +1578,10 @@ pub unsafe extern "C" fn rcmd_term_journal(
             Err(e) => return failed(format!("that command could not be read: {e}")),
         };
 
-        let Some(dir) = journal_dir() else {
+        let Some(book) = account() else {
             // Nowhere to write is not an error worth stopping a shell over.
             return out("{\"ok\":false}".to_string());
         };
-        let book = journal::Journal::at(dir, journal::Keep::default());
         book.record(lost_commander_core::journal::Event {
             at: std::time::SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -2106,6 +2102,32 @@ struct JournalPage {
 /// itself, and the tests below - which start real jobs through the real entry
 /// point, and would otherwise write what they did into the account of whoever
 /// ran them.
+/// One journal handle per directory, shared by every entry point.
+///
+/// The engine's journal holds the account in memory and counts a generation
+/// per change - but both live on the *instance*, shared only by clones. A
+/// journal built per call would re-read the files per question and report a
+/// generation that never moved. Everything in this ABI that touches the
+/// account goes through here, so a job's records are in the memory the next
+/// `rcmd_history` reads, and `rcmd_journal_generation` moves when they land.
+/// The held handle is rebuilt when `RCMD_JOURNAL_DIR` changes, which is what
+/// the tests do to stay out of the real account.
+fn account() -> Option<journal::Journal> {
+    static HELD: std::sync::OnceLock<std::sync::Mutex<Option<(PathBuf, journal::Journal)>>> =
+        std::sync::OnceLock::new();
+    let dir = journal_dir()?;
+    let cell = HELD.get_or_init(|| std::sync::Mutex::new(None));
+    let mut slot = cell.lock().ok()?;
+    if let Some((held, book)) = slot.as_ref() {
+        if *held == dir {
+            return Some(book.clone());
+        }
+    }
+    let book = journal::Journal::at(dir.clone(), journal::Keep::default());
+    *slot = Some((dir, book.clone()));
+    Some(book)
+}
+
 fn journal_dir() -> Option<PathBuf> {
     match std::env::var_os("RCMD_JOURNAL_DIR") {
         Some(dir) if !dir.is_empty() => Some(PathBuf::from(dir)),
@@ -2144,10 +2166,9 @@ fn shown_named(name: &str) -> journal::Shown {
 pub unsafe extern "C" fn rcmd_journal_days(shown: *const c_char) -> *mut c_char {
     guarded(|| {
         let shown = shown_named(&borrowed(shown).unwrap_or_default());
-        let Some(dir) = journal_dir() else {
+        let Some(book) = account() else {
             return replied(&Vec::<JournalDay>::new());
         };
-        let book = journal::Journal::at(dir, journal::Keep::default());
         replied(
             &book
                 .days_shown(shown)
@@ -2219,7 +2240,7 @@ pub unsafe extern "C" fn rcmd_journal_read(
                 failures: 0,
             });
         };
-        let book = journal::Journal::at(dir, journal::Keep::default());
+        let book = account().unwrap_or_else(|| journal::Journal::at(dir, journal::Keep::default()));
         let rows = filter.apply(journal::arrange(book.read_shown(shown, day)));
         let tally = journal::tally(&rows);
 
@@ -3549,6 +3570,489 @@ pub unsafe extern "C" fn rcmd_string_free(text: *mut c_char) {
     let _ = catch_unwind(AssertUnwindSafe(|| {
         drop(CString::from_raw(text));
     }));
+}
+
+// ---- the account, read back -----------------------------------------------
+//
+// Everything below is the parity surface: the thirteen features the engine
+// grew that no front-end could reach through this boundary. Same contract
+// as everything above - JSON out, the caller polls, keys cross by name.
+
+#[derive(Serialize)]
+struct PastLine {
+    line: String,
+    cwd: String,
+}
+
+/// Commands run before now, `here` first, optionally narrowed.
+///
+/// `days` bounds how far back; `query` narrows case-insensitively (empty
+/// means everything); `here_only` non-zero keeps only this directory's.
+///
+/// # Safety
+/// `here` and `query` follow the rules of every string in this ABI.
+#[no_mangle]
+pub unsafe extern "C" fn rcmd_history(
+    here: *const c_char,
+    days: i32,
+    query: *const c_char,
+    here_only: i32,
+) -> *mut c_char {
+    guarded(|| {
+        let here = match borrowed(here) {
+            Ok(text) => PathBuf::from(text),
+            Err(e) => return failed(e),
+        };
+        let query = borrowed(query).unwrap_or_default();
+        let Some(book) = account() else {
+            return replied(&Vec::<PastLine>::new());
+        };
+        let past = book.with_records(journal::Stream::Shell, |records| {
+            journal::commands_before(journal::since(records, days.max(1) as i64), &here)
+        });
+        let matched = journal::matching(&past, &query);
+        let lines: Vec<PastLine> = matched
+            .into_iter()
+            .filter(|past| here_only == 0 || past.cwd == here)
+            .map(|past| PastLine {
+                line: past.line.clone(),
+                cwd: past.cwd.display().to_string(),
+            })
+            .collect();
+        replied(&lines)
+    })
+}
+
+/// How many times the account has changed since this process began.
+///
+/// A front-end refilters its history views when this moves, instead of
+/// re-reading once a second in case something happened. It moves with every
+/// write made through this boundary - jobs, `rcmd_term_journal` - and with
+/// sweeps.
+#[no_mangle]
+pub extern "C" fn rcmd_journal_generation() -> *mut c_char {
+    guarded(|| {
+        let generation = account().map(|book| book.generation()).unwrap_or(0);
+        out(format!("{{\"generation\":{generation}}}"))
+    })
+}
+
+#[derive(Serialize)]
+struct FolderHappening {
+    at: i64,
+    kind: String,
+    name: String,
+    other: Option<String>,
+    incoming: bool,
+    failed: Option<String>,
+}
+
+/// What was done to the things in one folder, newest first, failures kept.
+///
+/// # Safety
+/// `here` follows the rules of every string in this ABI.
+#[no_mangle]
+pub unsafe extern "C" fn rcmd_folder_history(here: *const c_char, days: i32) -> *mut c_char {
+    guarded(|| {
+        let here = match borrowed(here) {
+            Ok(text) => PathBuf::from(text),
+            Err(e) => return failed(e),
+        };
+        let Some(book) = account() else {
+            return replied(&Vec::<FolderHappening>::new());
+        };
+        let rows: Vec<FolderHappening> = book.with_records(journal::Stream::Files, |records| {
+            journal::happened_in(journal::since(records, days.max(1) as i64), &here)
+                .into_iter()
+                .map(|happening| FolderHappening {
+                    at: happening.at,
+                    kind: happening.kind.label().to_string(),
+                    name: happening.name,
+                    other: happening.other.map(|path| path.display().to_string()),
+                    incoming: happening.incoming,
+                    failed: happening.failed,
+                })
+                .collect()
+        });
+        replied(&rows)
+    })
+}
+
+// ---- pinned commands -------------------------------------------------------
+
+/// Where the pins live: the real file, unless `RCMD_PINNED_PATH` says
+/// otherwise - the same escape hatch the settings have, for the same
+/// reason: a test must never write the shelf of whoever ran it.
+fn pinned_path() -> Option<PathBuf> {
+    match std::env::var_os("RCMD_PINNED_PATH") {
+        Some(path) if !path.is_empty() => Some(PathBuf::from(path)),
+        _ => lost_commander_core::pinned::Pinned::path(),
+    }
+}
+
+fn pinned_now() -> lost_commander_core::pinned::Pinned {
+    pinned_path()
+        .and_then(|path| lost_commander_core::pinned::Pinned::load_from(&path).ok())
+        .unwrap_or_default()
+}
+
+/// This folder's shelf, in the order it was built.
+///
+/// # Safety
+/// `cwd` follows the rules of every string in this ABI.
+#[no_mangle]
+pub unsafe extern "C" fn rcmd_pins(cwd: *const c_char) -> *mut c_char {
+    guarded(|| {
+        let cwd = match borrowed(cwd) {
+            Ok(text) => PathBuf::from(text),
+            Err(e) => return failed(e),
+        };
+        let lines: Vec<String> = pinned_now()
+            .here(&cwd)
+            .iter()
+            .map(|pin| pin.line.clone())
+            .collect();
+        replied(&lines)
+    })
+}
+
+/// Pin a line to a folder, or take the pin off - and say which happened.
+///
+/// # Safety
+/// `cwd` and `line` follow the rules of every string in this ABI.
+#[no_mangle]
+pub unsafe extern "C" fn rcmd_pin_toggle(cwd: *const c_char, line: *const c_char) -> *mut c_char {
+    guarded(|| {
+        let cwd = match borrowed(cwd) {
+            Ok(text) => PathBuf::from(text),
+            Err(e) => return failed(e),
+        };
+        let line = match borrowed(line) {
+            Ok(text) => text,
+            Err(e) => return failed(e),
+        };
+        let Some(path) = pinned_path() else {
+            return failed("no configuration directory on this platform");
+        };
+        let mut pinned = pinned_now();
+        let pinned_now = pinned.toggle(&cwd, &line);
+        if let Err(e) = pinned.save_to(&path) {
+            return failed(format!("could not save the pins: {e}"));
+        }
+        out(format!("{{\"pinned\":{pinned_now}}}"))
+    })
+}
+
+// ---- undo ------------------------------------------------------------------
+
+#[derive(Serialize)]
+struct UndoReply {
+    nothing: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    refused: Option<UndoRefused>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    plan: Option<lost_commander_core::undo::Plan>,
+}
+
+#[derive(Serialize)]
+struct UndoRefused {
+    what: String,
+    why: String,
+}
+
+/// The last file operation and exactly what reversing it would do - or why
+/// it cannot be. The front-end shows the plan verbatim and hands the same
+/// JSON to `rcmd_undo_apply`, so what was approved is what runs.
+#[no_mangle]
+pub extern "C" fn rcmd_undo_plan() -> *mut c_char {
+    guarded(|| {
+        use lost_commander_core::undo::{self, Undoable};
+        let Some(book) = account() else {
+            return replied(&UndoReply {
+                nothing: true,
+                refused: None,
+                plan: None,
+            });
+        };
+        let answer = book.with_records(journal::Stream::Files, |records| undo::plan(records));
+        let reply = match answer {
+            Undoable::Nothing => UndoReply {
+                nothing: true,
+                refused: None,
+                plan: None,
+            },
+            Undoable::Refused { what, why } => UndoReply {
+                nothing: false,
+                refused: Some(UndoRefused { what, why }),
+                plan: None,
+            },
+            Undoable::Plan(plan) => UndoReply {
+                nothing: false,
+                refused: None,
+                plan: Some(plan),
+            },
+        };
+        replied(&reply)
+    })
+}
+
+#[derive(Serialize)]
+struct UndoFailure {
+    path: String,
+    why: String,
+}
+
+/// Do what a plan from `rcmd_undo_plan` said, and account for the doing.
+///
+/// # Safety
+/// `plan_json` follows the rules of every string in this ABI.
+#[no_mangle]
+pub unsafe extern "C" fn rcmd_undo_apply(plan_json: *const c_char) -> *mut c_char {
+    guarded(|| {
+        use lost_commander_core::undo::{self, Step};
+        let text = match borrowed(plan_json) {
+            Ok(text) => text,
+            Err(e) => return failed(e),
+        };
+        let plan: undo::Plan = match serde_json::from_str(&text) {
+            Ok(plan) => plan,
+            Err(e) => return failed(format!("that is not an undo plan: {e}")),
+        };
+        let failures = undo::apply(&plan);
+        // The reversal is the newest operation now, recorded as what it
+        // literally did - which is what makes undoing an undo work.
+        if let Some(book) = account() {
+            for step in &plan.steps {
+                let event = match step {
+                    Step::RemoveCopied { copy } => journal::Event::new(journal::Kind::Delete, copy)
+                        .note("undo: the copy is removed"),
+                    Step::MoveBack { now, was } => journal::Event::new(journal::Kind::Move, now)
+                        .to(was)
+                        .note("undo"),
+                    Step::RemoveMade { dir } => journal::Event::new(journal::Kind::Delete, dir)
+                        .note("undo: the directory is removed"),
+                    Step::RestoreFromTrash { item } => {
+                        journal::Event::new(journal::Kind::Move, &item.original)
+                            .note("undo: restored from the trash")
+                    }
+                };
+                book.record(event);
+            }
+        }
+        let named: Vec<UndoFailure> = failures
+            .into_iter()
+            .map(|(path, why)| UndoFailure {
+                path: path.display().to_string(),
+                why,
+            })
+            .collect();
+        replied(&named)
+    })
+}
+
+// ---- the trash -------------------------------------------------------------
+
+/// Everything deletion kept, each with where it came from and when.
+#[no_mangle]
+pub extern "C" fn rcmd_trash_list() -> *mut c_char {
+    guarded(|| replied(&lost_commander_core::trash::list()))
+}
+
+/// Put one trashed thing back where it came from.
+///
+/// # Safety
+/// `item_json` follows the rules of every string in this ABI.
+#[no_mangle]
+pub unsafe extern "C" fn rcmd_trash_restore(item_json: *const c_char) -> *mut c_char {
+    guarded(|| {
+        let item: lost_commander_core::trash::TrashedItem =
+            match borrowed(item_json).and_then(|text| {
+                serde_json::from_str(&text).map_err(|e| format!("that is not a trash item: {e}"))
+            }) {
+                Ok(item) => item,
+                Err(e) => return failed(e),
+            };
+        match lost_commander_core::trash::restore(&item) {
+            Ok(()) => {
+                if let Some(book) = account() {
+                    book.record(
+                        journal::Event::new(journal::Kind::Move, &item.original)
+                            .note("restored from the trash"),
+                    );
+                }
+                out("{\"ok\":true}".to_string())
+            }
+            Err(e) => failed(e),
+        }
+    })
+}
+
+/// Remove one trashed thing for good.
+///
+/// # Safety
+/// `item_json` follows the rules of every string in this ABI.
+#[no_mangle]
+pub unsafe extern "C" fn rcmd_trash_purge(item_json: *const c_char) -> *mut c_char {
+    guarded(|| {
+        let item: lost_commander_core::trash::TrashedItem =
+            match borrowed(item_json).and_then(|text| {
+                serde_json::from_str(&text).map_err(|e| format!("that is not a trash item: {e}"))
+            }) {
+                Ok(item) => item,
+                Err(e) => return failed(e),
+            };
+        match lost_commander_core::trash::purge(&item) {
+            Ok(()) => out("{\"ok\":true}".to_string()),
+            Err(e) => failed(e),
+        }
+    })
+}
+
+// ---- saved windows ---------------------------------------------------------
+
+/// Where the session lives, unless `RCMD_SESSION_PATH` says otherwise.
+fn session_path() -> Option<PathBuf> {
+    match std::env::var_os("RCMD_SESSION_PATH") {
+        Some(path) if !path.is_empty() => Some(PathBuf::from(path)),
+        _ => lost_commander_core::session::Session::path(),
+    }
+}
+
+/// The windows saved last time - the same file the other front-ends write,
+/// so a session saved in one opens in any.
+#[no_mangle]
+pub extern "C" fn rcmd_session_read() -> *mut c_char {
+    guarded(|| {
+        let session = session_path()
+            .and_then(|path| lost_commander_core::session::Session::load_from(&path).ok())
+            .unwrap_or_default();
+        replied(&session)
+    })
+}
+
+/// Write the windows down, where the next start will find them.
+///
+/// # Safety
+/// `session_json` follows the rules of every string in this ABI.
+#[no_mangle]
+pub unsafe extern "C" fn rcmd_session_save(session_json: *const c_char) -> *mut c_char {
+    guarded(|| {
+        let session: lost_commander_core::session::Session =
+            match borrowed(session_json).and_then(|text| {
+                serde_json::from_str(&text).map_err(|e| format!("that is not a session: {e}"))
+            }) {
+                Ok(session) => session,
+                Err(e) => return failed(e),
+            };
+        let Some(path) = session_path() else {
+            return failed("no configuration directory on this platform");
+        };
+        match session.save_to(&path) {
+            Ok(()) => out("{\"ok\":true}".to_string()),
+            Err(e) => failed(e),
+        }
+    })
+}
+
+// ---- the command line's engine half ----------------------------------------
+
+/// `%f`, `%s` and `%d` expanded against what the panels show, each name
+/// quoted the way this platform's shell wants. `marked_json` is a JSON array
+/// of names.
+///
+/// # Safety
+/// Every pointer follows the rules of every string in this ABI.
+#[no_mangle]
+pub unsafe extern "C" fn rcmd_expand_command(
+    line: *const c_char,
+    file: *const c_char,
+    marked_json: *const c_char,
+    other_dir: *const c_char,
+) -> *mut c_char {
+    guarded(|| {
+        let line = match borrowed(line) {
+            Ok(text) => text,
+            Err(e) => return failed(e),
+        };
+        let file = borrowed(file).ok().filter(|name| !name.is_empty());
+        let marked: Vec<String> = borrowed(marked_json)
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or_default();
+        let other = PathBuf::from(borrowed(other_dir).unwrap_or_default());
+        let expanded = lost_commander_core::shell::expand_placeholders(
+            &line,
+            file.as_deref(),
+            &marked,
+            &other,
+            lost_commander_core::mount::Platform::current(),
+        );
+        out(format!("{{\"expanded\":{}}}", json_string(&expanded)))
+    })
+}
+
+/// Whether a line contains something expansion would change - the hint for
+/// showing a preview only when there is one to show.
+///
+/// # Safety
+/// `line` follows the rules of every string in this ABI.
+#[no_mangle]
+pub unsafe extern "C" fn rcmd_has_placeholders(line: *const c_char) -> *mut c_char {
+    guarded(|| {
+        let line = borrowed(line).unwrap_or_default();
+        out(format!(
+            "{{\"placeholders\":{}}}",
+            lost_commander_core::shell::has_placeholders(&line)
+        ))
+    })
+}
+
+#[derive(Serialize)]
+struct ShellChoice {
+    program: String,
+    journaled: bool,
+}
+
+/// The shells on this machine, each saying whether its commands can be
+/// recorded - pwsh and WSL included where they exist.
+#[no_mangle]
+pub extern "C" fn rcmd_shells() -> *mut c_char {
+    guarded(|| {
+        let shells: Vec<ShellChoice> = lost_commander_core::shell::discover_shells()
+            .into_iter()
+            .map(|program| ShellChoice {
+                journaled: lost_commander_core::shellhook::journals(&program),
+                program,
+            })
+            .collect();
+        replied(&shells)
+    })
+}
+
+/// The `cd` that moves one shell to one directory, in that shell's own
+/// language - `cmd` gets `/d` and quotes, POSIX gets single quotes, and WSL
+/// gets `/mnt/c` spelling, because a cd with the Windows spelling would fail
+/// on every single directory.
+///
+/// # Safety
+/// `program` and `path` follow the rules of every string in this ABI.
+#[no_mangle]
+pub unsafe extern "C" fn rcmd_cd_command(
+    program: *const c_char,
+    path: *const c_char,
+) -> *mut c_char {
+    guarded(|| {
+        let program = match borrowed(program) {
+            Ok(text) => text,
+            Err(e) => return failed(e),
+        };
+        let path = match borrowed(path) {
+            Ok(text) => PathBuf::from(text),
+            Err(e) => return failed(e),
+        };
+        let line = lost_commander_core::shell::cd_command(&program, &path);
+        out(format!("{{\"line\":{}}}", json_string(&line)))
+    })
 }
 
 #[cfg(test)]
@@ -5103,6 +5607,232 @@ mod tests {
     /// recorded. Without this they would write what they did into the account
     /// of whoever ran the tests - a handful of copies of temp files, appearing
     /// among a person's own records as though they had done them.
+    #[test]
+    fn history_comes_back_here_first_and_narrows() {
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("RCMD_JOURNAL_DIR", dir.path());
+        let book = journal::Journal::at(dir.path(), journal::Keep::default());
+        let here = dir.path().join("project");
+        book.record(journal::Event::new(journal::Kind::Command, &here).note("cargo test -p core"));
+        book.record(journal::Event::new(journal::Kind::Command, "/elsewhere").note("make"));
+
+        let here_c = c(&here.display().to_string());
+        let all = c("");
+        let reply = reply_of(unsafe { rcmd_history(here_c.as_ptr(), 7, all.as_ptr(), 0) });
+        let lines: Vec<&str> = reply
+            .as_array()
+            .expect("a list")
+            .iter()
+            .map(|row| row["line"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            lines,
+            vec!["cargo test -p core", "make"],
+            "here first, then the rest"
+        );
+
+        // Narrowed by query, and by here_only.
+        let query = c("cargo");
+        let reply = reply_of(unsafe { rcmd_history(here_c.as_ptr(), 7, query.as_ptr(), 0) });
+        assert_eq!(reply.as_array().unwrap().len(), 1);
+        let reply = reply_of(unsafe { rcmd_history(here_c.as_ptr(), 7, all.as_ptr(), 1) });
+        assert_eq!(reply.as_array().unwrap().len(), 1, "only this directory's");
+        journal_somewhere_harmless_again();
+    }
+
+    #[test]
+    fn the_generation_moves_when_this_process_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("RCMD_JOURNAL_DIR", dir.path());
+        let before = reply_of(rcmd_journal_generation())["generation"]
+            .as_u64()
+            .expect("a number");
+
+        // Through the shared handle, which is the point of having one: a
+        // write through any entry point is seen by every read.
+        let book = account().expect("a journal");
+        book.record(journal::Event::new(journal::Kind::Command, "/x").note("true"));
+
+        let after = reply_of(rcmd_journal_generation())["generation"]
+            .as_u64()
+            .unwrap();
+        assert!(after > before, "the account moved, so the number did");
+        journal_somewhere_harmless_again();
+    }
+
+    #[test]
+    fn folder_history_says_what_happened_here() {
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("RCMD_JOURNAL_DIR", dir.path());
+        let here = dir.path().join("docs");
+        let book = journal::Journal::at(dir.path(), journal::Keep::default());
+        book.record(
+            journal::Event::new(journal::Kind::Copy, here.join("a.txt")).to("/backup/a.txt"),
+        );
+
+        let here_c = c(&here.display().to_string());
+        let reply = reply_of(unsafe { rcmd_folder_history(here_c.as_ptr(), 7) });
+        let rows = reply.as_array().expect("rows");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["name"], "a.txt");
+        assert_eq!(rows[0]["kind"], "Copied");
+        journal_somewhere_harmless_again();
+    }
+
+    #[test]
+    fn pins_toggle_through_the_boundary_and_land_in_their_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("pinned.toml");
+        std::env::set_var("RCMD_PINNED_PATH", &file);
+        let cwd = c("/project");
+        let line = c("cargo test %f");
+
+        let reply = reply_of(unsafe { rcmd_pin_toggle(cwd.as_ptr(), line.as_ptr()) });
+        assert_eq!(reply["pinned"], true);
+        let reply = reply_of(unsafe { rcmd_pins(cwd.as_ptr()) });
+        assert_eq!(
+            reply.as_array().unwrap()[0],
+            "cargo test %f",
+            "as typed - the template survives"
+        );
+        assert!(file.exists(), "written as it happens");
+
+        let reply = reply_of(unsafe { rcmd_pin_toggle(cwd.as_ptr(), line.as_ptr()) });
+        assert_eq!(
+            reply["pinned"], false,
+            "said twice, it ends where it started"
+        );
+        std::env::remove_var("RCMD_PINNED_PATH");
+    }
+
+    #[test]
+    fn an_undo_plan_crosses_whole_and_comes_back_to_be_applied() {
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("RCMD_JOURNAL_DIR", dir.path());
+        let was = dir.path().join("a.txt");
+        let now_at = dir.path().join("moved.txt");
+        std::fs::write(&now_at, "x").unwrap();
+        let book = journal::Journal::at(dir.path(), journal::Keep::default());
+        book.record(journal::Event::new(journal::Kind::Move, &was).to(&now_at));
+
+        let reply = reply_of(rcmd_undo_plan());
+        assert_eq!(reply["nothing"], false);
+        let plan = &reply["plan"];
+        assert_eq!(plan["steps"][0]["step"], "move_back");
+
+        // The same JSON back, verbatim - what was approved is what runs.
+        let plan_text = c(&plan.to_string());
+        let failures = reply_of(unsafe { rcmd_undo_apply(plan_text.as_ptr()) });
+        assert!(failures.as_array().unwrap().is_empty());
+        assert!(was.exists() && !now_at.exists(), "back where it started");
+        journal_somewhere_harmless_again();
+    }
+
+    #[test]
+    fn garbage_handed_to_the_trash_is_an_error_not_a_panic() {
+        let junk = c("this is not json");
+        let reply = reply_of(unsafe { rcmd_trash_restore(junk.as_ptr()) });
+        assert!(reply["error"]
+            .as_str()
+            .unwrap()
+            .contains("not a trash item"));
+        let reply = reply_of(unsafe { rcmd_trash_purge(junk.as_ptr()) });
+        assert!(reply["error"].is_string());
+    }
+
+    #[test]
+    fn a_session_round_trips_through_the_boundary() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("workspaces.toml");
+        std::env::set_var("RCMD_SESSION_PATH", &file);
+
+        let session = serde_json::json!({
+            "at": 0,
+            "workspaces": [{
+                "name": "build",
+                "left": "C:\\src",
+                "right": "C:\\backup",
+                "show_right": true,
+                "left_view": "tree",
+                "right_view": "list",
+                "half": "both",
+                "active": "left",
+                "split": 0.4,
+                "synced": true,
+                "shell": "C:\\src",
+                "shell_program": "pwsh"
+            }]
+        });
+        let text = c(&session.to_string());
+        let reply = reply_of(unsafe { rcmd_session_save(text.as_ptr()) });
+        assert_eq!(reply["ok"], true);
+
+        let read = reply_of(rcmd_session_read());
+        assert_eq!(read["workspaces"][0]["name"], "build");
+        assert_eq!(
+            read["workspaces"][0]["shell_program"], "pwsh",
+            "restored means the kind too"
+        );
+        std::env::remove_var("RCMD_SESSION_PATH");
+    }
+
+    #[test]
+    fn placeholders_expand_with_the_engine_s_own_quoting() {
+        let line = c("tar cf out.tar %s && cp %f %d");
+        let file = c("cursor.rs");
+        let marked = c("[\"a name.txt\",\"plain.rs\"]");
+        let other = c("/backup");
+        let reply = reply_of(unsafe {
+            rcmd_expand_command(
+                line.as_ptr(),
+                file.as_ptr(),
+                marked.as_ptr(),
+                other.as_ptr(),
+            )
+        });
+        let expanded = reply["expanded"].as_str().unwrap();
+        assert!(expanded.contains("plain.rs"), "{expanded}");
+        assert!(!expanded.contains("%s"), "{expanded}");
+
+        let with = c("echo %f");
+        let without = c("echo 100%x");
+        assert_eq!(
+            reply_of(unsafe { rcmd_has_placeholders(with.as_ptr()) })["placeholders"],
+            true
+        );
+        assert_eq!(
+            reply_of(unsafe { rcmd_has_placeholders(without.as_ptr()) })["placeholders"],
+            false
+        );
+    }
+
+    #[test]
+    fn the_shells_are_listed_with_their_honesty_flag() {
+        let reply = reply_of(rcmd_shells());
+        let shells = reply.as_array().expect("a list");
+        assert!(!shells.is_empty(), "some shell exists everywhere");
+        for shell in shells {
+            assert!(shell["program"].is_string());
+            assert!(shell["journaled"].is_boolean());
+        }
+    }
+
+    #[test]
+    fn a_cd_for_wsl_speaks_wsl_through_the_boundary() {
+        let program = c("wsl.exe");
+        let path = c("C:\\src\\x");
+        let reply = reply_of(unsafe { rcmd_cd_command(program.as_ptr(), path.as_ptr()) });
+        assert_eq!(reply["line"], "cd '/mnt/c/src/x'");
+    }
+
+    /// Put the shared journal back somewhere harmless for whatever test the
+    /// harness runs next on this thread.
+    fn journal_somewhere_harmless_again() {
+        let dir = std::env::temp_dir().join("rcmd-ffi-test-journal");
+        let _ = std::fs::create_dir_all(&dir);
+        std::env::set_var("RCMD_JOURNAL_DIR", &dir);
+    }
+
     fn journal_somewhere_harmless() {
         use std::sync::Once;
         static ONCE: Once = Once::new();

@@ -9,6 +9,17 @@ Notable changes, newest first. Versions follow [semantic versioning]; until
 
 ### Added
 
+- **The C ABI caught up with the engine.** Ten new entry points expose what
+  the engine grew this release: command history (here-first, narrowed),
+  the account's generation counter, folder history, pins, the undo plan and
+  its application - the same JSON crosses both ways, so what was approved
+  is what runs - the trash (list, restore, purge), saved workspaces (the
+  same file every front-end writes, so a session saved in one opens in
+  any), placeholder expansion with the engine's own quoting, shell
+  discovery with the recorded-or-not flag, and per-shell `cd` lines
+  including the WSL spelling. Every journal entry point now shares one
+  handle per directory, so a job's records are in the memory the next
+  history read sees and the generation actually moves.
 - **Drag and drop in the graphical view.** Rows drag between the panes as
   a copy - the safe verb, with the destination visibly under the pointer -
   and Shift at release makes it a move, as on every desktop. A marked row
