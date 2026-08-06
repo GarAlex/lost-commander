@@ -9,6 +9,11 @@ Notable changes, newest first. Versions follow [semantic versioning]; until
 
 ### Added
 
+- **The graphical window carries the project icon.** The same two-panels
+  design the Linux desktop entry points at, decoded from a PNG shipped in
+  the crate and handed to the viewport - so the taskbar shows lost-commander
+  rather than a generic window.
+
 - **The C ABI caught up with the engine.** Ten new entry points expose what
   the engine grew this release: command history (here-first, narrowed),
   the account's generation counter, folder history, pins, the undo plan and

@@ -14,6 +14,27 @@ use lost_commander_egui::GuiApp;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// The window's own icon: the packaging design, rendered small.
+///
+/// The same two panels the Linux desktop file points at, so the program is
+/// one identity everywhere it appears. Decoded at start rather than shipped
+/// as raw pixels because the `image` crate is already here for the viewer;
+/// a failed decode is the platform default icon, not a refused start.
+fn window_icon() -> eframe::egui::IconData {
+    match image::load_from_memory(include_bytes!("../assets/icon-128.png")) {
+        Ok(decoded) => {
+            let rgba = decoded.into_rgba8();
+            let (width, height) = rgba.dimensions();
+            eframe::egui::IconData {
+                rgba: rgba.into_raw(),
+                width,
+                height,
+            }
+        }
+        Err(_) => eframe::egui::IconData::default(),
+    }
+}
+
 fn main() -> eframe::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
@@ -97,7 +118,8 @@ USAGE:
         viewport: eframe::egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 780.0])
             .with_min_inner_size([720.0, 460.0])
-            .with_title("lost-commander"),
+            .with_title("lost-commander")
+            .with_icon(window_icon()),
         ..Default::default()
     };
 
