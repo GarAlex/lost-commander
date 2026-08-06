@@ -1649,6 +1649,25 @@ pub unsafe extern "C" fn rcmd_term_scroll(
 ///
 /// # Safety
 /// `term` must be a live handle.
+/// Wipe the screen and the scrollback, and ask for a fresh prompt.
+///
+/// The wipe is fed to the emulator; the bare Enter afterwards brings the
+/// prompt back, and the hook records it as an empty command, which every
+/// history view filters out.
+///
+/// # Safety
+/// `term` must be a live handle from `rcmd_term_open`.
+#[no_mangle]
+pub unsafe extern "C" fn rcmd_term_clean(term: *mut RcmdTerm) -> *mut c_char {
+    guarded(|| {
+        let Some(term) = (unsafe { term.as_mut() }) else {
+            return failed("that terminal is gone".to_string());
+        };
+        term.session.clean_screen();
+        out("{\"ok\":true}".to_string())
+    })
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn rcmd_term_resize(
     term: *mut RcmdTerm,
