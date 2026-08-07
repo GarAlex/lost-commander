@@ -1582,37 +1582,34 @@ pub unsafe extern "C" fn rcmd_term_journal(
             // Nowhere to write is not an error worth stopping a shell over.
             return out("{\"ok\":false}".to_string());
         };
-        book.record(lost_commander_core::journal::Event {
-            at: std::time::SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|since| since.as_secs() as i64)
-                .unwrap_or_default(),
-            kind: lost_commander_core::journal::Kind::Command,
-            // The command line is what was acted on, which is what the
-            // account's first column shows for every other kind too.
-            path: ran.line,
-            to: None,
-            // The exit code and where it ran. Both go in the note rather
-            // than `to`, which means "where it ended up" and is about files
-            // being moved - a command's directory is not that. Adding a field
-            // to the record would change what is already written on disk for
-            // a line the note can carry perfectly well.
-            note: match (ran.code, ran.cwd.as_deref()) {
-                (0, None) => String::new(),
-                (0, Some(cwd)) => format!("in {cwd}"),
-                (code, None) => format!("exit {code}"),
-                (code, Some(cwd)) => format!("exit {code}, in {cwd}"),
-            },
-            // A non-zero exit is not a failure of *this* program: the command
-            // ran, and said no. The note carries the code; `failed` is for
-            // something that did not happen at all.
-            failed: None,
-            group: None,
-            shell: Some(lost_commander_core::shell::program_name(
+        // The shape every other writer uses, copied rather than paraphrased:
+        // the *path* is the directory the command ran in and the *note* is
+        // the line itself. This entry point had them the other way round -
+        // path carried the command, note carried "in <dir>" - which read
+        // plausibly in the raw file and wrongly everywhere else: the history
+        // column shows the note, so it showed locations; its here-filter
+        // compares the path, so it compared against command text and matched
+        // nothing. One swapped pair, two symptoms, and the engine's own
+        // readers (`commands_before`, `directory_of`, the TUI) were the
+        // specification all along.
+        let cwd = ran
+            .cwd
+            .unwrap_or_else(|| term.session.cwd.display().to_string());
+        book.record(
+            lost_commander_core::journal::Event::new(
+                lost_commander_core::journal::Kind::Command,
+                &cwd,
+            )
+            .note(ran.line)
+            .by(lost_commander_core::shell::program_name(
                 &term.session.program,
-            )),
-            ms: Some(ran.ms),
-        });
+            ))
+            .lasting(ran.ms)
+            // A non-zero exit marks the record failed with the code as the
+            // reason, exactly as the egui front-end files its own - one
+            // account, one shape, whoever wrote the entry.
+            .failed_if(ran.code != 0, format!("exit {}", ran.code)),
+        );
         out("{\"ok\":true}".to_string())
     })
 }
@@ -6244,23 +6241,20 @@ mod tests {
         let page =
             reply_of(unsafe { rcmd_journal_read(shown.as_ptr(), day.as_ptr(), filter.as_ptr()) });
         let lines = page["lines"].as_array().expect("lines");
+        // The note carries the command and the path carries the directory -
+        // the same shape every other writer produces, which is what lets
+        // `commands_before` and the history column read entries from any
+        // front-end without knowing who wrote them.
         let line = lines
             .iter()
-            .find(|l| l["text"] == "cargo build")
+            .find(|l| l["note"] == "cargo build")
             .unwrap_or_else(|| panic!("the command should be in the account: {lines:?}"));
 
         assert_eq!(line["kind"], "Command");
-        // A non-zero exit is not a failure of *this* program - the command
-        // ran, and said no - so it is a note, not a `failed`.
-        assert!(line["failed"].is_null(), "{line:?}");
-        assert!(
-            line["note"].as_str().unwrap().contains("exit 1"),
-            "{line:?}"
-        );
-        assert!(
-            line["note"].as_str().unwrap().contains(r"C:\src"),
-            "{line:?}"
-        );
+        assert_eq!(line["text"], "C:\\src", "the path is where it ran");
+        // And a non-zero exit marks it failed with the code as the reason,
+        // as the egui front-end files its own.
+        assert_eq!(line["failed"], "exit 1", "{line:?}");
         assert_eq!(line["took_ms"], 1234);
 
         unsafe { rcmd_term_free(term) };
