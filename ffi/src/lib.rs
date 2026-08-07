@@ -3343,6 +3343,36 @@ pub unsafe extern "C" fn rcmd_tab_titles(paths_json: *const c_char) -> *mut c_ch
     })
 }
 
+/// Where the bookmarks live: the real file, unless `RCMD_BOOKMARKS_PATH`
+/// says otherwise - the same escape hatch the settings and the pins have,
+/// for the same reason: a test must never write the sidebar of whoever
+/// ran it.
+fn bookmarks_path() -> Option<PathBuf> {
+    match std::env::var_os("RCMD_BOOKMARKS_PATH") {
+        Some(path) if !path.is_empty() => Some(PathBuf::from(path)),
+        _ => netloc::Bookmarks::config_path(),
+    }
+}
+
+/// Where the recent places live, unless `RCMD_RECENT_PATH` says otherwise.
+fn recent_places_path() -> Option<PathBuf> {
+    match std::env::var_os("RCMD_RECENT_PATH") {
+        Some(path) if !path.is_empty() => Some(PathBuf::from(path)),
+        _ => netloc::Bookmarks::recent_path(),
+    }
+}
+
+/// Both lists, read from wherever the paths point right now.
+fn bookmarks_now() -> netloc::Bookmarks {
+    let mut saved = bookmarks_path()
+        .and_then(|path| netloc::Bookmarks::load_from(&path).ok())
+        .unwrap_or_default();
+    if let Some(path) = recent_places_path() {
+        saved.load_recent_from(&path);
+    }
+    saved
+}
+
 /// The pinned places and the recently visited ones.
 ///
 /// Returns `{"pinned":[...],"recent":[...]}`. Never an error: an unreadable or
@@ -3358,7 +3388,7 @@ pub unsafe extern "C" fn rcmd_tab_titles(paths_json: *const c_char) -> *mut c_ch
 #[no_mangle]
 pub extern "C" fn rcmd_places() -> *mut c_char {
     guarded(|| {
-        let saved = netloc::Bookmarks::load();
+        let saved = bookmarks_now();
         replied(&Places {
             pinned: saved.locations.iter().map(Place::from).collect(),
             recent: saved.recent.iter().map(Place::from).collect(),
@@ -3385,22 +3415,32 @@ pub unsafe extern "C" fn rcmd_place_add(path: *const c_char, pinned: u8) -> *mut
             return failed("no place to remember");
         }
 
-        let mut saved = netloc::Bookmarks::load();
+        let mut saved = bookmarks_now();
         let place = netloc::Location::local(&path);
         // `add` replaces by name, so pinning the same folder twice updates it
         // rather than making a second entry; `push_recent` moves a re-visited
         // place to the top for the same reason.
+        //
+        // Each list is saved to the file it lives in. The recent list moved
+        // out to `recent.toml` and `save_to` skips it by design - saving
+        // `bookmarks.toml` here recorded a visit into a file that does not
+        // hold visits, which is how every sidebar drew RECENT empty.
+        //
+        // Said out loud if it could not be written. A pin that silently
+        // failed to persist would look pinned until the program restarted.
         if pinned != 0 {
             saved.add(place);
+            if let Some(file) = bookmarks_path() {
+                if let Err(e) = saved.save_to(&file) {
+                    return failed(e);
+                }
+            }
         } else {
             saved.push_recent(place);
-        }
-
-        // Said out loud if it could not be written. A pin that silently failed
-        // to persist would look pinned until the program was restarted.
-        if let Some(file) = netloc::Bookmarks::config_path() {
-            if let Err(e) = saved.save_to(&file) {
-                return failed(e);
+            if let Some(file) = recent_places_path() {
+                if let Err(e) = saved.save_recent_to(&file) {
+                    return failed(e);
+                }
             }
         }
         replied(&Places {
@@ -3426,7 +3466,7 @@ pub unsafe extern "C" fn rcmd_place_remove(name: *const c_char, pinned: u8) -> *
             Err(e) => return failed(e),
         };
 
-        let mut saved = netloc::Bookmarks::load();
+        let mut saved = bookmarks_now();
         let list = if pinned != 0 {
             &mut saved.locations
         } else {
@@ -3438,8 +3478,17 @@ pub unsafe extern "C" fn rcmd_place_remove(name: *const c_char, pinned: u8) -> *
             return failed(format!("{name} is not there"));
         }
 
-        if let Some(file) = netloc::Bookmarks::config_path() {
-            if let Err(e) = saved.save_to(&file) {
+        // The file the changed list lives in: `save_to` does not carry the
+        // recent list, so forgetting a recent place must write `recent.toml`
+        // or the row comes back on the next read.
+        if pinned != 0 {
+            if let Some(file) = bookmarks_path() {
+                if let Err(e) = saved.save_to(&file) {
+                    return failed(e);
+                }
+            }
+        } else if let Some(file) = recent_places_path() {
+            if let Err(e) = saved.save_recent_to(&file) {
                 return failed(e);
             }
         }
@@ -5719,6 +5768,41 @@ mod tests {
             "said twice, it ends where it started"
         );
         std::env::remove_var("RCMD_PINNED_PATH");
+    }
+
+    #[test]
+    fn a_visit_lands_in_its_own_file_and_survives_the_round_trip() {
+        // The regression this guards: the recent list moved out of
+        // `bookmarks.toml` into `recent.toml`, and `rcmd_place_add` kept
+        // saving the old file - which skips the recent list by design. Every
+        // visit was recorded into a file that does not hold visits, read
+        // back as nothing, and the sidebar drew RECENT empty forever.
+        let dir = tempfile::tempdir().unwrap();
+        let marks = dir.path().join("bookmarks.toml");
+        let recents = dir.path().join("recent.toml");
+        std::env::set_var("RCMD_BOOKMARKS_PATH", &marks);
+        std::env::set_var("RCMD_RECENT_PATH", &recents);
+
+        let visited = c(r"C:\src\somewhere");
+        let reply = reply_of(unsafe { rcmd_place_add(visited.as_ptr(), 0) });
+        assert!(reply["error"].is_null(), "{reply:?}");
+        assert!(recents.exists(), "a visit is written where visits live");
+
+        // Read back fresh from disk, which is what every sidebar does.
+        let reply = reply_of(rcmd_places());
+        let recent = reply["recent"].as_array().unwrap();
+        assert_eq!(recent.len(), 1, "{reply:?}");
+        assert_eq!(recent[0]["path"], r"C:\src\somewhere");
+
+        // And forgetting it writes the same file, or the row comes back.
+        let name = c("somewhere");
+        let reply = reply_of(unsafe { rcmd_place_remove(name.as_ptr(), 0) });
+        assert!(reply["error"].is_null(), "{reply:?}");
+        let reply = reply_of(rcmd_places());
+        assert_eq!(reply["recent"].as_array().unwrap().len(), 0, "{reply:?}");
+
+        std::env::remove_var("RCMD_BOOKMARKS_PATH");
+        std::env::remove_var("RCMD_RECENT_PATH");
     }
 
     #[test]
