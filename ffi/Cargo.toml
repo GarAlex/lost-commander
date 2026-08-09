@@ -18,7 +18,7 @@ categories = ["api-bindings", "filesystem"]
 name = "lost_commander_ffi"
 # cdylib for the DLL a native front-end loads; rlib so the tests below can call
 # the same functions that front-end will.
-crate-type = ["cdylib", "rlib"]
+crate-type = ["cdylib", "rlib", "staticlib"]
 
 [dependencies]
 # The engine, and nothing that draws. This used to have to say
