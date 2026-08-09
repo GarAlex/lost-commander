@@ -71,11 +71,26 @@ fn label_for(path: &Path) -> String {
 ///
 /// Unreadable means no marker rather than a marker onto an error: a folder
 /// that cannot be read has nothing to show whatever is in it.
+///
+/// The look is bounded. "Stop at the first thing found" has no ceiling when
+/// a directory holds a hundred thousand flat files and no subdirectory: one
+/// arrow costs a full scan, and expanding a level pays it per child - which
+/// is how revealing a path beside a build-cache measurably stalled for the
+/// length of several such scans. Past the cap the answer is "openable"
+/// without looking further: has_children exists to paint an arrow, and the
+/// worst that lie costs is an arrow that expands onto nothing - after which
+/// the expand itself marks the node a leaf, and the arrow goes.
 fn has_children(path: &Path, show_hidden: bool, show_files: bool) -> bool {
+    const LOOKED_ENOUGH: usize = 5_000;
     let Ok(entries) = fs::read_dir(path) else {
         return false;
     };
+    let mut looked = 0;
     for entry in entries.flatten() {
+        looked += 1;
+        if looked > LOOKED_ENOUGH {
+            return true;
+        }
         let name = entry.file_name().to_string_lossy().to_string();
         let Ok(metadata) = entry.path().symlink_metadata() else {
             continue;
