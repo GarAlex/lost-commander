@@ -1204,6 +1204,106 @@ pub unsafe extern "C" fn rcmd_is_markdown(name: *const c_char) -> u8 {
     u8::from(matches!(looks, Ok(true)))
 }
 
+// ---- reading a file by line, without holding it -------------------------
+
+/// A line index over one file. The front-end only ever holds the pointer.
+pub struct RcmdText {
+    index: lost_commander_core::textindex::LineIndex,
+}
+
+/// Index a text file for windowed reading.
+///
+/// This is [`textindex`](lost_commander_core::textindex) crossing the
+/// boundary: a viewer that caps at a few megabytes is a viewer that cannot
+/// open the log you actually wanted to look at, and the way out is not a
+/// bigger cap - it is to stop keeping the file at all. The index walks the
+/// file once and keeps every 256th line's offset; any window of lines can
+/// then be fetched on demand. A 65 MB, million-line log costs about 32 KB
+/// here and opens to its last line.
+///
+/// Building reads the whole file once, so the front-end calls this off its
+/// interface thread. Returns null when the file cannot be opened. The handle
+/// must be given to [`rcmd_text_free`] exactly once.
+///
+/// # Safety
+/// `path` must be a valid NUL-terminated UTF-8 string.
+#[no_mangle]
+pub unsafe extern "C" fn rcmd_text_open(path: *const c_char) -> *mut RcmdText {
+    let opened = catch_unwind(AssertUnwindSafe(|| {
+        let path = borrowed(path).ok()?;
+        lost_commander_core::textindex::LineIndex::build(Path::new(&path))
+            .ok()
+            .map(|index| RcmdText { index })
+    }));
+    match opened {
+        Ok(Some(text)) => Box::into_raw(Box::new(text)),
+        _ => std::ptr::null_mut(),
+    }
+}
+
+/// What the index knows about the file: `{"lines":...,"bytes":...,
+/// "partial":...}`. `partial` is true when the scan stopped at its safety
+/// limit rather than the end of the file - the viewer should say so rather
+/// than present the cut as the whole.
+///
+/// # Safety
+/// `text` must be a live handle from [`rcmd_text_open`].
+#[no_mangle]
+pub unsafe extern "C" fn rcmd_text_lines(text: *mut RcmdText) -> *mut c_char {
+    guarded(|| {
+        let Some(text) = (unsafe { text.as_ref() }) else {
+            return failed("that file is gone");
+        };
+        out(format!(
+            "{{\"lines\":{},\"bytes\":{},\"partial\":{}}}",
+            text.index.lines(),
+            text.index.bytes(),
+            text.index.partial()
+        ))
+    })
+}
+
+/// A window of lines, from line `from`, at most `count` of them:
+/// `{"lines":[...]}`. Lines past the end simply are not there, which is how
+/// the last window of a file looks.
+///
+/// # Safety
+/// `text` must be a live handle from [`rcmd_text_open`].
+#[no_mangle]
+pub unsafe extern "C" fn rcmd_text_window(
+    text: *mut RcmdText,
+    from: usize,
+    count: usize,
+) -> *mut c_char {
+    guarded(|| {
+        let Some(text) = (unsafe { text.as_ref() }) else {
+            return failed("that file is gone");
+        };
+        #[derive(Serialize)]
+        struct Window {
+            lines: Vec<String>,
+        }
+        match text.index.read(from, count.min(10_000)) {
+            Ok(lines) => replied(&Window { lines }),
+            Err(e) => failed(e),
+        }
+    })
+}
+
+/// Finish with an index.
+///
+/// # Safety
+/// `text` must be a handle from [`rcmd_text_open`], freed exactly once.
+#[no_mangle]
+pub unsafe extern "C" fn rcmd_text_free(text: *mut RcmdText) {
+    if text.is_null() {
+        return;
+    }
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        drop(unsafe { Box::from_raw(text) });
+    }));
+}
+
 // ---- the terminal -------------------------------------------------------
 
 /// A running shell on a pty, and how much of it the front-end has seen.
@@ -4650,6 +4750,38 @@ mod tests {
         assert_eq!(
             reply_of(unsafe { rcmd_is_binary(b.as_ptr()) })["binary"],
             true
+        );
+    }
+
+    #[test]
+    fn a_line_window_arrives_without_the_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("log.txt");
+        let body: String = (0..1000).map(|n| format!("line {n}\n")).collect();
+        std::fs::write(&file, body).expect("write");
+
+        let path = c(&file.display().to_string());
+        let text = unsafe { rcmd_text_open(path.as_ptr()) };
+        assert!(!text.is_null(), "a readable file indexes");
+
+        let facts = reply_of(unsafe { rcmd_text_lines(text) });
+        assert_eq!(facts["lines"], 1000);
+        assert_eq!(facts["partial"], false);
+
+        let window = reply_of(unsafe { rcmd_text_window(text, 500, 2) });
+        assert_eq!(window["lines"][0], "line 500");
+        assert_eq!(window["lines"][1], "line 501");
+
+        // The last window is short, not an error.
+        let tail = reply_of(unsafe { rcmd_text_window(text, 998, 10) });
+        assert_eq!(tail["lines"].as_array().expect("lines").len(), 2);
+
+        unsafe { rcmd_text_free(text) };
+
+        let missing = c("/no/such/file");
+        assert!(
+            unsafe { rcmd_text_open(missing.as_ptr()) }.is_null(),
+            "an unreadable file is a null, not a handle"
         );
     }
 
