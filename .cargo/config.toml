@@ -1,0 +1,17 @@
+# The C runtime is linked in, not looked up.
+#
+# Rust's MSVC targets import VCRUNTIME140.dll by default, which lives in
+# the Visual C++ redistributable - a thing developers all have and clean
+# Windows machines often do not. Store certification found it the hard
+# way: "the product crashes at launch" on a test laptop, because the
+# front-end could not load an engine whose CRT was missing.
+#
+# Static is safe here because nothing allocated on one side of the C ABI
+# is freed on the other: every string the engine returns goes back to it
+# through rcmd_string_free. If that ever stops being true, this stops
+# being safe.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
