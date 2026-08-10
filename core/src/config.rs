@@ -100,6 +100,37 @@ pub struct Settings {
 }
 
 impl Settings {
+    /// The custom scheme as plain colours, role to `#rrggbb`.
+    ///
+    /// The palette is held as a table this crate never reads; these two
+    /// turn it into something a front-end can be handed without the ABI
+    /// crate having to know what a `toml::Value` is. Only string entries
+    /// come out: anything else in there was written by a front-end this one
+    /// is not, and is left exactly where it was.
+    pub fn palette_colours(&self) -> std::collections::BTreeMap<String, String> {
+        let Some(table) = self.palette.as_ref().and_then(|value| value.as_table()) else {
+            return Default::default();
+        };
+        table
+            .iter()
+            .filter_map(|(role, value)| Some((role.clone(), value.as_str()?.to_string())))
+            .collect()
+    }
+
+    /// Replace the custom scheme. An empty map means there is no longer one.
+    pub fn set_palette_colours(&mut self, colours: std::collections::BTreeMap<String, String>) {
+        self.palette = match colours.is_empty() {
+            true => None,
+            false => Some(toml::Value::Table(
+                colours
+                    .into_iter()
+                    .map(|(role, colour)| (role, toml::Value::String(colour)))
+                    .collect(),
+            )),
+        };
+    }
+
+
     /// How long the account is kept for.
     pub fn keep(&self) -> crate::journal::Keep {
         self.journal_days
