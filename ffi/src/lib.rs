@@ -1017,6 +1017,15 @@ struct SettingsDto {
     pane_split: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     shell_height: Option<f32>,
+    /// The tree half's share of a pane, and the right column's width. Both
+    /// were in the settings and neither crossed, so a front-end wanting to
+    /// remember them had to put them somewhere that was not for them - and
+    /// one did, in `pane_split`, where a width of 210 points came back as
+    /// the fraction 0.9 and the column quietly stopped being resizable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tree_split: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    column_width: Option<f32>,
 }
 
 /// The preferences a front-end starts from.
@@ -1034,6 +1043,8 @@ pub extern "C" fn rcmd_settings_read() -> *mut c_char {
             theme: settings.theme,
             pane_split: settings.pane_split,
             shell_height: settings.shell_height,
+            tree_split: settings.tree_split,
+            column_width: settings.column_width,
         })
     })
 }
@@ -1075,6 +1086,12 @@ pub unsafe extern "C" fn rcmd_settings_save(json: *const c_char) -> *mut c_char 
         }
         if let Some(height) = asked.shell_height {
             settings.shell_height = Some(height.max(0.0));
+        }
+        if let Some(split) = asked.tree_split {
+            settings.tree_split = Some(split.clamp(0.1, 0.9));
+        }
+        if let Some(width) = asked.column_width {
+            settings.column_width = Some(width.max(0.0));
         }
 
         match settings.save_to(&path) {
