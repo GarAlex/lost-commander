@@ -1846,6 +1846,7 @@ dependencies = [
  "dirs",
  "flate2",
  "fs4",
+ "libc",
  "lzma-rs",
  "portable-pty",
  "pulldown-cmark",

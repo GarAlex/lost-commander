@@ -82,6 +82,16 @@ fn label_for(path: &Path) -> String {
 /// the expand itself marks the node a leaf, and the arrow goes.
 fn has_children(path: &Path, show_hidden: bool, show_files: bool) -> bool {
     const LOOKED_ENOUGH: usize = 5_000;
+    // An automount trigger is never read to paint an arrow. Reading one
+    // asks automountd to mount whatever the map names, and when that
+    // server is asleep the read blocks for as long as it feels like -
+    // which surfaced as the whole tree hanging on expand("/") because
+    // /home is an autofs trigger on every Mac. "Openable" without
+    // looking is the honest answer for a directory whose contents are a
+    // network question.
+    if is_automount_trigger(path) {
+        return true;
+    }
     let Ok(entries) = fs::read_dir(path) else {
         return false;
     };
@@ -111,6 +121,42 @@ fn has_children(path: &Path, show_hidden: bool, show_files: bool) -> bool {
     }
     false
 }
+
+/// Whether this directory is an autofs mount trigger, asked of statfs
+/// without touching the directory's contents - the touch is the trap.
+///
+/// Unix-only in mechanism and macOS-first in motive: /home and
+/// /Network/Servers are autofs triggers on every Mac, wired by auto_master
+/// to a directory service that may be a sleeping server away. On Linux the
+/// same answer covers automount points. Windows has no autofs and the cfg
+/// says so.
+#[cfg(unix)]
+fn is_automount_trigger(path: &Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    let Ok(c_path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
+        return false;
+    };
+    let mut stat: libc::statfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statfs(c_path.as_ptr(), &mut stat) } != 0 {
+        return false;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let name = unsafe { std::ffi::CStr::from_ptr(stat.f_fstypename.as_ptr()) };
+        name.to_bytes() == b"autofs"
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        // AUTOFS_SUPER_MAGIC.
+        stat.f_type == 0x0187
+    }
+}
+
+#[cfg(not(unix))]
+fn is_automount_trigger(_path: &Path) -> bool {
+    false
+}
+
 
 /// What hangs under `path`: its subdirectories, and its files when asked for.
 ///

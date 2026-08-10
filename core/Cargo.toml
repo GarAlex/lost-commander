@@ -77,3 +77,9 @@ delharc = "0.6"
 
 [dev-dependencies]
 tempfile.workspace = true
+
+# For one statfs call: asking whether a directory is an autofs trigger
+# without reading it, because the read is what wakes automountd and hangs
+# on a sleeping server. Unix only, like the question.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
