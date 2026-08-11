@@ -157,7 +157,6 @@ fn is_automount_trigger(_path: &Path) -> bool {
     false
 }
 
-
 /// What hangs under `path`: its subdirectories, and its files when asked for.
 ///
 /// Directories first and then files, each sorted case-insensitively - the same

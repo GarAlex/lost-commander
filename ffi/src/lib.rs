@@ -1038,8 +1038,6 @@ struct SettingsDto {
     palette: Option<std::collections::BTreeMap<String, String>>,
 }
 
-
-
 /// The preferences a front-end starts from.
 ///
 /// A subset, not the whole file: the shell choice and the journal knobs are

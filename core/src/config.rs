@@ -130,7 +130,6 @@ impl Settings {
         };
     }
 
-
     /// How long the account is kept for.
     pub fn keep(&self) -> crate::journal::Keep {
         self.journal_days

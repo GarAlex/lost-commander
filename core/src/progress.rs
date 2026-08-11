@@ -892,11 +892,7 @@ fn copy_file(source: &Path, target: &Path, sink: &mut dyn Sink) -> io::Result<()
 }
 
 /// The bytes, chunk by chunk, with the cancel flag read between them.
-fn stream(
-    reader: &mut fs::File,
-    writer: &mut fs::File,
-    sink: &mut dyn Sink,
-) -> io::Result<()> {
+fn stream(reader: &mut fs::File, writer: &mut fs::File, sink: &mut dyn Sink) -> io::Result<()> {
     let mut buffer = vec![0u8; CHUNK];
     loop {
         if sink.cancelled() {
@@ -1694,6 +1690,148 @@ mod tests {
         assert!(destination.join("tree/a.txt").exists());
     }
 
+    /// A copy that cannot be written must not leave anything behind.
+    ///
+    /// The disk filling up is the commonest way for a write to fail, and it
+    /// is exactly when a reader can least afford a truncated file that looks
+    /// finished - right name, plausible size, wrong contents. A full disk
+    /// cannot be conjured in a unit test, so the failure is provoked at the
+    /// same place by other means: the target is opened for writing and the
+    /// copy is asked to write over it.
+    #[test]
+    fn a_copy_that_cannot_be_written_leaves_no_half_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("big.bin");
+        // Bigger than one chunk, so the write happens inside the loop rather
+        // than being swallowed by create().
+        fs::write(&source, vec![7u8; CHUNK * 2 + 11]).unwrap();
+
+        // A directory where the file wants to be: create() fails, and the
+        // directory is still standing afterwards. This is the shape of "the
+        // destination could not be written" that every platform agrees on.
+        let target = dir.path().join("target");
+        fs::create_dir(&target).unwrap();
+
+        let mut sink = TestSink::new();
+        let outcome = copy_file(&source, &target, &mut sink);
+
+        assert!(outcome.is_err(), "writing over a directory has to fail");
+        assert!(
+            target.is_dir(),
+            "the thing that was already there is still there"
+        );
+    }
+
+    /// A copy over a file that cannot be replaced does not destroy it.
+    ///
+    /// Windows refuses to open a read-only file for writing, so create()
+    /// fails and the original is untouched. That is the behaviour worth
+    /// pinning: a failed copy is allowed to fail, and is not allowed to
+    /// take the destination with it.
+    #[cfg(windows)]
+    #[test]
+    fn a_copy_onto_a_protected_file_does_not_destroy_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("new.txt");
+        fs::write(&source, b"new contents").unwrap();
+        let target = dir.path().join("kept.txt");
+        fs::write(&target, b"old contents").unwrap();
+        crate::perms::set_readonly(&target, true).unwrap();
+
+        let mut sink = TestSink::new();
+        let outcome = copy_file(&source, &target, &mut sink);
+
+        assert!(outcome.is_err(), "a protected file cannot be written over");
+        crate::perms::set_readonly(&target, false).unwrap();
+        assert_eq!(
+            fs::read(&target).unwrap(),
+            b"old contents",
+            "what was there survived the attempt"
+        );
+    }
+
+    /// A read-only file is deleted anyway, and this test says so out loud.
+    ///
+    /// Not the behaviour I expected, and worth pinning precisely because it
+    /// is a decision nobody in this codebase made: Rust's own remove_file
+    /// clears the read-only attribute on Windows before unlinking, so the
+    /// flag stops nothing. Explorer asks first. This does not.
+    ///
+    /// Whether it should ask is a question for the front-ends - the engine
+    /// deleting what it was told to delete is defensible. What is not
+    /// defensible is nobody knowing which of the two it does, so: it
+    /// deletes, the batch reports no failure, and the file is gone.
+    ///
+    /// Note the asymmetry with copying, held by the test above: a copy onto
+    /// a read-only file refuses and leaves it alone, while a delete of one
+    /// goes through. Same flag, opposite answers.
+    #[cfg(windows)]
+    #[test]
+    fn a_read_only_file_is_deleted_without_being_asked_about() {
+        let dir = tempfile::tempdir().unwrap();
+        let locked = dir.path().join("locked.txt");
+        let ordinary = dir.path().join("ordinary.txt");
+        fs::write(&locked, b"protected").unwrap();
+        fs::write(&ordinary, b"plain").unwrap();
+        crate::perms::set_readonly(&locked, true).unwrap();
+        assert!(crate::perms::read(&locked).unwrap().readonly);
+
+        let mut sink = TestSink::new();
+        let failures = execute(
+            &Operation::Delete {
+                targets: vec![locked.clone(), ordinary.clone()],
+                to_trash: false,
+            },
+            &mut sink,
+        );
+
+        assert!(
+            failures.is_empty(),
+            "the read-only flag stops nothing here: {failures:?}"
+        );
+        assert!(!locked.exists(), "it was deleted, flag and all");
+        assert!(!ordinary.exists(), "and so was the ordinary one");
+    }
+
+    /// One file failing does not cost the rest of the batch.
+    ///
+    /// A directory standing where a file is being copied cannot be written,
+    /// which is the everyday shape of "this one could not be done". The
+    /// rule is that the others still are, and the failure names its file
+    /// rather than being a count nobody can act on.
+    #[test]
+    fn one_file_that_cannot_be_copied_does_not_stop_the_others() {
+        let dir = tempfile::tempdir().unwrap();
+        let from = dir.path().join("from");
+        let to = dir.path().join("to");
+        fs::create_dir_all(&from).unwrap();
+        fs::create_dir_all(&to).unwrap();
+        fs::write(from.join("good.txt"), b"fine").unwrap();
+        fs::write(from.join("blocked.txt"), b"cannot land").unwrap();
+        // Something already at the destination that a file cannot replace.
+        fs::create_dir(to.join("blocked.txt")).unwrap();
+
+        let mut sink = TestSink::answering(&[Answer::Overwrite]);
+        let failures = execute(
+            &Operation::Copy {
+                sources: vec![from.join("good.txt"), from.join("blocked.txt")],
+                destination: to.clone(),
+            },
+            &mut sink,
+        );
+
+        assert_eq!(failures.len(), 1, "one failure only: {failures:?}");
+        assert!(
+            failures[0].contains("blocked.txt"),
+            "the failure names its file: {failures:?}"
+        );
+        assert_eq!(
+            fs::read(to.join("good.txt")).unwrap(),
+            b"fine",
+            "the file that could be copied was"
+        );
+    }
+
     #[test]
     fn a_cancelled_job_reports_that_it_was_cancelled() {
         let dir = tempfile::tempdir().unwrap();
@@ -2381,7 +2519,10 @@ mod tests {
             b"the only copy",
             "cancelling a copy destroyed the file it was overwriting"
         );
-        assert!(stray_parts(dir.path()).is_empty(), "left half a file behind");
+        assert!(
+            stray_parts(dir.path()).is_empty(),
+            "left half a file behind"
+        );
     }
 
     #[cfg(unix)]
@@ -2410,7 +2551,7 @@ mod tests {
         let mut sink = TestSink::new();
         let outcome = copy_file(&source, &target, &mut sink);
 
-        mode(&locked, 0o755);  // before asserting, so the temp dir can clean up
+        mode(&locked, 0o755); // before asserting, so the temp dir can clean up
         assert!(outcome.is_ok(), "{outcome:?}");
         assert_eq!(fs::read(&target).unwrap(), b"new words");
     }
@@ -2433,7 +2574,10 @@ mod tests {
         mode(&locked, 0o755);
         let problem = outcome.expect_err("wrote a new file into a read-only directory");
         assert_eq!(problem.kind(), io::ErrorKind::PermissionDenied);
-        assert!(fs::read_dir(&locked).unwrap().next().is_none(), "left something behind");
+        assert!(
+            fs::read_dir(&locked).unwrap().next().is_none(),
+            "left something behind"
+        );
     }
 
     #[test]
@@ -2453,7 +2597,14 @@ mod tests {
 
         // Running as root reads anything, and then this proves nothing -
         // which is worth saying out loud rather than passing quietly.
+        //
+        // On Windows the block above did nothing at all: there is no mode to
+        // set to zero, so the source stays readable and the copy succeeds.
+        // Nothing to prove there either, and libc is a Unix-only dependency
+        // - naming it outside a cfg is what stopped this file compiling on
+        // Windows at all.
         if outcome.is_ok() {
+            #[cfg(unix)]
             assert!(
                 unsafe { libc::geteuid() } == 0,
                 "an unreadable file was read by someone who is not root"
@@ -2461,7 +2612,10 @@ mod tests {
             return;
         }
         assert_eq!(fs::read(&target).unwrap(), b"the only copy");
-        assert!(stray_parts(dir.path()).is_empty(), "left half a file behind");
+        assert!(
+            stray_parts(dir.path()).is_empty(),
+            "left half a file behind"
+        );
     }
 
     /// A real filesystem with no room left in it.
@@ -2484,7 +2638,9 @@ mod tests {
             let name = format!("RcmdFull{}", std::process::id());
             let image = std::env::temp_dir().join(format!("{name}.dmg"));
             let made = Command::new("hdiutil")
-                .args(["create", "-size", "2m", "-fs", "HFS+", "-volname", &name, "-quiet"])
+                .args([
+                    "create", "-size", "2m", "-fs", "HFS+", "-volname", &name, "-quiet",
+                ])
                 .arg(&image)
                 .status()
                 .ok()?;
