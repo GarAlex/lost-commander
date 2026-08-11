@@ -931,7 +931,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("hello.txt"), "x").unwrap();
 
-        let mut job = ShellJob::spawn("ls".to_string(), dir.path().to_path_buf());
+        // Whatever this platform calls "list what is here". These tests
+        // spoke only Unix and so failed on Windows for the whole of their
+        // lives here, which is a test suite lying about its coverage.
+        let listing = if cfg!(windows) { "dir /b" } else { "ls" };
+        let mut job = ShellJob::spawn(listing.to_string(), dir.path().to_path_buf());
         job.join();
         let out = job.take().expect("the command should have finished");
 
@@ -959,7 +963,9 @@ mod tests {
         let nested = dir.path().join("nested");
         std::fs::create_dir(&nested).unwrap();
 
-        let mut job = ShellJob::spawn("pwd".to_string(), nested.clone());
+        // cmd.exe prints the working directory for a bare `cd`.
+        let where_am_i = if cfg!(windows) { "cd" } else { "pwd" };
+        let mut job = ShellJob::spawn(where_am_i.to_string(), nested.clone());
         job.join();
         let out = job.take().unwrap();
 
@@ -968,6 +974,12 @@ mod tests {
         assert!(out.stdout.trim().ends_with("nested"), "{}", out.stdout);
     }
 
+    /// Unix only, for want of a cheap way to make cmd.exe produce
+    /// megabytes: every Windows equivalent is a loop that takes seconds,
+    /// and a slow test is one that gets skipped. The cap it proves is
+    /// platform-independent - the same reader counts the same bytes
+    /// whatever wrote them.
+    #[cfg(unix)]
     #[test]
     fn very_long_output_is_capped() {
         let dir = tempfile::tempdir().unwrap();

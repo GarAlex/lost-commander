@@ -13818,10 +13818,29 @@ mod tests {
         assert!(app.command.is_empty());
     }
 
+    /// What this platform calls "list what is here".
+    ///
+    /// These tests said `ls` and nothing else, so on Windows they failed -
+    /// or worse, passed for the wrong reason: a test asserting that some
+    /// name is *absent* from the output is satisfied by a command that
+    /// produced no output at all because it does not exist.
+    fn listing() -> String {
+        if cfg!(windows) { "dir /b" } else { "ls" }.to_string()
+    }
+
+    /// What this platform calls "make an empty file here".
+    fn make_file(name: &str) -> String {
+        if cfg!(windows) {
+            format!("type nul > {name}")
+        } else {
+            format!("touch {name}")
+        }
+    }
+
     #[test]
     fn a_command_runs_in_the_active_panel_and_is_recorded() {
         let (_root, mut app) = fixture();
-        app.command = "ls".to_string();
+        app.command = listing();
         app.run_command();
 
         assert!(app.shell_job.is_some());
@@ -13834,8 +13853,12 @@ mod tests {
 
         assert!(app.shell_job.is_none());
         assert_eq!(app.console.len(), 1);
-        assert_eq!(app.console[0].line, "ls");
-        assert!(app.console[0].output.stdout.contains("a.txt"));
+        assert_eq!(app.console[0].line, listing());
+        assert!(
+            app.console[0].output.stdout.contains("a.txt"),
+            "stdout: {}",
+            app.console[0].output.stdout
+        );
     }
 
     #[test]
@@ -13892,7 +13915,7 @@ mod tests {
         let (_root, mut app) = fixture();
         assert!(index_of(&app, Side::Left, "a.txt") > 0);
 
-        app.command = "touch brand-new.txt".to_string();
+        app.command = make_file("brand-new.txt");
         app.run_command();
         if let Some(job) = &mut app.shell_job {
             job.join();
@@ -13922,13 +13945,20 @@ mod tests {
         let (_root, mut app) = fixture();
         // b.txt only exists on the left; running from the right must not see it.
         app.active = Side::Right;
-        app.command = "ls".to_string();
+        app.command = listing();
         app.run_command();
         if let Some(job) = &mut app.shell_job {
             job.join();
         }
         app.poll_shell();
 
+        // The command has to have actually run, or "b.txt is absent" is
+        // true of an error message and proves nothing.
+        assert!(
+            app.console[0].output.succeeded(),
+            "stderr: {}",
+            app.console[0].output.stderr
+        );
         assert!(!app.console[0].output.stdout.contains("b.txt"));
         assert_eq!(app.console[0].cwd, app.right.cwd());
     }
