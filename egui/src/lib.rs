@@ -444,6 +444,14 @@ pub struct Workspace {
     /// rather than directories.
     pub half: Half,
     pub split: f32,
+    /// Which headings of the places column are rolled up.
+    ///
+    /// Nothing here reads it: this front-end's rail does not fold. It is
+    /// carried so that saving a session does not blank an arrangement made
+    /// in a front-end whose rail does - the file is shared, and one that
+    /// does not understand a field should hand it back rather than have an
+    /// opinion about it.
+    pub places_shut: Vec<String>,
 }
 
 /// Which half of the window is on show.
@@ -8309,6 +8317,15 @@ impl GuiApp {
                     name: kept.and_then(|w| w.name.clone()),
                     left: panel.cwd.clone(),
                     right,
+                    // Carried through rather than blanked. This front-end
+                    // has no places column to roll up, and writing an empty
+                    // list here would quietly undo the arrangement made in
+                    // one that does - the session file is shared, and a
+                    // front-end that does not understand a field should
+                    // hand it back unchanged rather than have an opinion.
+                    places_shut: kept
+                        .map(|w| w.places_shut.clone())
+                        .unwrap_or_default(),
                     show_right: kept.is_some_and(|w| w.show_right),
                     left_view: kept
                         .map_or(ViewMode::Details, |w| w.left_view)
@@ -8415,6 +8432,7 @@ impl GuiApp {
                     synced: saved.synced,
                     half: Half::from_saved(&saved.half),
                     split: if saved.split > 0.0 { saved.split } else { 0.5 },
+                    places_shut: saved.places_shut.clone(),
                 },
             );
         }
@@ -8490,6 +8508,13 @@ impl GuiApp {
             right_view: self.right_view,
             active: self.active,
             synced: !self.terminals.is_pinned(self.terminals.active),
+            // Not a fact about the live window either - nothing here folds
+            // the rail - so it is kept exactly as it was found.
+            places_shut: self
+                .workspaces
+                .get(&id)
+                .map(|w| w.places_shut.clone())
+                .unwrap_or_default(),
             half: self.half,
             split: self.split,
         };
@@ -11564,6 +11589,7 @@ mod tests {
             synced: true,
             shell: None,
             shell_program: None,
+            places_shut: Vec::new(),
         };
         // The window in front is the *second* saved one - and the first is
         // gone, so its index would now point at the wrong window.
@@ -11922,6 +11948,7 @@ mod tests {
                 // No program named: the chosen default stands in, as it must
                 // for a file written before the field existed.
                 shell_program: None,
+                places_shut: Vec::new(),
             }],
             at: 0,
         };
@@ -12032,6 +12059,7 @@ mod tests {
                     synced: true,
                     shell: None,
                     shell_program: None,
+                    places_shut: Vec::new(),
                 },
                 session::Workspace {
                     name: None,
@@ -12046,6 +12074,7 @@ mod tests {
                     synced: true,
                     shell: None,
                     shell_program: None,
+                    places_shut: Vec::new(),
                 },
             ],
             at: 1,
