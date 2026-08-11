@@ -804,14 +804,29 @@ fn same_file(a: &Path, b: &Path) -> bool {
 
 /// Copy in chunks so the bar moves within a single large file, and so a cancel
 /// takes effect promptly instead of after the whole file.
+/// Copy in chunks so the bar moves within a single large file, and so a cancel
+/// takes effect promptly instead of after the whole file.
+///
+/// Written beside the target and renamed over it at the end, rather than
+/// straight into it. Opening the target truncates it *before* a single byte
+/// of the source has been read, so everything that could go wrong from that
+/// moment on - a cancel, a full disk, a failing drive - was going wrong to a
+/// file the reader still owned and had not agreed to lose. Cancelling an
+/// overwrite deleted the older file outright; running out of space left a
+/// piece of the new one wearing the old one's name.
+///
+/// A rename within a directory is atomic, so the older file is whole until
+/// the instant the newer one is complete, and nothing in between is ever
+/// visible under its name. The cost is one temporary name in the target
+/// directory, cleaned up on every path out of here.
 fn copy_file(source: &Path, target: &Path, sink: &mut dyn Sink) -> io::Result<()> {
     // Asked before anything is opened, because opening is already too late.
     // A fifo, a socket or a character device blocks on open or on the first
     // read and never returns anything: the job stops on that file, the bar
-    // stops with it, and cancel cannot help - the cancel check at the top of
-    // the loop below is only reached between reads, and this read never
-    // ends. Copying /dev is not a thing anyone means, but it is a thing a
-    // file manager offers, and the way to survive it is not to start.
+    // stops with it, and cancel cannot help - the cancel check inside the
+    // loop below is only reached between reads, and this read never ends.
+    // Copying /dev is not a thing anyone means, but it is a thing a file
+    // manager offers, and the way to survive it is not to start.
     //
     // `metadata` is a stat, not an open, so asking is safe. It follows the
     // link deliberately: copying a symlink copies what it points at, and
@@ -824,15 +839,67 @@ fn copy_file(source: &Path, target: &Path, sink: &mut dyn Sink) -> io::Result<()
             "not a regular file - a device, pipe or socket cannot be copied",
         ));
     }
-    let mut reader = fs::File::open(source)?;
-    let mut writer = fs::File::create(target)?;
-    let mut buffer = vec![0u8; CHUNK];
 
+    let mut reader = fs::File::open(source)?;
+    let beside = partial_beside(target);
+    // The one case the safe way cannot serve: a directory that refuses new
+    // names but holds a file that is itself writable. Truncating that file
+    // needs permission on the file, not on the directory, so an overwrite
+    // there has always worked and would silently stop working. It is the
+    // one path where a failed write still costs the older file - and it is
+    // also the only way to do the copy at all, so it is taken knowingly and
+    // only when the refusal is about permission.
+    let (mut writer, partial) = match fs::File::create(&beside) {
+        Ok(file) => (file, Some(beside)),
+        Err(e) if e.kind() == io::ErrorKind::PermissionDenied && target.is_file() => {
+            (fs::File::create(target)?, None)
+        }
+        Err(e) => return Err(e),
+    };
+
+    if let Err(e) = stream(&mut reader, &mut writer, sink) {
+        drop(writer);
+        if let Some(partial) = &partial {
+            let _ = fs::remove_file(partial);
+        }
+        return Err(e);
+    }
+
+    // Carry permissions across (mode on Unix, read-only flag on Windows) -
+    // onto the temporary, before the swap, so the file never exists under
+    // the target's name wearing the wrong ones.
+    if let Ok(metadata) = reader.metadata() {
+        let _ = fs::set_permissions(partial.as_deref().unwrap_or(target), metadata.permissions());
+    }
+    drop(writer);
+
+    if let Some(partial) = &partial {
+        if let Err(e) = fs::rename(partial, target) {
+            let _ = fs::remove_file(partial);
+            return Err(e);
+        }
+    }
+
+    // Recorded here rather than at the call sites: this is the point at which
+    // the bytes are on disk, and every path that copies a file comes through
+    // it - the plain copy, the cross-filesystem move, and the synchronize.
+    sink.happened(
+        journal::Event::new(journal::Kind::Copy, source)
+            .to(target)
+            .note(crate::entry::human_size(about.len())),
+    );
+    Ok(())
+}
+
+/// The bytes, chunk by chunk, with the cancel flag read between them.
+fn stream(
+    reader: &mut fs::File,
+    writer: &mut fs::File,
+    sink: &mut dyn Sink,
+) -> io::Result<()> {
+    let mut buffer = vec![0u8; CHUNK];
     loop {
         if sink.cancelled() {
-            // Do not leave a half-written file behind.
-            drop(writer);
-            let _ = fs::remove_file(target);
             return Err(cancelled_error());
         }
         let read = reader.read(&mut buffer)?;
@@ -842,23 +909,25 @@ fn copy_file(source: &Path, target: &Path, sink: &mut dyn Sink) -> io::Result<()
         writer.write_all(&buffer[..read])?;
         sink.bytes_copied(read as u64);
     }
+    writer.flush()
+}
 
-    writer.flush()?;
-    // Carry permissions across (mode on Unix, read-only flag on Windows).
-    if let Ok(metadata) = reader.metadata() {
-        let _ = fs::set_permissions(target, metadata.permissions());
-    }
-    // Recorded here rather than at the call sites: this is the point at which
-    // the bytes are on disk, and every path that copies a file comes through
-    // it - the plain copy, the cross-filesystem move, and the synchronize.
-    sink.happened(
-        journal::Event::new(journal::Kind::Copy, source)
-            .to(target)
-            .note(crate::entry::human_size(
-                reader.metadata().map(|m| m.len()).unwrap_or(0),
-            )),
-    );
-    Ok(())
+/// A name for the half-written copy, in the target's own directory so the
+/// rename that follows is within one filesystem and therefore atomic.
+///
+/// Hidden, and named for what it is, so anyone who finds one after a power
+/// cut knows what they are looking at and that deleting it is safe.
+fn partial_beside(target: &Path) -> PathBuf {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let ordinal = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let name = target
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    target.with_file_name(format!(
+        ".{name}.rcmd-partial-{}-{ordinal}",
+        std::process::id()
+    ))
 }
 
 fn move_into(
@@ -1241,6 +1310,10 @@ mod tests {
         bytes: u64,
         names: Vec<String>,
         cancel_after_items: Option<u64>,
+        /// Cancelled once this many bytes have gone by - which lands in the
+        /// middle of a file rather than between two, and that is where the
+        /// interesting half of the question lives.
+        cancel_after_bytes: Option<u64>,
         /// Answers handed out in order; the last one repeats.
         answers: Vec<Answer>,
         /// What was asked about, so a test can assert it was asked at all.
@@ -1256,6 +1329,7 @@ mod tests {
                 bytes: 0,
                 names: Vec::new(),
                 cancel_after_items: None,
+                cancel_after_bytes: None,
                 answers: Vec::new(),
                 asked: Vec::new(),
                 events: Vec::new(),
@@ -1265,6 +1339,13 @@ mod tests {
         fn cancelling_after(items: u64) -> Self {
             TestSink {
                 cancel_after_items: Some(items),
+                ..Self::new()
+            }
+        }
+
+        fn cancelling_after_bytes(bytes: u64) -> Self {
+            TestSink {
+                cancel_after_bytes: Some(bytes),
                 ..Self::new()
             }
         }
@@ -1299,9 +1380,15 @@ mod tests {
             self.bytes += count;
         }
         fn cancelled(&self) -> bool {
-            self.cancel_after_items
+            let by_items = self
+                .cancel_after_items
                 .map(|limit| self.items >= limit)
-                .unwrap_or(false)
+                .unwrap_or(false);
+            let by_bytes = self
+                .cancel_after_bytes
+                .map(|limit| self.bytes >= limit)
+                .unwrap_or(false);
+            by_items || by_bytes
         }
         fn happened(&mut self, event: journal::Event) {
             self.events.push(event);
@@ -2252,5 +2339,220 @@ mod tests {
         assert_eq!(problem.kind(), io::ErrorKind::InvalidInput);
         assert!(problem.to_string().contains("regular file"));
         assert!(!dir.path().join("copy").exists(), "left a stub behind");
+    }
+
+    // ---- what a failed write must not cost -------------------------------
+    //
+    // Every one of these copies *over* a file that already exists and
+    // matters. The question is not whether the copy fails - it is what is
+    // left where the old file was when it does.
+
+    /// The file being overwritten, and what it says before anyone touches it.
+    fn precious(dir: &Path) -> PathBuf {
+        let path = dir.join("precious.txt");
+        fs::write(&path, b"the only copy").unwrap();
+        path
+    }
+
+    fn stray_parts(dir: &Path) -> Vec<String> {
+        fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.contains("partial"))
+            .collect()
+    }
+
+    #[test]
+    fn cancelling_a_copy_leaves_the_file_it_was_overwriting_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = precious(dir.path());
+        let source = dir.path().join("source.bin");
+        fs::write(&source, vec![b'x'; CHUNK * 4]).unwrap();
+
+        // Cancelled partway through the bytes, which is where a reader who
+        // changes their mind actually presses the button.
+        let mut sink = TestSink::cancelling_after_bytes(CHUNK as u64);
+        let outcome = copy_file(&source, &target, &mut sink);
+
+        assert!(outcome.is_err(), "a cancelled copy did not report as one");
+        assert_eq!(
+            fs::read(&target).unwrap(),
+            b"the only copy",
+            "cancelling a copy destroyed the file it was overwriting"
+        );
+        assert!(stray_parts(dir.path()).is_empty(), "left half a file behind");
+    }
+
+    #[cfg(unix)]
+    fn mode(path: &Path, bits: u32) {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(bits)).unwrap();
+    }
+
+    /// The one case the safe way cannot serve, pinned so it is a decision
+    /// rather than a surprise: a directory that refuses new names, holding a
+    /// file that is itself writable. Truncating that file needs permission
+    /// on the file and not on the directory, so this has always worked, and
+    /// the temporary-and-rename would have stopped it working with nothing
+    /// said. Here it falls back to writing in place.
+    #[cfg(unix)]
+    #[test]
+    fn a_read_only_directory_can_still_have_its_own_file_overwritten() {
+        let dir = tempfile::tempdir().unwrap();
+        let locked = dir.path().join("locked");
+        fs::create_dir(&locked).unwrap();
+        let target = precious(&locked);
+        let source = dir.path().join("source.txt");
+        fs::write(&source, b"new words").unwrap();
+        mode(&locked, 0o555);
+
+        let mut sink = TestSink::new();
+        let outcome = copy_file(&source, &target, &mut sink);
+
+        mode(&locked, 0o755);  // before asserting, so the temp dir can clean up
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert_eq!(fs::read(&target).unwrap(), b"new words");
+    }
+
+    /// And a name the directory has no room for is refused, plainly, with
+    /// nothing half-written left where it would have gone.
+    #[cfg(unix)]
+    #[test]
+    fn a_read_only_directory_refuses_a_new_file_and_leaves_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let locked = dir.path().join("locked");
+        fs::create_dir(&locked).unwrap();
+        let source = dir.path().join("source.txt");
+        fs::write(&source, b"new words").unwrap();
+        mode(&locked, 0o555);
+
+        let mut sink = TestSink::new();
+        let outcome = copy_file(&source, &locked.join("fresh.txt"), &mut sink);
+
+        mode(&locked, 0o755);
+        let problem = outcome.expect_err("wrote a new file into a read-only directory");
+        assert_eq!(problem.kind(), io::ErrorKind::PermissionDenied);
+        assert!(fs::read_dir(&locked).unwrap().next().is_none(), "left something behind");
+    }
+
+    #[test]
+    fn a_source_that_cannot_be_read_costs_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = precious(dir.path());
+        let source = dir.path().join("secret.txt");
+        fs::write(&source, b"new words").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&source, fs::Permissions::from_mode(0o000)).unwrap();
+        }
+
+        let mut sink = TestSink::new();
+        let outcome = copy_file(&source, &target, &mut sink);
+
+        // Running as root reads anything, and then this proves nothing -
+        // which is worth saying out loud rather than passing quietly.
+        if outcome.is_ok() {
+            assert!(
+                unsafe { libc::geteuid() } == 0,
+                "an unreadable file was read by someone who is not root"
+            );
+            return;
+        }
+        assert_eq!(fs::read(&target).unwrap(), b"the only copy");
+        assert!(stray_parts(dir.path()).is_empty(), "left half a file behind");
+    }
+
+    /// A real filesystem with no room left in it.
+    ///
+    /// The interesting failure is not one an error type can stand in for:
+    /// running out of space happens *partway through a write*, when the
+    /// target has already been opened and, before this was fixed, already
+    /// truncated. So this makes a small disk image, fills it, and copies
+    /// into what is left. No privileges are needed for any of it.
+    #[cfg(target_os = "macos")]
+    struct SmallVolume {
+        image: PathBuf,
+        mounted: PathBuf,
+    }
+
+    #[cfg(target_os = "macos")]
+    impl SmallVolume {
+        fn attach() -> Option<Self> {
+            use std::process::Command;
+            let name = format!("RcmdFull{}", std::process::id());
+            let image = std::env::temp_dir().join(format!("{name}.dmg"));
+            let made = Command::new("hdiutil")
+                .args(["create", "-size", "2m", "-fs", "HFS+", "-volname", &name, "-quiet"])
+                .arg(&image)
+                .status()
+                .ok()?;
+            if !made.success() {
+                return None;
+            }
+            let attached = Command::new("hdiutil")
+                .args(["attach", "-nobrowse", "-quiet"])
+                .arg(&image)
+                .status()
+                .ok()?;
+            if !attached.success() {
+                let _ = fs::remove_file(&image);
+                return None;
+            }
+            Some(SmallVolume {
+                image,
+                mounted: PathBuf::from(format!("/Volumes/{name}")),
+            })
+        }
+
+        /// Write until the disk says no, so what is left is nearly nothing.
+        fn fill(&self) {
+            let block = vec![b'f'; 64 * 1024];
+            let mut filler = fs::File::create(self.mounted.join("filler")).unwrap();
+            while filler.write_all(&block).is_ok() {}
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    impl Drop for SmallVolume {
+        fn drop(&mut self) {
+            use std::process::Command;
+            let _ = Command::new("hdiutil")
+                .args(["detach", "-quiet", "-force"])
+                .arg(&self.mounted)
+                .status();
+            let _ = fs::remove_file(&self.image);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn running_out_of_space_does_not_cost_the_file_being_overwritten() {
+        let Some(volume) = SmallVolume::attach() else {
+            // No disk images here - say so rather than passing quietly.
+            eprintln!("skipped: could not attach a disk image");
+            return;
+        };
+        let target = precious(&volume.mounted);
+        volume.fill();
+
+        let elsewhere = tempfile::tempdir().unwrap();
+        let source = elsewhere.path().join("big.bin");
+        fs::write(&source, vec![b'x'; 4 * 1024 * 1024]).unwrap();
+
+        let mut sink = TestSink::new();
+        let outcome = copy_file(&source, &target, &mut sink);
+
+        let problem = outcome.expect_err("a 4MB file fitted on a full 2MB disk");
+        assert_eq!(
+            fs::read(&target).unwrap(),
+            b"the only copy",
+            "running out of space destroyed the file being overwritten: {problem}"
+        );
+        assert!(
+            stray_parts(&volume.mounted).is_empty(),
+            "left half a file behind on a disk with no room to spare"
+        );
     }
 }
