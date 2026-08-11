@@ -65,6 +65,16 @@ pub struct Workspace {
     /// arranged on purpose.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shell_program: Option<String>,
+    /// Which headings in the places column this window has rolled up.
+    ///
+    /// Named, and only the shut ones. A file written before this existed
+    /// reads as "all open" with no migration, and a heading added later
+    /// needs no thought about what an older file meant by a list of
+    /// booleans. Both front-ends fold the same column and each keeps its
+    /// own answer per window, so it belongs here beside the folders and the
+    /// shell rather than in either one's private preferences.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub places_shut: Vec<String>,
 }
 
 /// Every window, and which was on show.
@@ -159,6 +169,7 @@ mod tests {
             synced: true,
             shell: Some(PathBuf::from(left)),
             shell_program: Some("bash".into()),
+            places_shut: vec!["Recent".into()],
         }
     }
 
@@ -226,5 +237,45 @@ mod tests {
         assert_eq!(read.workspaces.len(), 1);
         assert!(read.workspaces[0].shell.is_none());
         assert_eq!(read.workspaces[0].half, "");
+    }
+
+    /// The folded headings of the places column survive the file.
+    ///
+    /// Written because they did not: the field existed in one front-end's
+    /// own DTO and nowhere in this schema, so serde read the key, found no
+    /// home for it, and dropped it - the column rolled up, the session was
+    /// written, and the next launch had forgotten. A round trip is the only
+    /// thing that catches a field that is silently discarded, because
+    /// nothing errors and both ends look right on their own.
+    #[test]
+    fn the_rolled_up_headings_come_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("workspaces.toml");
+        let mut space = one("/home/me");
+        space.places_shut = vec!["Volumes".into(), "Recent".into()];
+        let session = Session {
+            workspaces: vec![space],
+            at: 0,
+        };
+        session.save_to(&path).unwrap();
+
+        let back = Session::load_from(&path).unwrap();
+        assert_eq!(back.workspaces[0].places_shut, ["Volumes", "Recent"]);
+    }
+
+    /// And a file from before the field reads as "all open" rather than as
+    /// an error, which is what lets the two front-ends ship out of step.
+    #[test]
+    fn a_file_written_before_the_field_still_reads() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("workspaces.toml");
+        std::fs::write(
+            &path,
+            "at = 0\n[[workspaces]]\nleft = \"/one\"\nright = \"/two\"\n",
+        )
+        .unwrap();
+
+        let back = Session::load_from(&path).unwrap();
+        assert!(back.workspaces[0].places_shut.is_empty());
     }
 }
