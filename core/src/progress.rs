@@ -805,6 +805,25 @@ fn same_file(a: &Path, b: &Path) -> bool {
 /// Copy in chunks so the bar moves within a single large file, and so a cancel
 /// takes effect promptly instead of after the whole file.
 fn copy_file(source: &Path, target: &Path, sink: &mut dyn Sink) -> io::Result<()> {
+    // Asked before anything is opened, because opening is already too late.
+    // A fifo, a socket or a character device blocks on open or on the first
+    // read and never returns anything: the job stops on that file, the bar
+    // stops with it, and cancel cannot help - the cancel check at the top of
+    // the loop below is only reached between reads, and this read never
+    // ends. Copying /dev is not a thing anyone means, but it is a thing a
+    // file manager offers, and the way to survive it is not to start.
+    //
+    // `metadata` is a stat, not an open, so asking is safe. It follows the
+    // link deliberately: copying a symlink copies what it points at, and
+    // what it points at is what would block. On Windows every ordinary file
+    // answers true here, so this costs that platform nothing.
+    let about = fs::metadata(source)?;
+    if !about.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "not a regular file - a device, pipe or socket cannot be copied",
+        ));
+    }
     let mut reader = fs::File::open(source)?;
     let mut writer = fs::File::create(target)?;
     let mut buffer = vec![0u8; CHUNK];
@@ -2211,5 +2230,27 @@ mod tests {
         let mut job = job;
         job.join();
         assert_eq!(fs::read_to_string(&target).unwrap(), "new");
+    }
+
+    /// The bug: a copy that started on /dev stopped on the first pipe and
+    /// could not be cancelled, because a blocked read is not between reads.
+    #[cfg(unix)]
+    #[test]
+    fn a_pipe_is_refused_rather_than_read_forever() {
+        use std::ffi::CString;
+        let dir = tempfile::tempdir().unwrap();
+        let pipe = dir.path().join("pipe");
+        let name = CString::new(pipe.to_str().unwrap()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o644) }, 0);
+
+        let mut sink = TestSink::new();
+        let outcome = copy_file(&pipe, &dir.path().join("copy"), &mut sink);
+
+        // If this test hangs rather than fails, the guard is gone: reading a
+        // fifo with no writer never returns.
+        let problem = outcome.expect_err("a pipe is not a file to copy");
+        assert_eq!(problem.kind(), io::ErrorKind::InvalidInput);
+        assert!(problem.to_string().contains("regular file"));
+        assert!(!dir.path().join("copy").exists(), "left a stub behind");
     }
 }
