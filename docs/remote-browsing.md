@@ -218,9 +218,11 @@ neither should be started until 4 has been used in anger.
   solution and is not.
 - FTPS and FTP-over-TLS beyond what the client crate gives for free.
 - Resume of interrupted transfers. Wanted eventually; not before 4.
-- Rendering a page, or listing what its scripts would load. That needs a
-  browser engine, which is per-platform and cannot live in the engine
-  crate where the other two front-ends could reach it.
+- Running a page's scripts, or listing what they would load. That needs
+  a browser engine, which is per-platform and cannot live in the engine
+  crate where the other two front-ends could reach it. Rendering the
+  document as text is a different thing and is in scope - see the
+  reader's view above.
 
 ## HTTP and HTTPS, which is three features wearing one name
 
@@ -289,6 +291,31 @@ gap. Say it in the window if a page turns out to reference almost
 nothing - "this page loads its content with scripts; what it references
 is listed" - so the reader knows they are looking at the truth about the
 document rather than at a failure to read it.
+
+**A reader's view, which is a 1992 idea and the right one.** Lynx showed
+pages as text without running anything, and w3m and Links did the same
+after it. That is not a lesser browser; it is a different and entirely
+achievable thing, and this engine already does it for another format:
+`markdown::plain` turns parsed blocks into lines with headings
+underlined, lists hung, quotes barred and tables padded - no colour, no
+bold, structure carried by characters so it renders in a terminal and in
+a window alike.
+
+An `html::plain` beside it is the same job: headings, paragraphs, lists,
+tables, and links marked with the address they point at. F3 then offers
+two views of one file, source and reading, the way it already offers
+markdown two.
+
+It costs nothing extra to build, because the parse is already being
+done. Listing a page and reading a page are the same pass over the same
+document: one walk yields the resources, the links, and the text. Do
+them together or the two will disagree about what a page contains, which
+is the sort of difference nobody notices until a link is in one and not
+the other.
+
+Still no scripts, and therefore still true to the rule above: what is
+rendered is what the document says, which is exactly what Lynx promised
+and exactly what makes it safe to do in a file manager.
 
 F3 needs nothing new. The viewers already route by what a file is and
 already detect encoding; HTML and JS are text, and `fetch`-to-temp is
