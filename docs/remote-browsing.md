@@ -219,6 +219,75 @@ neither should be started until 4 has been used in anger.
 - FTPS and FTP-over-TLS beyond what the client crate gives for free.
 - Resume of interrupted transfers. Wanted eventually; not before 4.
 
+## HTTP and HTTPS, which is three features wearing one name
+
+Asked for as: connect to a URL, show the page as a file, its referenced
+resources as files beside it, and its links as folders. It is a good idea
+and it is three ideas, with very different value and very different risk.
+Only the third is the one it sounds like.
+
+**1. WebDAV.** Already step 6 above, and worth saying out loud that this
+*is* HTTP-as-a-filesystem, done by servers that agreed to it. Real
+directories, real sizes, real dates, `PROPFIND` returns a listing that
+needs no guessing. Everything below is what you do when the server never
+agreed to anything.
+
+**2. Directory indexes.** An Apache or nginx autoindex page is a listing
+that happens to be wearing HTML, and parsing it is closer to the `LIST`
+problem above than to the web: a handful of layouts, all tabular, sizes
+and dates usually present. High value - this is how most public file
+trees are served - and the ambiguity is bounded. Detect it (the server's
+own generator comment, or a table whose rows are all links with sizes),
+and fall back to (3) when it is not one.
+
+**3. A page as a folder.** The document itself as one entry, its
+subresources - `src`, `href`, `srcset` - as files beside it, and its
+links as directories. This is genuinely useful for reading a page's
+sources and pulling its assets down with F5, and it needs rules, because
+the web is not a tree:
+
+- **One request per listing.** A link becomes a directory row; it is not
+  followed until the reader steps into it. Nothing recurses, ever. A
+  file manager that crawls is a crawler, and somebody will point one at
+  a site that does not want it.
+- **A cap, and a stated one.** Some pages have ten thousand links. Show
+  the first N and say that is what happened, rather than showing an
+  unusable pane or a truncated one that looks complete.
+- **Sizes are unknown, not zero.** `Member.size` is a `u64` and a
+  listing of resources has no sizes without a `HEAD` each, which is one
+  request per row. Off by default; a column of confident zeroes is worse
+  than a column of blanks. This is the one place `Member` may need a
+  field rather than a convention.
+- **No cookies, no scripts, no forms.** What is fetched is what `curl`
+  would fetch.
+
+**The honest limitation, which belongs in the UI and not in a footnote:**
+a page whose content is assembled by JavaScript has almost nothing in
+its HTML. On a modern application this listing is a document, three
+bundles and a favicon - technically correct and useless. That is not a
+bug to be fixed later; it is what the format is. So an empty or nearly
+empty listing must say *why* - "this page builds itself in the browser;
+there is nothing to list" - rather than drawing an empty pane the reader
+will read as a failure.
+
+F3 needs nothing new. The viewers already route by what a file is and
+already detect encoding; HTML and JS are text, and `fetch`-to-temp is
+the same path archives use. F4 should refuse: editing a copy of a
+resource fetched over HTTP has nowhere to save to.
+
+Two platform notes, both learned the expensive way:
+
+- The macOS Store build needs `com.apple.security.network.client` before
+  any of this works, and its absence fails silently rather than loudly.
+- Plain `http://` is a cleartext request, which the App Store asks about;
+  default to `https://`, and make a plain one a thing the reader typed
+  on purpose rather than a thing the program chose.
+
+**Order: (1) as planned, (2) with it, (3) after both.** The first two are
+listings that a server intended to be read; the third is inference, and
+inference is what should be built last and behind a rule that stops it
+running away.
+
 ## Open questions
 
 - **Which FTP crate.** `suppaftp` is maintained and has TLS; check its
