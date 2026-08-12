@@ -165,6 +165,80 @@ pub fn candidate_roots(platform: Platform) -> Vec<PathBuf> {
     }
 }
 
+/// What is mounted right now, as (source, mount point) pairs.
+///
+/// Asked of the system rather than guessed at from directory names. A share
+/// picked from the desktop's own list mounts under whatever it is called -
+/// `/Volumes/public` - and that name contains neither the host that was
+/// typed nor, when only a server was typed, any share name at all. Reading
+/// the table turns "which of these is mine" from a guess into a lookup:
+/// `//adm@nas10/public on /Volumes/public` says exactly whose it is.
+fn mounts_now(platform: Platform) -> Vec<(String, PathBuf)> {
+    match platform {
+        Platform::MacOs => {
+            let Ok(output) = Command::new("/sbin/mount").output() else {
+                return Vec::new();
+            };
+            parse_mount_table(&String::from_utf8_lossy(&output.stdout))
+        }
+        Platform::Linux => std::fs::read_to_string("/proc/self/mounts")
+            .map(|text| {
+                text.lines()
+                    .filter_map(|line| {
+                        let mut parts = line.split_whitespace();
+                        let from = parts.next()?;
+                        let on = parts.next()?;
+                        Some((from.to_string(), PathBuf::from(on)))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        Platform::Windows => Vec::new(),
+    }
+}
+
+/// `//adm@nas10/public on /Volumes/public (smbfs, nodev, ...)` - the shape
+/// `mount` has printed since long before any of this.
+fn parse_mount_table(text: &str) -> Vec<(String, PathBuf)> {
+    text.lines()
+        .filter_map(|line| {
+            let (from, rest) = line.split_once(" on ")?;
+            // The options follow in brackets; the mount point is what comes
+            // before them, and it may contain spaces.
+            let on = match rest.rfind(" (") {
+                Some(i) => &rest[..i],
+                None => rest,
+            };
+            Some((from.trim().to_string(), PathBuf::from(on.trim())))
+        })
+        .collect()
+}
+
+/// Whether a mount source belongs to this location.
+///
+/// The source is `//user@host/share` for SMB and `host:/export` for NFS, so
+/// the host is matched loosely - a source may name it short where the reader
+/// typed it long, or the other way about - and the share exactly when one
+/// was asked for. With no share named, any mount from that host is the one:
+/// it is the share the reader just picked from the desktop's list.
+fn source_belongs_to(source: &str, location: &Location) -> bool {
+    let source = source.to_lowercase();
+    let host = location.host.to_lowercase();
+    let short = host.split('.').next().unwrap_or(&host).to_string();
+    if host.is_empty() || !(source.contains(&host) || source.contains(&short)) {
+        return false;
+    }
+    let share = location.share().to_lowercase();
+    if share.is_empty() {
+        return true;
+    }
+    source
+        .rsplit('/')
+        .next()
+        .map(|leaf| leaf == share)
+        .unwrap_or(false)
+}
+
 /// Look for an already-attached mount belonging to `location`.
 ///
 /// Mount point names vary a lot (`/Volumes/media`,
@@ -173,6 +247,14 @@ pub fn candidate_roots(platform: Platform) -> Vec<PathBuf> {
 pub fn find_mount_in(roots: &[PathBuf], location: &Location) -> Option<PathBuf> {
     if !location.protocol.is_network() {
         return None;
+    }
+
+    // The table first, because it knows and the names only suggest.
+    let platform = Platform::current();
+    for (source, on) in mounts_now(platform) {
+        if source_belongs_to(&source, location) && on.is_dir() {
+            return Some(on);
+        }
     }
     let host = location.host.to_lowercase();
     let share = location.share().to_lowercase();
@@ -529,5 +611,61 @@ mod tests {
             with_subpath(base.clone(), &loc("smb://nas.local/media")),
             base
         );
+    }
+
+    /// The line the reporter's own Mac printed while the sheet sat waiting.
+    const REAL: &str = "/dev/disk3s1s1 on / (apfs, sealed, local, read-only, journaled)\n\
+//adm@nas10/public on /Volumes/public (smbfs, nodev, nosuid, quarantine, mounted by alex)\n\
+map auto_home on /System/Volumes/Data/home (autofs, automounted, nobrowse)";
+
+    #[test]
+    fn a_share_picked_from_the_desktops_list_is_found() {
+        // The bug: typing just the server and choosing a share in the
+        // desktop's own list mounted it at /Volumes/public - a name holding
+        // neither the host that was typed nor any share, since none was -
+        // so the name-matching found nothing and the wait ran out on a
+        // share that was already there.
+        let table = parse_mount_table(REAL);
+        assert_eq!(table.len(), 3);
+
+        let server_only = Location::parse("smb://nas10").unwrap();
+        let mine = table
+            .iter()
+            .find(|(from, _)| source_belongs_to(from, &server_only));
+        assert_eq!(mine.map(|(_, on)| on.display().to_string()).as_deref(),
+                   Some("/Volumes/public"));
+    }
+
+    #[test]
+    fn a_named_share_matches_only_itself() {
+        let table = parse_mount_table(REAL);
+        let asked = Location::parse("smb://nas10/public").unwrap();
+        assert!(table.iter().any(|(from, _)| source_belongs_to(from, &asked)));
+
+        // A share of the same host that is not mounted must not match the
+        // one that is - "connected" would then be a lie about the wrong
+        // folder, and the pane would land somewhere nobody asked for.
+        let other = Location::parse("smb://nas10/private").unwrap();
+        assert!(!table.iter().any(|(from, _)| source_belongs_to(from, &other)));
+
+        // And a different server entirely never matches.
+        let elsewhere = Location::parse("smb://otherbox/public").unwrap();
+        assert!(!table.iter().any(|(from, _)| source_belongs_to(from, &elsewhere)));
+    }
+
+    #[test]
+    fn the_short_name_and_the_long_one_are_the_same_host() {
+        // Typed as nas10.local, mounted as nas10 - or the other way about.
+        let table = parse_mount_table(REAL);
+        let dotted = Location::parse("smb://nas10.local/public").unwrap();
+        assert!(table.iter().any(|(from, _)| source_belongs_to(from, &dotted)));
+    }
+
+    #[test]
+    fn a_mount_point_with_a_space_survives_the_parse() {
+        let table = parse_mount_table(
+            "//alex@nas10/Shared Folder on /Volumes/Shared Folder (smbfs, nodev)",
+        );
+        assert_eq!(table[0].1.display().to_string(), "/Volumes/Shared Folder");
     }
 }
