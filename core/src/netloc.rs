@@ -230,10 +230,66 @@ impl Location {
         )
     }
 
+    /// The same location, spelled the way a URL parser needs it.
+    ///
+    /// `to_url` is for reading and for saving: it keeps the spaces, because
+    /// "smb://nas/Shared Folder" is what a person typed and what they should
+    /// see in a rail. Handing that to the operating system is a different
+    /// matter - LaunchServices parses its argument as a URL, a raw space
+    /// ends the URL early, and macOS reports the wreckage as "Check the
+    /// server name or IP address", which sends the reader off to look at a
+    /// server that was never the problem.
+    ///
+    /// A Windows domain login has the same trouble with its backslash.
+    ///
+    /// Percent-encoded per component: the separators must survive as
+    /// separators, so the slashes between path segments and the @ before the
+    /// host are written by this and never by the encoder.
+    pub fn os_url(&self) -> String {
+        if self.protocol == Protocol::Local {
+            return self.path.clone();
+        }
+        let user = self
+            .user
+            .as_ref()
+            .map(|u| format!("{}@", encoded(u)))
+            .unwrap_or_default();
+        let port = self.port.map(|p| format!(":{p}")).unwrap_or_default();
+        let path = if self.path.is_empty() {
+            String::new()
+        } else {
+            let parts: Vec<String> = self.path.split('/').map(|p| encoded(p)).collect();
+            format!("/{}", parts.join("/"))
+        };
+        format!(
+            "{}://{user}{}{port}{path}",
+            self.protocol.scheme(),
+            self.host
+        )
+    }
+
     /// One-line description for the connections list.
     pub fn summary(&self) -> String {
         format!("{:<6} {}", self.protocol.label(), self.to_url())
     }
+}
+
+/// One path component or user name, percent-encoded.
+///
+/// Written here rather than taken from a crate: this is the whole of what is
+/// needed, the rules are RFC 3986's unreserved set, and a dependency that
+/// crosses into the FFI is a dependency two front-ends inherit.
+fn encoded(part: &str) -> String {
+    let mut out = String::with_capacity(part.len());
+    for byte in part.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(*byte as char)
+            }
+            other => out.push_str(&format!("%{other:02X}")),
+        }
+    }
+    out
 }
 
 /// How many visited directories are kept.
@@ -670,5 +726,32 @@ path = \"/home/user/code\"
         assert!(!text.contains("password"));
         assert!(!text.contains("passwd"));
         assert!(!text.contains("secret"));
+    }
+
+
+    #[test]
+    fn what_the_operating_system_is_handed_is_a_url() {
+        // The bug this pins, reported from a real connection: a share with a
+        // space in its name went to macOS with the space in it, which is not
+        // a URL, and the refusal came back as "Check the server name or IP
+        // address" - pointing at a server that was never the problem.
+        let share = Location::parse("smb://nas10/Shared Folder").unwrap();
+        assert_eq!(share.os_url(), "smb://nas10/Shared%20Folder");
+        // And what a person reads keeps its space, because that is what they
+        // typed and what a rail should show.
+        assert_eq!(share.to_url(), "smb://nas10/Shared Folder");
+
+        // A Windows domain login has the same trouble with its backslash.
+        let domain = Location::parse("smb://DOMAIN\\alex@nas10/team").unwrap();
+        assert_eq!(domain.os_url(), "smb://DOMAIN%5Calex@nas10/team");
+
+        // Separators survive as separators - the encoder never sees them.
+        let deep = Location::parse("smb://nas10/public/sub dir/one").unwrap();
+        assert_eq!(deep.os_url(), "smb://nas10/public/sub%20dir/one");
+
+        // Ordinary names are left exactly alone, so nothing that worked
+        // before now looks different.
+        let plain = Location::parse("smb://nas10/team").unwrap();
+        assert_eq!(plain.os_url(), plain.to_url());
     }
 }

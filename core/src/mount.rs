@@ -87,7 +87,11 @@ pub fn plan_for(platform: Platform, location: &Location) -> MapPlan {
         Platform::MacOs => match location.protocol {
             Protocol::Smb | Protocol::Afp | Protocol::Nfs => MapPlan::Command {
                 program: "open".into(),
-                args: vec![location.to_url()],
+                // Encoded, because this is parsed as a URL rather than read
+                // by a person: a share called "Shared Folder" handed over
+                // with its space in it is not a URL, and the refusal comes
+                // back as "Check the server name or IP address".
+                args: vec![location.os_url()],
                 hint: mac_volume_hint(location),
             },
             Protocol::Ftp | Protocol::Sftp => MapPlan::Unsupported {
@@ -105,7 +109,7 @@ pub fn plan_for(platform: Platform, location: &Location) -> MapPlan {
         Platform::Linux => match location.protocol {
             Protocol::Smb | Protocol::Ftp | Protocol::Sftp => MapPlan::Command {
                 program: "gio".into(),
-                args: vec!["mount".into(), location.to_url()],
+                args: vec!["mount".into(), location.os_url()],
                 hint: None,
             },
             Protocol::Nfs | Protocol::Afp => MapPlan::Unsupported {
@@ -263,8 +267,14 @@ pub fn connect(location: &Location) -> Result<PathBuf, String> {
                 });
             }
 
-            // Mounting is asynchronous; give it a moment to appear.
-            let deadline = Instant::now() + Duration::from_secs(10);
+            // Mounting is asynchronous, and the wait is not the network's -
+            // it is a person's. `open` hands the URL to the desktop and
+            // returns at once; what follows is a dialog asking for a
+            // password and then, often, a list of shares to choose from.
+            // Ten seconds was a guess about a machine and gave up while the
+            // reader was still typing, reporting a failure for a mount that
+            // then completed a moment later.
+            let deadline = Instant::now() + Duration::from_secs(90);
             while Instant::now() < deadline {
                 if let Some(found) = find_mount_in(&roots, location) {
                     return Ok(with_subpath(found, location));
@@ -277,8 +287,12 @@ pub fn connect(location: &Location) -> Result<PathBuf, String> {
                 std::thread::sleep(Duration::from_millis(250));
             }
 
+            // Said as what it is: not a refusal, and not necessarily over.
+            // The desktop may still have a dialog open, and the share will
+            // appear under /Volumes when it is answered.
             Err(format!(
-                "Mounted {}, but the mount point did not appear within 10s",
+                "{} has not appeared yet. If the desktop is still asking for \
+                 a password, answer it - the share will mount on its own.",
                 location.to_url()
             ))
         }
