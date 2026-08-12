@@ -3588,6 +3588,165 @@ pub unsafe extern "C" fn rcmd_place_add(path: *const c_char, pinned: u8) -> *mut
     })
 }
 
+/// Save a network location by its URL, so it can be connected to later.
+///
+/// `rcmd_place_add` takes a path and saves a local folder, which is the whole
+/// of what a graphical front-end could offer until now: the engine has known
+/// about smb:// and afp:// since the beginning, and nothing but the terminal
+/// could reach it. The URL is parsed here rather than in each front-end,
+/// because "what does smb://host/share/sub mean" is one question and three
+/// answers to it would drift.
+///
+/// # Safety
+/// `url` must be a valid NUL-terminated UTF-8 string.
+#[no_mangle]
+pub unsafe extern "C" fn rcmd_place_add_url(url: *const c_char, pinned: u8) -> *mut c_char {
+    guarded(|| {
+        let url = match borrowed(url) {
+            Ok(url) => url,
+            Err(e) => return failed(e),
+        };
+        let place = match netloc::Location::parse(&url) {
+            Ok(place) => place,
+            Err(reason) => return failed(reason),
+        };
+
+        let mut saved = bookmarks_now();
+        if pinned != 0 {
+            saved.add(place);
+            if let Some(file) = bookmarks_path() {
+                if let Err(e) = saved.save_to(&file) {
+                    return failed(e);
+                }
+            }
+        } else {
+            saved.push_recent(place);
+            if let Some(file) = recent_places_path() {
+                if let Err(e) = saved.save_recent_to(&file) {
+                    return failed(e);
+                }
+            }
+        }
+        replied(&Places {
+            pinned: saved.locations.iter().map(Place::from).collect(),
+            recent: saved.recent.iter().map(Place::from).collect(),
+        })
+    })
+}
+
+/// What an address typed by a reader amounts to, without acting on it.
+///
+/// So a front-end can show what it is about to connect to - the protocol, the
+/// host, the name it will be saved under - and refuse a typo before anything
+/// is mounted.
+///
+/// # Safety
+/// `url` must be a valid NUL-terminated UTF-8 string.
+#[no_mangle]
+pub unsafe extern "C" fn rcmd_netloc_parse(url: *const c_char) -> *mut c_char {
+    guarded(|| {
+        let url = match borrowed(url) {
+            Ok(url) => url,
+            Err(e) => return failed(e),
+        };
+        match netloc::Location::parse(&url) {
+            Ok(place) => replied(&Place::from(&place)),
+            Err(reason) => failed(reason),
+        }
+    })
+}
+
+/// Connect a location and answer with the directory it can now be listed at.
+///
+/// Blocking, and for a reason worth stating: mounting is the platform's job -
+/// on macOS the URL goes to the OS, which mounts under /Volumes and asks the
+/// Keychain for credentials - and there is no useful progress to report while
+/// it happens. A front-end should run this off its drawing thread; the wait
+/// is bounded by the engine at ten seconds.
+///
+/// An already-mounted share answers immediately with where it already is,
+/// so connecting twice is not an error and not a second mount.
+///
+/// # Safety
+/// `url` must be a valid NUL-terminated UTF-8 string.
+#[no_mangle]
+pub unsafe extern "C" fn rcmd_netloc_connect(url: *const c_char) -> *mut c_char {
+    guarded(|| {
+        let url = match borrowed(url) {
+            Ok(url) => url,
+            Err(e) => return failed(e),
+        };
+        let place = match netloc::Location::parse(&url) {
+            Ok(place) => place,
+            Err(reason) => return failed(reason),
+        };
+        #[derive(Serialize)]
+        struct Landed {
+            path: String,
+        }
+        match lost_commander_core::mount::connect(&place) {
+            Ok(path) => replied(&Landed {
+                path: path.display().to_string(),
+            }),
+            Err(reason) => failed(reason),
+        }
+    })
+}
+
+/// Detach a mounted share, by the directory it is mounted at.
+///
+/// Best effort, and the platform's call: what this actually refuses - a
+/// volume with an open file on it, a share the system is still writing to -
+/// is not something the engine can know first.
+///
+/// # Safety
+/// `path` must be a valid NUL-terminated UTF-8 string.
+#[no_mangle]
+pub unsafe extern "C" fn rcmd_netloc_disconnect(path: *const c_char) -> *mut c_char {
+    guarded(|| {
+        let path = match borrowed(path) {
+            Ok(path) => path,
+            Err(e) => return failed(e),
+        };
+        match lost_commander_core::mount::disconnect(Path::new(&path)) {
+            Ok(()) => replied(&serde_json::json!({ "ok": true })),
+            Err(reason) => failed(reason),
+        }
+    })
+}
+
+/// Where a saved network location is mounted right now, if it is at all.
+///
+/// Asked separately from connecting, because "is this attached" is a question
+/// a rail wants answered while it draws and connecting is a thing that takes
+/// seconds and may ask for a password.
+///
+/// # Safety
+/// `url` must be a valid NUL-terminated UTF-8 string.
+#[no_mangle]
+pub unsafe extern "C" fn rcmd_netloc_mounted_at(url: *const c_char) -> *mut c_char {
+    guarded(|| {
+        let url = match borrowed(url) {
+            Ok(url) => url,
+            Err(e) => return failed(e),
+        };
+        let place = match netloc::Location::parse(&url) {
+            Ok(place) => place,
+            Err(reason) => return failed(reason),
+        };
+        #[derive(Serialize)]
+        struct Where {
+            path: Option<String>,
+        }
+        let platform = lost_commander_core::mount::Platform::current();
+        let roots = lost_commander_core::mount::candidate_roots(platform);
+        let found = lost_commander_core::mount::find_mount_in(&roots, &place);
+        replied(&Where {
+            path: found.map(|path| path.display().to_string()),
+        })
+    })
+}
+
 /// Unpin the place called `name`, or forget a recent one.
 ///
 /// By name rather than by position: the front-end draws a list it fetched
@@ -7029,5 +7188,36 @@ written *so far*");
     fn the_version_comes_back_so_a_wrong_dll_shows_up_at_once() {
         let reply = reply_of(rcmd_version());
         assert_eq!(reply["version"], env!("CARGO_PKG_VERSION"));
+    }
+
+    #[test]
+    fn an_address_is_read_without_being_connected_to() {
+        // The question a front-end asks before it mounts anything: what is
+        // this, and what will it be called - so a typo is refused at the
+        // field rather than after ten seconds of the platform trying.
+        let address = c("smb://files.local/team/reports");
+        let place = reply_of(unsafe { rcmd_netloc_parse(address.as_ptr()) });
+        assert_eq!(place["network"], true);
+        assert!(place["url"].as_str().unwrap().starts_with("smb://files.local/team"));
+
+        // And a plain path is a place too, not an error - the same field
+        // takes both, because a reader typing an address does not think of
+        // them as different kinds of thing.
+        let plain = c("/tmp");
+        let local = reply_of(unsafe { rcmd_netloc_parse(plain.as_ptr()) });
+        assert_eq!(local["network"], false);
+
+        let broken = c("smb://");
+        let refused = reply_of(unsafe { rcmd_netloc_parse(broken.as_ptr()) });
+        assert!(refused.get("error").is_some(), "{refused:?}");
+    }
+
+    #[test]
+    fn a_share_that_is_not_mounted_says_so_rather_than_failing() {
+        // "Is this attached" is asked while a rail draws, so it must be
+        // cheap and must not be an error when the answer is no.
+        let address = c("smb://nowhere.invalid/share");
+        let found = reply_of(unsafe { rcmd_netloc_mounted_at(address.as_ptr()) });
+        assert!(found["path"].is_null(), "{found:?}");
     }
 }
