@@ -1,0 +1,142 @@
+# Binaries for a tagged version, attached to a GitHub release.
+#
+# Built on the platform they run on rather than cross-compiled: the graphical
+# front-end links the system's windowing libraries, and a cross-build that
+# succeeds can still produce something that will not start on the machine it
+# was built for.
+#
+# Only GitHub's own actions, and otherwise the runner's own tools: rustup and
+# the gh CLI are both preinstalled. No third-party action appears here,
+# because an action is somebody else's code holding a token, and the job it
+# would be holding it for is publishing binaries that people will run.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  # So a release can be rehearsed against a branch without inventing a tag.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      # One platform failing should not take the others' artefacts with it -
+      # a release with two of three is worth more than none, and the missing
+      # one can be added afterwards.
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            kind: linux-x86_64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            kind: linux-aarch64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            kind: macos-arm64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            kind: windows-x86_64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # The graphical front-end wants the X11 and Wayland development
+      # packages any windowed Rust program wants. The terminal one wants
+      # none of this, which is the point of them being separate crates.
+      - name: Libraries the graphical front-end links
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libx11-dev libxcursor-dev libxrandr-dev libxi-dev \
+            libgl1-mesa-dev libwayland-dev libxkbcommon-dev pkg-config
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }} -p lost-commander-tui -p lost-commander-egui
+
+      # Everything a package needs travels with the binaries: the man pages,
+      # the completions, the desktop entry, the metainfo and the icon. A
+      # tarball that holds only executables makes every packager go back to
+      # the repository for the other half.
+      - name: Gather
+        shell: bash
+        run: |
+          set -eu
+          name="lost-commander-${GITHUB_REF_NAME#v}-${{ matrix.kind }}"
+          mkdir -p "dist/$name"
+          bin="target/${{ matrix.target }}/release"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp "$bin/lostc.exe" "$bin/lostc-gui.exe" "dist/$name/"
+          else
+            cp "$bin/lostc" "$bin/lostc-gui" "dist/$name/"
+            cp -r packaging "dist/$name/packaging"
+          fi
+          cp README.md LICENSE CHANGELOG.md PRIVACY.md "dist/$name/" 2>/dev/null || true
+          cd dist
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            7z a -tzip "$name.zip" "$name" >/dev/null
+          else
+            tar czf "$name.tar.gz" "$name"
+          fi
+          rm -rf "$name"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.kind }}
+          path: dist/*
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # One file of checksums beside the archives, because a download people
+      # are meant to run should be checkable without trusting the page it
+      # came from.
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+
+      # Only on a tag. A rehearsal from the branch builds everything and
+      # publishes nothing, which is the whole reason it can be rehearsed.
+      - name: Publish
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Written to a file rather than passed as an argument: the notes
+          # are markdown, and a multi-line argument indented to sit inside
+          # this script arrives with its indentation, which markdown reads
+          # as a code block.
+          cat > notes.md <<'EOF'
+          See CHANGELOG.md for what changed.
+
+          **Linux and macOS** — unpack and run `lostc` (terminal) or `lostc-gui`
+          (graphical). The `packaging/` directory in the Linux archives holds the
+          man pages, shell completions, desktop entry, icon and AppStream
+          metainfo that a distribution package installs.
+
+          **Windows** — the [Microsoft Store build](https://apps.microsoft.com/detail/9p08xtqjsxvb)
+          is the packaged one and carries its whole runtime. The archive here is
+          for people who would rather not have a store.
+
+          **macOS** — these are the two Rust front-ends. The native Mac app is a
+          separate build and is not here yet.
+
+          Check a download against `SHA256SUMS` before running it.
+          EOF
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file notes.md

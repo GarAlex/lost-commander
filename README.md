@@ -69,7 +69,12 @@ runtime, so nothing is installed first.
 download for people who want the shell in it (the Store's sandbox refuses
 pseudo-terminals, so that build has no shell sector).
 
-**Linux** — from source for now; see below.
+**Linux** — binaries for x86_64 and aarch64 on the
+[releases page][releases], with the man pages, completions, desktop entry and
+metainfo beside them in `packaging/`; check a download against `SHA256SUMS`.
+Or from source, below.
+
+[releases]: https://github.com/GarAlex/lost-commander/releases
 
 From source, on any of the three:
 
