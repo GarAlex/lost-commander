@@ -325,8 +325,19 @@ pub fn connect(location: &Location) -> Result<PathBuf, String> {
             hint,
         } => {
             // Already mounted from an earlier session?
-            if let Some(found) = find_mount_in(&roots, location) {
-                return Ok(with_subpath(found, location));
+            //
+            // Only when a share was actually named. An address that is just
+            // a server is a request to choose - the desktop answers it with
+            // a list of shares - and reusing whatever else happens to be
+            // mounted from that host silently picks one on the reader's
+            // behalf. That is why connecting twice behaved differently the
+            // second time: the first asked which share, the second went
+            // straight to the one from the first, whether or not it was the
+            // one wanted this time.
+            if !location.share().is_empty() {
+                if let Some(found) = find_mount_in(&roots, location) {
+                    return Ok(with_subpath(found, location));
+                }
             }
 
             // stdin is closed on purpose: a helper that wants to prompt for a
@@ -667,5 +678,18 @@ map auto_home on /System/Volumes/Data/home (autofs, automounted, nobrowse)";
             "//alex@nas10/Shared Folder on /Volumes/Shared Folder (smbfs, nodev)",
         );
         assert_eq!(table[0].1.display().to_string(), "/Volumes/Shared Folder");
+    }
+
+    #[test]
+    fn naming_a_server_alone_is_a_request_to_choose() {
+        // Reported: the first connection asked which share, the second went
+        // straight in without asking - the same address behaving two ways.
+        // A named share may be reused; a bare server may not, because
+        // reusing one means choosing for the reader.
+        let bare = Location::parse("smb://nas10").unwrap();
+        assert!(bare.share().is_empty(), "a server alone names no share");
+
+        let named = Location::parse("smb://nas10/alex").unwrap();
+        assert_eq!(named.share(), "alex");
     }
 }
