@@ -7,6 +7,8 @@ Notable changes, newest first. Versions follow [semantic versioning]; until
 
 ## Unreleased
 
+## 0.1.1 — 2026-08-12
+
 ### Added
 
 - **The graphical window carries the project icon.** The same two-panels

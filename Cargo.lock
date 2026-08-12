@@ -1838,7 +1838,7 @@ checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
 name = "lost-commander-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bzip2-rs",
  "chrono",
@@ -1862,7 +1862,7 @@ dependencies = [
 
 [[package]]
 name = "lost-commander-egui"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chrono",
  "eframe",
@@ -1876,7 +1876,7 @@ dependencies = [
 
 [[package]]
 name = "lost-commander-ffi"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "dirs",
  "lost-commander-core",
@@ -1888,7 +1888,7 @@ dependencies = [
 
 [[package]]
 name = "lost-commander-tui"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "crossterm",
  "libc",
