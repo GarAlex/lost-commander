@@ -218,6 +218,9 @@ neither should be started until 4 has been used in anger.
   solution and is not.
 - FTPS and FTP-over-TLS beyond what the client crate gives for free.
 - Resume of interrupted transfers. Wanted eventually; not before 4.
+- Rendering a page, or listing what its scripts would load. That needs a
+  browser engine, which is per-platform and cannot live in the engine
+  crate where the other two front-ends could reach it.
 
 ## HTTP and HTTPS, which is three features wearing one name
 
@@ -261,14 +264,31 @@ the web is not a tree:
 - **No cookies, no scripts, no forms.** What is fetched is what `curl`
   would fetch.
 
-**The honest limitation, which belongs in the UI and not in a footnote:**
-a page whose content is assembled by JavaScript has almost nothing in
-its HTML. On a modern application this listing is a document, three
-bundles and a favicon - technically correct and useless. That is not a
-bug to be fixed later; it is what the format is. So an empty or nearly
-empty listing must say *why* - "this page builds itself in the browser;
-there is nothing to list" - rather than drawing an empty pane the reader
-will read as a failure.
+**What a page built by JavaScript amounts to, and why that is fine.** Its
+HTML references a document, some bundles and a favicon, so that is what
+the listing holds. The bundles are files like any other: F3 opens them,
+F5 copies them down, and for a reader asking "what is this page made
+of", they are the answer rather than a poor substitute for it. Resources
+that a script fetches at run time are not in the document, so they are
+not listed - not guessed at, not shown greyed out, not apologised for.
+The rule is one line: **the listing is what the document references.**
+
+That rule is also the scope boundary. Listing what a page *would* load
+means running its scripts, which means a browser engine, and that is a
+different program:
+
+- Executing untrusted JavaScript inside a file manager is a different
+  security posture from reading files, and not one to take on quietly.
+- It would break the premise this whole design rests on. One adapter in
+  the engine serves three front-ends; a browser engine cannot live
+  there. WebKit and WebView2 are per-platform, and the terminal
+  front-end has nothing to render into at all.
+
+So: not now, and possibly not ever, which is a decision rather than a
+gap. Say it in the window if a page turns out to reference almost
+nothing - "this page loads its content with scripts; what it references
+is listed" - so the reader knows they are looking at the truth about the
+document rather than at a failure to read it.
 
 F3 needs nothing new. The viewers already route by what a file is and
 already detect encoding; HTML and JS are text, and `fetch`-to-temp is
