@@ -60,7 +60,18 @@ line.
 
 ## Installing
 
-Nothing is packaged yet; this is the first release. From source:
+**Windows** — [on the Microsoft Store][store]. The package carries its whole
+runtime, so nothing is installed first.
+
+[store]: https://apps.microsoft.com/detail/9p08xtqjsxvb
+
+**macOS** — coming soon: a Mac App Store build, and a signed and notarised
+download for people who want the shell in it (the Store's sandbox refuses
+pseudo-terminals, so that build has no shell sector).
+
+**Linux** — from source for now; see below.
+
+From source, on any of the three:
 
 ```sh
 cargo install lost-commander-tui     # lostc, the terminal one
