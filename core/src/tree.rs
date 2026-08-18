@@ -12,6 +12,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+#[cfg(windows)]
 use crate::panel::is_hidden;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -87,20 +88,38 @@ fn children(path: &Path, show_hidden: bool, show_files: bool) -> Vec<(PathBuf, b
     let mut files: Vec<(PathBuf, bool)> = Vec::new();
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
-        let Ok(metadata) = entry.path().symlink_metadata() else {
-            continue;
-        };
-        if !show_hidden && is_hidden(&name, &metadata) {
+        // Hidden is decided from the name alone here, which is what
+        // `panel::is_hidden` decides on Unix too - the flag half of that
+        // rule is Windows-only, and Windows answers it below from the
+        // enumeration's own attributes, which cost nothing extra. This
+        // listing used to stat every entry to feed a parameter the Unix
+        // rule ignores: one syscall per row, twenty-four thousand rows,
+        // most of the time the tree spent in a crowded directory.
+        if !show_hidden && name.starts_with('.') {
             continue;
         }
-        // Follow links so a symlinked directory can still be walked.
-        let is_symlink = metadata.file_type().is_symlink();
+        #[cfg(windows)]
+        if !show_hidden {
+            if let Ok(metadata) = entry.metadata() {
+                if is_hidden(&name, &metadata) {
+                    continue;
+                }
+            }
+        }
+        // The type rides on the listing itself - d_type on Unix, the
+        // enumeration's attributes on Windows - so a plain entry costs no
+        // call of its own. Only a symlink is asked about further, because
+        // walking one means knowing what it points at.
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
+        let is_symlink = kind.is_symlink();
         let is_dir = if is_symlink {
             fs::metadata(entry.path())
                 .map(|m| m.is_dir())
                 .unwrap_or(false)
         } else {
-            metadata.is_dir()
+            kind.is_dir()
         };
         if is_dir {
             dirs.push((entry.path(), is_symlink));
@@ -109,8 +128,11 @@ fn children(path: &Path, show_hidden: bool, show_files: bool) -> Vec<(PathBuf, b
         }
     }
 
-    dirs.sort_by_key(|(p, _)| label_for(p).to_lowercase());
-    files.sort_by_key(|(p, _)| label_for(p).to_lowercase());
+    // Cached, not recomputed: `sort_by_key` asks for the key on every
+    // comparison, which for a crowd of twenty-four thousand rows was three
+    // hundred and fifty thousand lowercased allocations per listing.
+    dirs.sort_by_cached_key(|(p, _)| label_for(p).to_lowercase());
+    files.sort_by_cached_key(|(p, _)| label_for(p).to_lowercase());
     dirs.into_iter()
         .map(|(p, link)| (p, true, link))
         .chain(files.into_iter().map(|(p, link)| (p, false, link)))

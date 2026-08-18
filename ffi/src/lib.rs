@@ -5767,24 +5767,48 @@ mod tests {
     }
 
     #[test]
-    fn a_directory_with_nothing_under_it_says_so() {
-        // So the front-end can stop drawing something to click on.
+    fn an_unopened_directory_offers_and_an_opened_empty_one_stops() {
+        // The ABI twin of the core's every_folder_offers_to_open_until_it_
+        // is_opened: the eager "is there anything under this?" went with
+        // the per-row peek that paid for it, so across the ABI an unopened
+        // directory now offers to open, and the truth arrives with the
+        // opening. Both halves are asserted, because the correction is the
+        // whole of the contract now.
         let dir = tempfile::tempdir().unwrap();
         let empty = dir.path().join("empty");
         std::fs::create_dir(&empty).unwrap();
+        // A file inside is not a subdirectory: opened, this is still empty
+        // to a directory-only tree.
         std::fs::write(empty.join("a-file.txt"), "x").unwrap();
 
-        let target = c(&empty.display().to_string());
+        // Two subtleties the old test tripped over, one silently. Matching
+        // by label caught the real /var/empty - the reveal walks through
+        // /var - so it passed against a system directory wearing the right
+        // name. And a revealed *target* is always already opened, so the
+        // unopened state is only observable on a row the reveal did not
+        // aim at: the tree is asked for the parent, and `empty` is judged
+        // as one of its children.
+        let mine = empty.display().to_string();
+        let target = c(&dir.path().display().to_string());
         let nothing = c("[]");
         let reply = reply_of(unsafe { rcmd_tree(target.as_ptr(), nothing.as_ptr(), 0, 0) });
         let node = reply["nodes"]
             .as_array()
             .unwrap()
             .iter()
-            .find(|n| n["label"] == "empty")
+            .find(|n| n["path"] == mine.as_str())
             .expect("the target itself should be there");
-        // A file inside is not a subdirectory, so this is still a leaf.
-        assert_eq!(node["leaf"], true, "{node:?}");
+        assert_eq!(node["leaf"], false, "unopened, it offers: {node:?}");
+
+        let opened = c(&serde_json::json!([mine]).to_string());
+        let reply = reply_of(unsafe { rcmd_tree(target.as_ptr(), opened.as_ptr(), 0, 0) });
+        let node = reply["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["path"] == mine.as_str())
+            .expect("still there once opened");
+        assert_eq!(node["leaf"], true, "opened and found empty, it stops: {node:?}");
     }
 
     #[test]
