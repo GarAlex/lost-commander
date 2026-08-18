@@ -26,7 +26,7 @@ members = ["core", "tui", "egui", "ffi"]
 # Everything the crates share, so a version is stated once and cannot drift
 # between the front-ends.
 [workspace.package]
-version = "0.1.1"
+version = "0.1.2"
 homepage = "https://github.com/GarAlex/lost-commander"
 edition = "2021"
 rust-version = "1.74"

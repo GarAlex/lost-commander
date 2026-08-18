@@ -7,6 +7,8 @@ Notable changes, newest first. Versions follow [semantic versioning]; until
 
 ## Unreleased
 
+## 0.1.2 — 2026-08-18
+
 ### Added
 
 - **The tree stops reading folders it has not opened.** Painting a folder's
