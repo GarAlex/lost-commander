@@ -24,7 +24,12 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, SystemTime};
 
-const CHUNK: usize = 128 * 1024;
+// One megabyte, not the 128KiB it was: the loop pays two syscalls per
+// chunk, and at the several gigabytes a second a local disk moves, the
+// smaller chunk spent a measurable share of the copy on crossing the
+// kernel. Cancellation is checked between chunks either way, and a
+// megabyte at disk speed is far below anyone's reaction time.
+const CHUNK: usize = 4 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Operation {
@@ -840,6 +845,48 @@ fn copy_file(source: &Path, target: &Path, sink: &mut dyn Sink) -> io::Result<()
         ));
     }
 
+    let beside = partial_beside(target);
+
+    // The system's own copy on this platform is a constant-time clone when
+    // both ends share an APFS volume - Finder's copy of two gigabytes is
+    // instant, and it carries every attribute across. Matching that is not
+    // an optimisation but what "copy" means to anyone who has watched the
+    // system do the same job. The clone lands on the partial name and is
+    // renamed over, so the whole-file-or-old-file guarantee is exactly the
+    // slow path's; any refusal - another volume, another filesystem, a
+    // directory that admits no new names - falls through to the byte loop.
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        if let (Ok(from), Ok(to)) = (
+            std::ffi::CString::new(source.as_os_str().as_bytes()),
+            std::ffi::CString::new(beside.as_os_str().as_bytes()),
+        ) {
+            if unsafe { libc::clonefile(from.as_ptr(), to.as_ptr(), 0) } == 0 {
+                sink.bytes_copied(about.len());
+                if let Err(e) = fs::rename(&beside, target) {
+                    let _ = fs::remove_file(&beside);
+                    return Err(e);
+                }
+                sink.happened(
+                    journal::Event::new(journal::Kind::Copy, source)
+                        .to(target)
+                        .note(crate::entry::human_size(about.len())),
+                );
+                return Ok(());
+            }
+        }
+    }
+
+    copy_file_by_bytes(source, target, sink)
+}
+
+/// The byte-at-a-time copy: every platform's fallback, and the only road
+/// where cancel and a filling disk can land *mid-file* - which is why the
+/// tests that pin those behaviours call this directly. A clone has no
+/// middle.
+fn copy_file_by_bytes(source: &Path, target: &Path, sink: &mut dyn Sink) -> io::Result<()> {
+    let about = fs::metadata(source)?;
     let mut reader = fs::File::open(source)?;
     let beside = partial_beside(target);
     // The one case the safe way cannot serve: a directory that refuses new
@@ -869,7 +916,19 @@ fn copy_file(source: &Path, target: &Path, sink: &mut dyn Sink) -> io::Result<()
     // onto the temporary, before the swap, so the file never exists under
     // the target's name wearing the wrong ones.
     if let Ok(metadata) = reader.metadata() {
-        let _ = fs::set_permissions(partial.as_deref().unwrap_or(target), metadata.permissions());
+        let written = partial.as_deref().unwrap_or(target);
+        let _ = fs::set_permissions(written, metadata.permissions());
+        // And the dates, as the system's copy carries them: a copy stamped
+        // "now" breaks every sort-by-modified its reader trusted, and makes
+        // backup tools that compare times copy it again forever.
+        #[cfg(unix)]
+        preserve_times(&metadata, written);
+        // And the extended attributes, which on this desktop are Finder
+        // tags, quarantine, and where a download came from. Best effort,
+        // like the rest of this block: a copy that arrives is worth more
+        // than one refused over a label.
+        #[cfg(target_os = "macos")]
+        preserve_xattrs(source, written);
     }
     drop(writer);
 
@@ -906,6 +965,61 @@ fn stream(reader: &mut fs::File, writer: &mut fs::File, sink: &mut dyn Sink) -> 
         sink.bytes_copied(read as u64);
     }
     writer.flush()
+}
+
+/// The source's access and modification times, stamped onto the copy.
+#[cfg(unix)]
+fn preserve_times(from: &fs::Metadata, to: &Path) {
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::MetadataExt;
+    let times = [
+        libc::timespec { tv_sec: from.atime(), tv_nsec: from.atime_nsec() },
+        libc::timespec { tv_sec: from.mtime(), tv_nsec: from.mtime_nsec() },
+    ];
+    if let Ok(path) = std::ffi::CString::new(to.as_os_str().as_bytes()) {
+        unsafe { libc::utimensat(libc::AT_FDCWD, path.as_ptr(), times.as_ptr(), 0) };
+    }
+}
+
+/// Every extended attribute the source carries, copied onto the target.
+#[cfg(target_os = "macos")]
+fn preserve_xattrs(source: &Path, target: &Path) {
+    use std::os::unix::ffi::OsStrExt;
+    let (Ok(from), Ok(to)) = (
+        std::ffi::CString::new(source.as_os_str().as_bytes()),
+        std::ffi::CString::new(target.as_os_str().as_bytes()),
+    ) else {
+        return;
+    };
+    unsafe {
+        let size = libc::listxattr(from.as_ptr(), std::ptr::null_mut(), 0, 0);
+        if size <= 0 {
+            return;
+        }
+        let mut names = vec![0u8; size as usize];
+        let size = libc::listxattr(from.as_ptr(), names.as_mut_ptr().cast(), names.len(), 0);
+        if size <= 0 {
+            return;
+        }
+        names.truncate(size as usize);
+        for name in names.split(|byte| *byte == 0).filter(|name| !name.is_empty()) {
+            let Ok(name) = std::ffi::CString::new(name) else { continue };
+            let len = libc::getxattr(from.as_ptr(), name.as_ptr(), std::ptr::null_mut(), 0, 0, 0);
+            if len < 0 {
+                continue;
+            }
+            let mut value = vec![0u8; len as usize];
+            let len = libc::getxattr(
+                from.as_ptr(), name.as_ptr(), value.as_mut_ptr().cast(), value.len(), 0, 0,
+            );
+            if len < 0 {
+                continue;
+            }
+            libc::setxattr(
+                to.as_ptr(), name.as_ptr(), value.as_ptr().cast(), len as usize, 0, 0,
+            );
+        }
+    }
 }
 
 /// A name for the half-written copy, in the target's own directory so the
@@ -2511,7 +2625,9 @@ mod tests {
         // Cancelled partway through the bytes, which is where a reader who
         // changes their mind actually presses the button.
         let mut sink = TestSink::cancelling_after_bytes(CHUNK as u64);
-        let outcome = copy_file(&source, &target, &mut sink);
+        // The byte loop directly: a cancel can only land mid-file where a
+        // middle exists, and a same-volume copy_file is a clone without one.
+        let outcome = copy_file_by_bytes(&source, &target, &mut sink);
 
         assert!(outcome.is_err(), "a cancelled copy did not report as one");
         assert_eq!(
@@ -2710,5 +2826,92 @@ mod tests {
             stray_parts(&volume.mounted).is_empty(),
             "left half a file behind on a disk with no room to spare"
         );
+    }
+
+    /// What the system's copy carries, this copy carries - on both roads.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_copy_carries_the_dates_and_the_attributes() {
+        use std::os::unix::ffi::OsStrExt;
+        use std::os::unix::fs::MetadataExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("stamped.bin");
+        fs::write(&source, vec![b's'; 300_000]).unwrap();
+
+        // A date that is visibly not "now", and a label of the kind Finder
+        // tags and quarantine are made of.
+        let past = [
+            libc::timespec { tv_sec: 1_577_880_000, tv_nsec: 0 },
+            libc::timespec { tv_sec: 1_577_880_000, tv_nsec: 0 },
+        ];
+        let c = std::ffi::CString::new(source.as_os_str().as_bytes()).unwrap();
+        unsafe {
+            libc::utimensat(libc::AT_FDCWD, c.as_ptr(), past.as_ptr(), 0);
+            let name = std::ffi::CString::new("com.example.mark").unwrap();
+            libc::setxattr(c.as_ptr(), name.as_ptr(), b"kept".as_ptr().cast(), 4, 0, 0);
+        }
+
+        let check = |target: &Path| {
+            let copied = fs::metadata(target).unwrap();
+            assert_eq!(copied.mtime(), 1_577_880_000, "the date did not travel");
+            let t = std::ffi::CString::new(target.as_os_str().as_bytes()).unwrap();
+            let name = std::ffi::CString::new("com.example.mark").unwrap();
+            let mut value = [0u8; 8];
+            let len = unsafe {
+                libc::getxattr(t.as_ptr(), name.as_ptr(), value.as_mut_ptr().cast(), 8, 0, 0)
+            };
+            assert_eq!(&value[..len.max(0) as usize], b"kept", "the attribute did not travel");
+            assert_eq!(fs::read(target).unwrap(), vec![b's'; 300_000]);
+        };
+
+        // The clone road: same volume, the whole file at once.
+        let mut sink = TestSink::new();
+        copy_file(&source, &dir.path().join("cloned.bin"), &mut sink).unwrap();
+        check(&dir.path().join("cloned.bin"));
+        assert_eq!(sink.bytes, 300_000, "a clone still reports its bytes");
+
+        // The byte road: every platform's fallback, preserved by hand.
+        let mut sink = TestSink::new();
+        copy_file_by_bytes(&source, &dir.path().join("streamed.bin"), &mut sink).unwrap();
+        check(&dir.path().join("streamed.bin"));
+    }
+
+    /// Not run by default: prints throughput so a change to the copy path
+    /// can be argued with numbers. `cargo test --release -p
+    /// lost-commander-core bench_copy -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn bench_copy_against_the_system() {
+        use std::time::Instant;
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("big.bin");
+        let block: Vec<u8> = (0..CHUNK).map(|i| (i % 251) as u8).collect();
+        let mut f = fs::File::create(&source).unwrap();
+        for _ in 0..1024 {
+            f.write_all(&block).unwrap();
+        }
+        drop(f);
+        let gib = 1.0f64;
+
+        let mut sink = TestSink::new();
+        let t = Instant::now();
+        copy_file(&source, &dir.path().join("clone.bin"), &mut sink).unwrap();
+        println!("clone road:  {:>8.1} ms", t.elapsed().as_secs_f64() * 1000.0);
+
+        let mut sink = TestSink::new();
+        let t = Instant::now();
+        copy_file_by_bytes(&source, &dir.path().join("bytes.bin"), &mut sink).unwrap();
+        let s = t.elapsed().as_secs_f64();
+        println!("byte road:   {:>8.1} ms  ({:.1} GiB/s)", s * 1000.0, gib / s);
+
+        let t = Instant::now();
+        std::process::Command::new("cp")
+            .arg(&source)
+            .arg(dir.path().join("cp.bin"))
+            .status()
+            .unwrap();
+        let s = t.elapsed().as_secs_f64();
+        println!("system cp:   {:>8.1} ms  ({:.1} GiB/s)", s * 1000.0, gib / s);
     }
 }
