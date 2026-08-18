@@ -3404,14 +3404,20 @@ pub unsafe extern "C" fn rcmd_tree(
                 .nodes
                 .iter()
                 .map(|node| {
-                    // One stat per visible node. Only what is on screen is in
-                    // `nodes` - a shut directory's children were never read -
-                    // so this costs a walk of what is open, not of the disk.
-                    let facts = std::fs::symlink_metadata(&node.path);
-                    let is_symlink = facts
-                        .as_ref()
-                        .map(|m| m.file_type().is_symlink())
-                        .unwrap_or(false);
+                    // A stat only for a file row, whose size and date the
+                    // reply carries. A directory's are not asked for - its
+                    // size is "what is in it", a question the scan answers -
+                    // and a tree is almost all directories, so this used to
+                    // be a stat per visible row, twenty-four thousand of
+                    // them repaid on every crossing of the ABI. The symlink
+                    // fact rides on the node from the walk that already
+                    // paid for it.
+                    let facts = if node.is_dir {
+                        None
+                    } else {
+                        std::fs::symlink_metadata(&node.path).ok()
+                    };
+                    let is_symlink = node.is_symlink;
                     TreeNode {
                         path: node.path.display().to_string(),
                         label: node.label.clone(),
@@ -3428,11 +3434,8 @@ pub unsafe extern "C" fn rcmd_tree(
                         // Zero for a directory, which is what a listing shows
                         // too - the size of a directory is the size of what is
                         // in it, and that is a question the scan answers.
-                        size: match &facts {
-                            Ok(m) if !node.is_dir => m.len(),
-                            _ => 0,
-                        },
-                        modified: facts.as_ref().ok().and_then(|m| {
+                        size: facts.as_ref().map(|m| m.len()).unwrap_or(0),
+                        modified: facts.as_ref().and_then(|m| {
                             m.modified().ok().and_then(|time| {
                                 time.duration_since(UNIX_EPOCH)
                                     .ok()

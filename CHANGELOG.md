@@ -9,6 +9,17 @@ Notable changes, newest first. Versions follow [semantic versioning]; until
 
 ### Added
 
+- **The tree stops reading folders it has not opened.** Painting a folder's
+  arrow used to read that folder's children - a readdir and a run of stats
+  per visible row - so revealing a path through a directory of 24,000
+  entries cost half a second, repaid on every fold. Every folder now offers
+  an arrow until it is opened, and an empty one corrects itself on opening,
+  which is Finder's own behaviour; the same reveal now measures 122 ms, and
+  the ABI reply no longer stats directory rows at all. The autofs guard
+  went with the eager peek it protected: nothing reads an unopened folder
+  any more, so a trigger like /home is only touched when deliberately
+  opened - which is a mount request, which is what opening it means.
+
 - **A copy is the system's copy.** On macOS, a same-volume copy is an APFS
   clone - constant-time, as Finder's is; the benchmarked 1 GiB copy fell
   from seconds to under a millisecond - landing on the temporary name and

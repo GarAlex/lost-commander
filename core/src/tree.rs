@@ -29,6 +29,9 @@ pub struct Node {
     /// only thing that tells it apart - but it is what an operation needs
     /// before it can know whether it is copying one thing or a subtree.
     pub is_dir: bool,
+    /// Learned from the same stat that answered `is_dir`, and carried so a
+    /// front-end drawing the row does not pay a second one to find out.
+    pub is_symlink: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -61,101 +64,13 @@ fn label_for(path: &Path) -> String {
         .unwrap_or_else(|| path.display().to_string())
 }
 
-/// Whether anything hangs under `path` that this tree would show.
-///
-/// Answered by looking, and stopping at the first thing found - so it costs
-/// one directory open per row rather than a full read. That is what lets a
-/// row say honestly whether it opens onto anything: `leaf` is otherwise only
-/// known *after* expanding, so every unopened folder claimed to have
-/// something inside and half of them were lying.
-///
-/// Unreadable means no marker rather than a marker onto an error: a folder
-/// that cannot be read has nothing to show whatever is in it.
-///
-/// The look is bounded. "Stop at the first thing found" has no ceiling when
-/// a directory holds a hundred thousand flat files and no subdirectory: one
-/// arrow costs a full scan, and expanding a level pays it per child - which
-/// is how revealing a path beside a build-cache measurably stalled for the
-/// length of several such scans. Past the cap the answer is "openable"
-/// without looking further: has_children exists to paint an arrow, and the
-/// worst that lie costs is an arrow that expands onto nothing - after which
-/// the expand itself marks the node a leaf, and the arrow goes.
-fn has_children(path: &Path, show_hidden: bool, show_files: bool) -> bool {
-    const LOOKED_ENOUGH: usize = 5_000;
-    // An automount trigger is never read to paint an arrow. Reading one
-    // asks automountd to mount whatever the map names, and when that
-    // server is asleep the read blocks for as long as it feels like -
-    // which surfaced as the whole tree hanging on expand("/") because
-    // /home is an autofs trigger on every Mac. "Openable" without
-    // looking is the honest answer for a directory whose contents are a
-    // network question.
-    if is_automount_trigger(path) {
-        return true;
-    }
-    let Ok(entries) = fs::read_dir(path) else {
-        return false;
-    };
-    let mut looked = 0;
-    for entry in entries.flatten() {
-        looked += 1;
-        if looked > LOOKED_ENOUGH {
-            return true;
-        }
-        let name = entry.file_name().to_string_lossy().to_string();
-        let Ok(metadata) = entry.path().symlink_metadata() else {
-            continue;
-        };
-        if !show_hidden && is_hidden(&name, &metadata) {
-            continue;
-        }
-        let is_dir = if metadata.file_type().is_symlink() {
-            fs::metadata(entry.path())
-                .map(|m| m.is_dir())
-                .unwrap_or(false)
-        } else {
-            metadata.is_dir()
-        };
-        if is_dir || show_files {
-            return true;
-        }
-    }
-    false
-}
-
-/// Whether this directory is an autofs mount trigger, asked of statfs
-/// without touching the directory's contents - the touch is the trap.
-///
-/// Unix-only in mechanism and macOS-first in motive: /home and
-/// /Network/Servers are autofs triggers on every Mac, wired by auto_master
-/// to a directory service that may be a sleeping server away. On Linux the
-/// same answer covers automount points. Windows has no autofs and the cfg
-/// says so.
-#[cfg(unix)]
-fn is_automount_trigger(path: &Path) -> bool {
-    use std::os::unix::ffi::OsStrExt;
-    let Ok(c_path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
-        return false;
-    };
-    let mut stat: libc::statfs = unsafe { std::mem::zeroed() };
-    if unsafe { libc::statfs(c_path.as_ptr(), &mut stat) } != 0 {
-        return false;
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let name = unsafe { std::ffi::CStr::from_ptr(stat.f_fstypename.as_ptr()) };
-        name.to_bytes() == b"autofs"
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        // AUTOFS_SUPER_MAGIC.
-        stat.f_type == 0x0187
-    }
-}
-
-#[cfg(not(unix))]
-fn is_automount_trigger(_path: &Path) -> bool {
-    false
-}
+// `has_children` is gone, and with it the automount guard it carried. The
+// eager peek read every visible folder's children to paint its arrow, and
+// the guard existed because that peek, walking into /home - an autofs
+// trigger on every Mac - blocked the whole tree behind automountd. Nothing
+// reads an unopened folder any more, for arrows or anything else, so a
+// trigger is only touched when its row is deliberately opened - which is a
+// mount request, which is what opening it means.
 
 /// What hangs under `path`: its subdirectories, and its files when asked for.
 ///
@@ -163,13 +78,13 @@ fn is_automount_trigger(_path: &Path) -> bool {
 /// order a listing uses, so a directory looks the same whichever of the two
 /// ways you look at it. Unreadable entries are skipped rather than failing the
 /// whole expansion.
-fn children(path: &Path, show_hidden: bool, show_files: bool) -> Vec<(PathBuf, bool)> {
+fn children(path: &Path, show_hidden: bool, show_files: bool) -> Vec<(PathBuf, bool, bool)> {
     let Ok(entries) = fs::read_dir(path) else {
         return Vec::new();
     };
 
-    let mut dirs: Vec<PathBuf> = Vec::new();
-    let mut files: Vec<PathBuf> = Vec::new();
+    let mut dirs: Vec<(PathBuf, bool)> = Vec::new();
+    let mut files: Vec<(PathBuf, bool)> = Vec::new();
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
         let Ok(metadata) = entry.path().symlink_metadata() else {
@@ -179,7 +94,8 @@ fn children(path: &Path, show_hidden: bool, show_files: bool) -> Vec<(PathBuf, b
             continue;
         }
         // Follow links so a symlinked directory can still be walked.
-        let is_dir = if metadata.file_type().is_symlink() {
+        let is_symlink = metadata.file_type().is_symlink();
+        let is_dir = if is_symlink {
             fs::metadata(entry.path())
                 .map(|m| m.is_dir())
                 .unwrap_or(false)
@@ -187,17 +103,17 @@ fn children(path: &Path, show_hidden: bool, show_files: bool) -> Vec<(PathBuf, b
             metadata.is_dir()
         };
         if is_dir {
-            dirs.push(entry.path());
+            dirs.push((entry.path(), is_symlink));
         } else if show_files {
-            files.push(entry.path());
+            files.push((entry.path(), is_symlink));
         }
     }
 
-    dirs.sort_by_key(|p| label_for(p).to_lowercase());
-    files.sort_by_key(|p| label_for(p).to_lowercase());
+    dirs.sort_by_key(|(p, _)| label_for(p).to_lowercase());
+    files.sort_by_key(|(p, _)| label_for(p).to_lowercase());
     dirs.into_iter()
-        .map(|p| (p, true))
-        .chain(files.into_iter().map(|p| (p, false)))
+        .map(|(p, link)| (p, true, link))
+        .chain(files.into_iter().map(|(p, link)| (p, false, link)))
         .collect()
 }
 
@@ -222,6 +138,7 @@ impl Tree {
                 expanded: false,
                 leaf: false,
                 is_dir: true,
+                is_symlink: false,
             }],
             cursor: 0,
             show_hidden,
@@ -281,8 +198,7 @@ impl Tree {
         }
 
         let depth = node.depth;
-        let (show_hidden, show_files) = (self.show_hidden, self.show_files);
-        let children = children(&node.path, show_hidden, show_files);
+        let children = children(&node.path, self.show_hidden, self.show_files);
 
         let node = &mut self.nodes[index];
         node.expanded = true;
@@ -290,14 +206,25 @@ impl Tree {
 
         let new_nodes: Vec<Node> = children
             .into_iter()
-            .map(|(path, is_dir)| Node {
+            .map(|(path, is_dir, is_symlink)| Node {
                 label: label_for(&path),
-                // Asked before the path is moved into the node.
-                leaf: !is_dir || !has_children(&path, show_hidden, show_files),
+                // Every directory is offered as openable until it is opened.
+                //
+                // It used to be answered here, eagerly, by reading each
+                // child's own children just to paint the arrow - a readdir
+                // and a run of stats per visible row, which made revealing a
+                // path through a directory of twenty-four thousand entries
+                // cost half a second per call, and every fold repaid it.
+                // Finder's answer is the honest cheap one: every folder gets
+                // a triangle, and an empty one corrects itself when opened -
+                // which the code below already did, in the line that sets
+                // `leaf` from what expand actually found.
+                leaf: !is_dir,
                 path,
                 depth: depth + 1,
                 expanded: false,
                 is_dir,
+                is_symlink,
             })
             .collect();
 
@@ -383,6 +310,7 @@ impl Tree {
                 // reveal only ever walks in ancestors of the target, and every
                 // one of those is a directory.
                 is_dir: true,
+                is_symlink: false,
             },
         );
         self.nodes[parent].leaf = false;
@@ -790,37 +718,45 @@ mod tests {
     }
 
     #[test]
-    fn a_folder_with_nothing_under_it_says_so_before_it_is_opened() {
+    fn every_folder_offers_to_open_until_it_is_opened() {
+        // The reversal of a trade, made on purpose and measured first. The
+        // old contract answered "is there anything under this?" eagerly, by
+        // reading every visible folder's children just to paint its arrow -
+        // a readdir and a run of stats per row, which priced revealing a
+        // path through twenty-four thousand siblings at half a second per
+        // call, repaid on every fold. Finder's answer costs nothing and
+        // lies only briefly: every folder gets an arrow, and opening an
+        // empty one takes the arrow away. That correction is asserted here,
+        // because it is now the whole of the contract.
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join("empty")).unwrap();
         std::fs::create_dir(dir.path().join("deep")).unwrap();
         std::fs::create_dir(dir.path().join("deep/inner")).unwrap();
-        // Files are not subfolders: a directory-only tree opens onto nothing
-        // here, whatever is in it.
-        std::fs::create_dir(dir.path().join("papers")).unwrap();
-        std::fs::write(dir.path().join("papers/one.txt"), "x").unwrap();
 
         let mut tree = Tree::rooted_at(dir.path(), false);
         tree.expand(0);
-        let leaf = |name: &str| {
+        let find = |tree: &Tree, name: &str| {
             tree.nodes
                 .iter()
-                .find(|n| n.label == name)
+                .position(|n| n.label == name)
                 .unwrap_or_else(|| panic!("{name} should be there"))
-                .leaf
         };
-        // Known without opening any of them, which is the whole point: `leaf`
-        // used to be false until a folder had been expanded, so every row
-        // offered a marker and half of them were lying.
+
+        // Before opening: both offer, and neither was read to say so.
+        assert!(!tree.nodes[find(&tree, "empty")].leaf);
+        assert!(!tree.nodes[find(&tree, "deep")].leaf);
+
+        // Opened, each tells the truth it found.
+        let at = find(&tree, "empty");
+        tree.expand(at);
         assert!(
-            leaf("empty"),
-            "an empty folder should offer nothing to open"
+            tree.nodes[at].leaf,
+            "opening an empty folder takes its arrow away"
         );
-        assert!(!leaf("deep"), "a folder with a subfolder should offer one");
-        assert!(
-            leaf("papers"),
-            "files are not subfolders in a directory-only tree"
-        );
+        let at = find(&tree, "deep");
+        tree.expand(at);
+        assert!(!tree.nodes[at].leaf, "deep really had something under it");
+        assert!(tree.nodes.iter().any(|n| n.label == "inner"));
     }
 
     #[test]
