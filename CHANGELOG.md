@@ -7,6 +7,17 @@ Notable changes, newest first. Versions follow [semantic versioning]; until
 
 ## Unreleased
 
+### Added
+
+- **A copy is the system's copy.** On macOS, a same-volume copy is an APFS
+  clone - constant-time, as Finder's is; the benchmarked 1 GiB copy fell
+  from seconds to under a millisecond - landing on the temporary name and
+  renamed over, so the whole-file-or-old-file guarantee is unchanged. Where
+  bytes must move, the loop now also carries the modification date (Unix)
+  and extended attributes (macOS) across, as the system does. Chunks grew
+  from 128 KiB to 4 MiB; throughput sits at parity with `cp`, and cancel is
+  still read between chunks.
+
 ## 0.1.1 — 2026-08-12
 
 ### Added
