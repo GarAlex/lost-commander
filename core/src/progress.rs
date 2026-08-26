@@ -845,8 +845,6 @@ fn copy_file(source: &Path, target: &Path, sink: &mut dyn Sink) -> io::Result<()
         ));
     }
 
-    let beside = partial_beside(target);
-
     // The system's own copy on this platform is a constant-time clone when
     // both ends share an APFS volume - Finder's copy of two gigabytes is
     // instant, and it carries every attribute across. Matching that is not
@@ -858,6 +856,10 @@ fn copy_file(source: &Path, target: &Path, sink: &mut dyn Sink) -> io::Result<()
     #[cfg(target_os = "macos")]
     {
         use std::os::unix::ffi::OsStrExt;
+        // Named inside the block that uses it. Outside, it was computed on
+        // every copy on every platform and read on one - a warning on the
+        // others, and a path built for nobody. The byte loop names its own.
+        let beside = partial_beside(target);
         if let (Ok(from), Ok(to)) = (
             std::ffi::CString::new(source.as_os_str().as_bytes()),
             std::ffi::CString::new(beside.as_os_str().as_bytes()),
