@@ -65,9 +65,11 @@ runtime, so nothing is installed first.
 
 [store]: https://apps.microsoft.com/detail/9p08xtqjsxvb
 
-**macOS** — coming soon: a Mac App Store build, and a signed and notarised
-download for people who want the shell in it (the Store's sandbox refuses
-pseudo-terminals, so that build has no shell sector).
+**macOS** — [on the Mac App Store][mas]. The Store sandbox refuses
+pseudo-terminals, so that build has no shell sector. A signed and notarised
+download with the shell is still planned for people who want it.
+
+[mas]: https://apps.apple.com/app/lost-commander/id6800191837
 
 **Linux** — binaries for x86_64 and aarch64 on the
 [releases page][releases], with the man pages, completions, desktop entry and
