@@ -1211,10 +1211,25 @@ impl GuiApp {
     }
 
     fn navigate(&mut self, side: Side, path: PathBuf) {
+        // Where the pane stood, because going up should land on the folder
+        // just left rather than on the first row. The core's own `enter`
+        // and `go_parent` do this, but every road up in this front-end -
+        // `..`, Backspace, the toolbar - comes through here instead, and a
+        // pane that forgets its place is most of what makes `..` feel like
+        // starting over rather than going back.
+        let was = self.panel(side).cwd.clone();
         self.panel_mut(side).chdir(path.clone());
         if let Some(error) = self.panel(side).error.clone() {
             self.error(format!("{}: {error}", path.display()));
         } else {
+            if was.parent() == Some(path.as_path()) {
+                if let Some(name) = was.file_name() {
+                    let panel = self.panel_mut(side);
+                    if let Some(index) = panel.entries.iter().position(|e| e.name.as_str() == name) {
+                        panel.cursor_to(index);
+                    }
+                }
+            }
             self.remember_visit(path.clone());
             // A pane showing a tree should follow along rather than go stale.
             if self.view(side) == ViewMode::Tree {
@@ -10503,6 +10518,17 @@ mod tests {
         assert_eq!(app.left.cwd(), was.join("sub"));
         app.run_action(A::Parent);
         assert_eq!(app.left.cwd(), was);
+        // And lands on the directory just left, not on the first row.
+        assert_eq!(app.left.current().selected().unwrap().name, "sub");
+
+        // The same through `..` itself.
+        app.run_action(A::Open);
+        assert_eq!(app.left.cwd(), was.join("sub"));
+        app.left.current_mut().cursor_to(0);
+        assert!(app.left.current().selected().unwrap().is_parent());
+        app.run_action(A::Open);
+        assert_eq!(app.left.cwd(), was);
+        assert_eq!(app.left.current().selected().unwrap().name, "sub");
 
         // Tab crosses to the other pane, and back.
         app.show_right = true;
