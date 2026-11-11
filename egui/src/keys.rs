@@ -94,6 +94,8 @@ pub enum Action {
     ShellOnly,
     /// Give the window to the panes, and take it back.
     FilesOnly,
+    /// Fold the shell and the places column to their handles, and back.
+    FocusMode,
     FocusTerminal,
     LeaveTerminal,
     FocusCommandLine,
@@ -295,6 +297,13 @@ pub fn action_for(key: Key, modifiers: Modifiers) -> Option<Action> {
     // one Ctrl-O used to answer.
     if ctrl && shift && key == Key::O {
         return Some(Action::FilesOnly);
+    }
+    // F for focus. Ctrl-Shift-Enter is what the other front-end has it on,
+    // and here that key already puts the full path on the command line - an
+    // older claim, and one the hands of anyone who uses it would notice
+    // losing. Before the Ctrl arm below, which would read it as Find.
+    if ctrl && shift && key == Key::F {
+        return Some(Action::FocusMode);
     }
     // The palette: every action in one searchable list, on the key half the
     // editors of the last decade taught.
@@ -606,6 +615,10 @@ pub const HELP: &[(&str, &str)] = &[
     ("Ctrl-O", "the shell alone, and back"),
     ("Ctrl-Shift-O", "the panes alone, and back"),
     (
+        "Ctrl-Shift-F",
+        "focus: the shell and the places fold to handles",
+    ),
+    (
         "Ctrl-Alt-O",
         "a shell that stays, or a one-shot command line",
     ),
@@ -678,6 +691,7 @@ pub fn every_action() -> Vec<Action> {
         ToggleShellPanel,
         ShellOnly,
         FilesOnly,
+        FocusMode,
         FocusTerminal,
         LeaveTerminal,
         FocusCommandLine,
@@ -764,6 +778,7 @@ pub fn describe(action: Action) -> (&'static str, &'static str) {
         ToggleShellPanel => ("Shell that stays, or one-shot command line", "Ctrl-Alt-O"),
         ShellOnly => ("The shell alone, and back", "Ctrl-O"),
         FilesOnly => ("The panes alone, and back", "Ctrl-Shift-O"),
+        FocusMode => ("Focus: the panes take the window", "Ctrl-Shift-F"),
         FocusTerminal => ("Give the shell the keyboard", "Ctrl-`"),
         LeaveTerminal => ("Give the panes the keyboard", "Shift-Esc"),
         FocusCommandLine => ("Type on the command line", "just type"),
@@ -998,6 +1013,17 @@ mod tests {
         assert!(every_action()
             .into_iter()
             .all(|action| !describe(action).1.is_empty()));
+    }
+
+    #[test]
+    fn focus_mode_has_a_key_and_find_keeps_its_own() {
+        let both = Modifiers {
+            ctrl: true,
+            shift: true,
+            ..Modifiers::NONE
+        };
+        assert_eq!(action_for(Key::F, both), Some(Action::FocusMode));
+        assert_eq!(with_ctrl(Key::F), Some(Action::Find));
     }
 
     #[test]

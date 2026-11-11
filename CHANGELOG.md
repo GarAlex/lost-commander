@@ -7,6 +7,19 @@ Notable changes, newest first. Versions follow [semantic versioning]; until
 
 ## Unreleased
 
+### Added
+
+- **Focus mode, in the graphical front-end.** `Ctrl-Shift-F`, the button at
+  the right end of the toolbar, or the view menu: the panes take nearly all
+  of the window, and the two things beside them fold to handles instead of
+  leaving the screen. The shell becomes its own prompt line, still live - a
+  command typed over the panes appears on it and runs - and opens to its
+  drawer on a click or `` Ctrl-` ``, for as long as it has the keyboard. The
+  places column becomes a strip with each place's name on its side, one
+  click from where it goes; `F11` or the button at its top opens the column
+  for one visit. The same key brings everything back, and the window opens
+  next time the way it was left. `--focus` starts in it.
+
 ## 0.1.3 — 2026-11-11
 
 ### Fixed

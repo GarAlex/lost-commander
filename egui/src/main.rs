@@ -46,7 +46,7 @@ fn main() -> eframe::Result<()> {
             "lostc-gui {VERSION} - graphical file manager
 
 USAGE:
-    lostc-gui [--grid] [--tree] [--preview] [--history] [LEFT_DIR] [RIGHT_DIR]
+    lostc-gui [--grid] [--tree] [--preview] [--history] [--focus] [LEFT_DIR] [RIGHT_DIR]
     lostc-gui --screenshot FILE.png [LEFT_DIR] [RIGHT_DIR]
     lostc-gui --help | --version
 
@@ -64,6 +64,9 @@ USAGE:
     --history starts the second pane showing what has been done to the things
     in the first one's folder - the account read from where you are standing
     rather than by day. It opens the second pane, as --preview does.
+
+    --focus starts in focus mode: the panes with the window, and the shell
+    and the places column folded to their handles. Ctrl-Shift-F is the key.
 
     --screenshot renders a few frames, saves a PNG and exits. It is how the
     view is checked without a human at the screen."
@@ -83,6 +86,7 @@ USAGE:
     let mut preview = false;
     let mut tree = false;
     let mut history = false;
+    let mut focus = false;
     let mut positional: Vec<String> = Vec::new();
     let mut rest = args.into_iter();
     while let Some(arg) = rest.next() {
@@ -92,6 +96,7 @@ USAGE:
             "--preview" => preview = true,
             "--tree" => tree = true,
             "--history" => history = true,
+            "--focus" => focus = true,
             _ => positional.push(arg),
         }
     }
@@ -165,6 +170,10 @@ USAGE:
             // is a request for a particular folder, not for last time.
             if positional.is_empty() {
                 app.open_saved_windows();
+            }
+            if focus {
+                // After the saved windows, which bring their own arrangement.
+                app.focus = true;
             }
             app.screenshot_to = screenshot;
             Ok(Box::new(app))

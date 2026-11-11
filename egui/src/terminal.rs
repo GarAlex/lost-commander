@@ -151,6 +151,100 @@ pub fn grid_for(size: Vec2) -> (u16, u16) {
     (rows, cols)
 }
 
+/// One cell of the grid, at `position`.
+fn paint_cell(
+    painter: &egui::Painter,
+    cell: &vt100::Cell,
+    position: egui::Pos2,
+    background: Color32,
+    foreground: Color32,
+) {
+    let contents = cell.contents();
+    let cell_rect = Rect::from_min_size(position, CELL);
+
+    // Reverse video swaps the pair, which is how selections and some
+    // prompts are drawn.
+    let (mut fg, mut bg) = (
+        to_colour(cell.fgcolor(), foreground),
+        to_colour(cell.bgcolor(), background),
+    );
+    if cell.inverse() {
+        std::mem::swap(&mut fg, &mut bg);
+    }
+
+    if bg != background {
+        painter.rect_filled(cell_rect, CornerRadius::ZERO, bg);
+    }
+    if !contents.is_empty() {
+        painter.text(
+            cell_rect.left_top(),
+            egui::Align2::LEFT_TOP,
+            contents,
+            FontId::monospace(FONT_SIZE),
+            if cell.bold() {
+                fg
+            } else {
+                fg.gamma_multiply(0.92)
+            },
+        );
+    }
+}
+
+/// Which columns of a row `fit` cells wide show, given where the cursor is.
+///
+/// From the left edge while the cursor fits; once the line is longer than
+/// the bar, the end with the cursor - which is where the typing is, and the
+/// only part of a long command anyone is looking at while they type it.
+pub fn line_window(cursor: u16, fit: u16) -> u16 {
+    cursor.saturating_add(1).saturating_sub(fit.max(1))
+}
+
+/// The row the cursor is on, and nothing else: the shell as one line.
+///
+/// What the shell is drawn as while it is folded away. The emulator is not
+/// told about it - the shell keeps the size it had, so nothing it has
+/// printed is rewrapped by being put away and brought back.
+pub fn draw_prompt_line(
+    ui: &egui::Ui,
+    rect: Rect,
+    session: &PtySession,
+    background: Color32,
+    foreground: Color32,
+) {
+    let painter = ui.painter_at(rect);
+    session.with_screen(|screen| {
+        let (_, cols) = screen.size();
+        let (row, cursor) = screen.cursor_position();
+        let fit = (rect.width() / CELL.x).floor().max(1.0) as u16;
+        let first = line_window(cursor, fit);
+        let place = |col: u16| {
+            egui::pos2(
+                rect.min.x + f32::from(col - first) * CELL.x,
+                rect.center().y - CELL.y * 0.5,
+            )
+        };
+        for col in first..cols.min(first.saturating_add(fit)) {
+            let Some(cell) = screen.cell(row, col) else {
+                continue;
+            };
+            let has_background = cell.bgcolor() != vt100::Color::Default;
+            if cell.contents().is_empty() && !has_background {
+                continue;
+            }
+            paint_cell(&painter, cell, place(col), background, foreground);
+        }
+        // Hollow, always: a folded shell never has the keyboard.
+        if !screen.hide_cursor() && cursor >= first {
+            painter.rect_stroke(
+                Rect::from_min_size(place(cursor), CELL),
+                CornerRadius::ZERO,
+                egui::Stroke::new(1.0, foreground.gamma_multiply(0.6)),
+                egui::StrokeKind::Inside,
+            );
+        }
+    });
+}
+
 fn to_colour(colour: vt100::Color, fallback: Color32) -> Color32 {
     match colour {
         vt100::Color::Default => fallback,
@@ -201,34 +295,7 @@ pub fn draw_screen(
                     rect.min.x + col as f32 * CELL.x,
                     rect.min.y + row as f32 * CELL.y,
                 );
-                let cell_rect = Rect::from_min_size(position, CELL);
-
-                // Reverse video swaps the pair, which is how selections and
-                // some prompts are drawn.
-                let (mut fg, mut bg) = (
-                    to_colour(cell.fgcolor(), foreground),
-                    to_colour(cell.bgcolor(), background),
-                );
-                if cell.inverse() {
-                    std::mem::swap(&mut fg, &mut bg);
-                }
-
-                if bg != background {
-                    painter.rect_filled(cell_rect, CornerRadius::ZERO, bg);
-                }
-                if !contents.is_empty() {
-                    painter.text(
-                        cell_rect.left_top(),
-                        egui::Align2::LEFT_TOP,
-                        contents,
-                        FontId::monospace(FONT_SIZE),
-                        if cell.bold() {
-                            fg
-                        } else {
-                            fg.gamma_multiply(0.92)
-                        },
-                    );
-                }
+                paint_cell(&painter, cell, position, background, foreground);
             }
         }
 
@@ -281,6 +348,18 @@ pub fn draw_screen(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_folded_shell_shows_the_end_of_a_line_too_long_for_it() {
+        // From the left while the cursor fits ...
+        assert_eq!(line_window(0, 80), 0);
+        assert_eq!(line_window(79, 80), 0);
+        // ... and then the end with the cursor, which is where the typing is.
+        assert_eq!(line_window(80, 80), 1);
+        assert_eq!(line_window(200, 80), 121);
+        // A bar too narrow for a single cell still has a first column.
+        assert_eq!(line_window(5, 0), 5);
+    }
     use eframe::egui::{Key, Modifiers};
 
     #[test]

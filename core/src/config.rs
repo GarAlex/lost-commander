@@ -75,6 +75,15 @@ pub struct Settings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shell_height: Option<f32>,
 
+    /// Whether the window was left in focus mode: the panes with nearly all
+    /// of it, and the shell and the places column folded to their handles.
+    ///
+    /// Absent means no. Beside the other facts about how the window is
+    /// arranged, and for the same reason: it is the reader's, and it should
+    /// still be so the next morning.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub focus_mode: Option<bool>,
+
     /// How many days of the account of what was done to keep.
     ///
     /// Absent means the default of thirty. Zero means for ever, which is a

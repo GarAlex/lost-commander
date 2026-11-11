@@ -485,6 +485,19 @@ pub struct GuiApp {
     /// Norton, had no way to discover that F5 copies here too. The keys work
     /// either way; the bar is what says so.
     pub show_keys: bool,
+    /// Focus mode: the panes have nearly all of the window, and the two
+    /// things beside them are folded to handles rather than taken away.
+    ///
+    /// The shell becomes its own prompt line, still live - what is typed in
+    /// the panes still lands on it - and the right-hand column becomes a
+    /// strip of its places. Neither is hidden: a panel that has gone
+    /// completely has to be remembered, and one that left a handle can be
+    /// seen and clicked. One switch, because "get the furniture out of the
+    /// way" is one wish, and it used to take two keys and a drag to grant.
+    pub focus: bool,
+    /// The places column opened from its strip, for one visit. Choosing a
+    /// place folds it again - it was opened to go somewhere.
+    pub places_peek: bool,
     /// Which halves of the window are on show.
     pub half: Half,
     /// Which shell belongs to which tab: a workspace is a directory and the
@@ -765,6 +778,7 @@ impl GuiApp {
             // not known until it is drawn, and `sectors` clamps it there.
             app.row_height = height.max(ROW_MIN);
         }
+        app.focus = app.settings.focus_mode.unwrap_or(false);
         // The account, and a sweep of whatever has aged out of it. Once at
         // startup is the right moment: it is the only time the program is
         // certainly not in the middle of writing to it.
@@ -799,6 +813,8 @@ impl GuiApp {
             right_view: ViewMode::Details,
             show_sidebar: true,
             show_keys: true,
+            focus: false,
+            places_peek: false,
             half: Half::Both,
             workspaces: std::collections::HashMap::new(),
             parked: std::collections::HashMap::new(),
@@ -1225,7 +1241,8 @@ impl GuiApp {
             if was.parent() == Some(path.as_path()) {
                 if let Some(name) = was.file_name() {
                     let panel = self.panel_mut(side);
-                    if let Some(index) = panel.entries.iter().position(|e| e.name.as_str() == name) {
+                    if let Some(index) = panel.entries.iter().position(|e| e.name.as_str() == name)
+                    {
                         panel.cursor_to(index);
                     }
                 }
@@ -2205,14 +2222,36 @@ impl eframe::App for GuiApp {
             .frame(egui::Frame::NONE.fill(theme::bg()))
             .show(ctx, |ui| {
                 let full = ui.available_rect_before_wrap();
+                // How far each of the two is folded, eased over a moment so
+                // the panes are seen to grow into the room rather than
+                // found already there. A fraction of the way, not a height
+                // of its own: the seam is dragged every frame, and a height
+                // that chased the pointer would lag behind the hand.
+                let line = self.shell_is_a_line();
+                let shell_fold =
+                    ui.ctx()
+                        .animate_bool_with_time(egui::Id::new("shell_fold"), line, FOLD_TIME);
+                let column_fold = if self.show_sidebar || self.focus {
+                    // Keyed by whether there is a column outside focus mode:
+                    // with none, there is nothing to be seen folding, and
+                    // the strip should simply be there.
+                    ui.ctx().animate_bool_with_time(
+                        egui::Id::new(("column_fold", self.show_sidebar)),
+                        self.column_folded(),
+                        FOLD_TIME,
+                    )
+                } else {
+                    0.0
+                };
                 let cut = sectors(
                     full,
                     Showing {
                         rail: self.show_rail,
-                        rail_wide: self.rail_wide,
+                        rail_wide: self.rail_wide && !self.focus,
                         top: self.half != Half::Shell,
                         bottom: self.half != Half::Files,
-                        places: self.show_sidebar,
+                        places: self.show_sidebar || self.focus,
+                        column_fold,
                         history: self.show_shell_history,
                         keys: self.show_keys,
                         column: self.column_width,
@@ -2220,7 +2259,7 @@ impl eframe::App for GuiApp {
                         // it gets the height it needs rather than the height
                         // the shell was left at, and its seam does not drag.
                         row: if self.show_terminal {
-                            self.row_height
+                            egui::lerp(self.row_height..=ROW_MIN, shell_fold)
                         } else if self.show_output {
                             150.0
                         } else {
@@ -2258,7 +2297,18 @@ impl eframe::App for GuiApp {
                 if let Some(rect) = cut.shell {
                     let mut child =
                         ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink2(CHROME_PAD)));
-                    if self.show_terminal {
+                    if self.show_terminal && (line || shell_fold > 0.0) {
+                        // Folded, or on its way up or down. The terminal
+                        // itself is not drawn into a rectangle that is still
+                        // moving: it tells the shell its size, and a shell
+                        // told twelve sizes in a tenth of a second redraws
+                        // its prompt twelve times.
+                        let bar = Rect::from_min_size(
+                            rect.min,
+                            Vec2::new(rect.width(), ROW_MIN.min(rect.height())),
+                        );
+                        self.shell_line(ui, bar);
+                    } else if self.show_terminal {
                         self.terminal_panel(&mut child);
                     } else {
                         self.console_panel(&mut child);
@@ -2266,9 +2316,13 @@ impl eframe::App for GuiApp {
                 }
 
                 if let Some(rect) = cut.places {
-                    let mut child =
-                        ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink2(CHROME_PAD)));
-                    self.sidebar(&mut child);
+                    if self.column_folded() {
+                        self.places_spine(ui, rect);
+                    } else {
+                        let mut child =
+                            ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink2(CHROME_PAD)));
+                        self.sidebar(&mut child);
+                    }
                 }
                 if let Some(rect) = cut.history {
                     self.shell_history_column(ui, rect.shrink2(CHROME_PAD));
@@ -2285,7 +2339,7 @@ impl eframe::App for GuiApp {
                 // line is one line and there is nothing to give it. With one
                 // half on show there is no seam at all.
                 if let Some(seam) = cut.horizontal {
-                    if self.show_terminal {
+                    if self.show_terminal && !line && shell_fold == 0.0 {
                         if let Some(pointer) = self.drag_seam(ui, "row_seam", seam, false) {
                             self.row_height = (full.max.y - pointer.y).max(ROW_MIN);
                         }
@@ -2361,6 +2415,9 @@ pub struct Showing {
     pub bottom: bool,
     /// The right-hand column: the places list, with the history under it.
     pub places: bool,
+    /// How far that column is folded to its strip: 0 is the column, 1 is
+    /// the strip, and anything between is one on its way to the other.
+    pub column_fold: f32,
     /// What was run here, under the places list and the same width as it.
     pub history: bool,
     /// The function keys, under the panes.
@@ -2410,6 +2467,12 @@ pub const ROW_MIN: f32 = 34.0;
 pub const PANES_MIN: f32 = 120.0;
 pub const COLUMN_MIN: f32 = 140.0;
 pub const COLUMN_MAX: f32 = 420.0;
+/// The right-hand column folded away: wide enough for a button and for a
+/// name set on its side, and no wider - what it gives up goes to the panes.
+pub const SPINE: f32 = 38.0;
+/// How long a fold takes. Long enough to be seen as movement, which is what
+/// says where the panel went; short enough never to be waited for.
+pub const FOLD_TIME: f32 = 0.12;
 /// The strip the function keys get, when they are on.
 pub const KEYS_HEIGHT: f32 = 26.0;
 /// The rail, narrow and wide. Two widths rather than a seam to drag: it has
@@ -2452,11 +2515,18 @@ pub fn sectors(full: Rect, showing: Showing) -> Sectors {
     // The right column is the places list with the history under it, so it
     // stands or falls with that list being switched on - each row of it
     // belongs to the row of the window beside it.
+    //
+    // Folded, it is a strip: one rectangle the whole height, with no seam
+    // to drag - a strip has one width - and no history under it, which at
+    // that width would be a column of first letters.
+    let fold = showing.column_fold.clamp(0.0, 1.0);
+    let folded = showing.places && fold > 0.0;
     let column = if showing.places {
-        showing
+        let open = showing
             .column
             .clamp(COLUMN_MIN, (full.width() * 0.5).max(COLUMN_MIN))
-            .min(COLUMN_MAX)
+            .min(COLUMN_MAX);
+        egui::lerp(open..=SPINE, fold)
     } else {
         0.0
     };
@@ -2508,15 +2578,22 @@ pub fn sectors(full: Rect, showing: Showing) -> Sectors {
                 egui::pos2(left_max_x, full.max.y),
             )
         }),
-        places: (showing.places && top).then(|| {
-            Rect::from_min_max(
+        places: if folded {
+            Some(Rect::from_min_max(
                 egui::pos2(column_min_x, full.min.y),
-                egui::pos2(full.max.x, top_bottom),
-            )
-        }),
-        history: (showing.places && showing.history && bottom)
+                full.max,
+            ))
+        } else {
+            (showing.places && top).then(|| {
+                Rect::from_min_max(
+                    egui::pos2(column_min_x, full.min.y),
+                    egui::pos2(full.max.x, top_bottom),
+                )
+            })
+        },
+        history: (showing.places && !folded && showing.history && bottom)
             .then(|| Rect::from_min_max(egui::pos2(column_min_x, bottom_top), full.max)),
-        vertical: showing.places.then(|| {
+        vertical: (showing.places && !folded).then(|| {
             Rect::from_min_max(
                 egui::pos2(seam_x - half, full.min.y),
                 egui::pos2(seam_x + half, full.max.y),
@@ -2846,15 +2923,32 @@ impl GuiApp {
             self.breadcrumbs(ui);
 
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                // First from the right, where the eye goes for "the whole
+                // window": it changes more of it than any switch beside it.
                 if tool_button(
                     ui,
-                    icons::Tool::Sidebar,
-                    "Places, and what was run here, in the right-hand column",
-                    self.show_sidebar,
+                    icons::Tool::Focus,
+                    "Focus: the panes take the window, and the shell and the places \
+                     fold to their handles    Ctrl-Shift-F",
+                    self.focus,
                 )
                 .clicked()
                 {
-                    self.show_sidebar = !self.show_sidebar;
+                    self.run_action(keys::Action::FocusMode);
+                }
+                if tool_button(
+                    ui,
+                    icons::Tool::Sidebar,
+                    "Places, and what was run here, in the right-hand column    F11",
+                    if self.focus {
+                        self.places_peek
+                    } else {
+                        self.show_sidebar
+                    },
+                )
+                .clicked()
+                {
+                    self.run_action(keys::Action::ToggleSidebar);
                 }
                 if tool_button(
                     ui,
@@ -2893,6 +2987,15 @@ impl GuiApp {
                         if ui.selectable_label(self.half == half, label).clicked() {
                             want_half = Some(half);
                         }
+                    }
+                    // Not a fourth half: both stay on show, folded. Under
+                    // the three because it answers the same wish - more
+                    // room for one thing - without taking the other away.
+                    if ui
+                        .selectable_label(self.focus, "Focus              Ctrl-Shift-F")
+                        .clicked()
+                    {
+                        want = Some(keys::Action::FocusMode);
                     }
                     ui.separator();
                     if ui
@@ -3057,12 +3160,196 @@ impl GuiApp {
         });
 
         if open_trash {
+            self.places_peek = false;
             self.open_trash();
         }
         if let Some(path) = target {
+            // Opened from the strip to go somewhere, and now gone there.
+            self.places_peek = false;
             let side = self.active;
             self.navigate(side, path);
         }
+    }
+
+    /// The right-hand column as a strip: focus mode's handle for it.
+    ///
+    /// Not a blank bar with an arrow on it. The places are still here, each
+    /// name set on its side, so the common trip (home, a drive, a bookmark)
+    /// is one click from the strip and never opens the column at all. The
+    /// button at the top opens it, for everything the strip has no room for.
+    fn places_spine(&mut self, ui: &mut egui::Ui, rect: Rect) {
+        // Against the window's edge while the column is still folding, so
+        // the strip is where it will be when the movement stops.
+        let strip = Rect::from_min_max(egui::pos2(rect.max.x - SPINE, rect.min.y), rect.max)
+            .shrink2(Vec2::new(4.0, 6.0));
+        let mut child = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(strip)
+                .layout(Layout::top_down(Align::Center)),
+        );
+        let ui = &mut child;
+        ui.spacing_mut().item_spacing.y = 3.0;
+
+        if tool_button(
+            ui,
+            icons::Tool::Sidebar,
+            "Places, folded away - click or F11 to open the column",
+            false,
+        )
+        .clicked()
+        {
+            self.places_peek = true;
+        }
+        ui.add_space(4.0);
+
+        // In the column's own order: the machine's places, the trash, and
+        // then the reader's. The trash is the one row that is not a folder
+        // to walk into, so it is the one with no path.
+        let here = self.active_panel().cwd.clone();
+        let mut places: Vec<(String, Option<PathBuf>, bool)> = self
+            .system_places
+            .iter()
+            .map(|place| (place.name.clone(), Some(place.path.clone()), false))
+            .collect();
+        places.push(("Trash".to_string(), None, false));
+        places.extend(self.bookmarks.locations.iter().map(|location| {
+            (
+                location.name.clone(),
+                Some(PathBuf::from(&location.path)),
+                true,
+            )
+        }));
+
+        let mut chosen: Option<Option<PathBuf>> = None;
+        for (name, path, saved) in places {
+            // Whole or not at all: half a name on its side is a smudge.
+            let lit = path.as_ref() == Some(&here);
+            let Some(response) = spine_tab(ui, &name, lit, saved) else {
+                break;
+            };
+            let response = match &path {
+                Some(path) => response.on_hover_text(path.display().to_string()),
+                None => response.on_hover_text("What deletion kept: restore or purge"),
+            };
+            if response.clicked() {
+                chosen = Some(path);
+            }
+        }
+        match chosen {
+            Some(Some(path)) => {
+                let side = self.active;
+                self.navigate(side, path);
+            }
+            Some(None) => self.open_trash(),
+            None => {}
+        }
+    }
+
+    /// The shell as one line: focus mode's handle for it.
+    ///
+    /// The row its cursor is on, which is the prompt and whatever has been
+    /// typed at it. It is the same shell and it is still listening - a
+    /// command typed with the panes holding the keyboard appears here as it
+    /// always appeared in the drawer - so a one-line job never needs the
+    /// drawer open. A click, or `Ctrl-\``, opens it; it folds again when the
+    /// panes take the keyboard back.
+    fn shell_line(&mut self, ui: &mut egui::Ui, rect: Rect) {
+        let bar = rect.shrink2(Vec2::new(8.0, 5.0));
+        let response = ui.interact(bar, ui.id().with("shell_line"), Sense::click());
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(bar, CornerRadius::same(5), theme::sidebar());
+        if response.hovered() {
+            painter.rect_stroke(
+                bar,
+                CornerRadius::same(5),
+                Stroke::new(1.0, theme::accent_dim()),
+                egui::StrokeKind::Inside,
+            );
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+
+        // The key that opens it, at the far end: a handle that does not say
+        // how to be worked from the keyboard is a handle for the mouse only.
+        let galley = painter.layout_no_wrap(
+            "Ctrl-`".to_string(),
+            FontId::monospace(10.5),
+            theme::text_faint(),
+        );
+        let cap = Rect::from_min_max(
+            egui::pos2(bar.max.x - galley.size().x - 16.0, bar.center().y - 8.0),
+            egui::pos2(bar.max.x - 6.0, bar.center().y + 8.0),
+        );
+        painter.rect_filled(cap, CornerRadius::same(3), theme::surface_hi());
+        painter.galley(
+            cap.center() - galley.size() * 0.5,
+            galley,
+            theme::text_faint(),
+        );
+
+        let text = Rect::from_min_max(
+            egui::pos2(bar.min.x + 10.0, bar.min.y),
+            egui::pos2(cap.min.x - 8.0, bar.max.y),
+        );
+        match self.shell_here() {
+            Some(at) => {
+                if self.terminals.active != at {
+                    self.terminals.select(at);
+                    self.terminal_scroll_carry = 0.0;
+                }
+                if let Some(session) = self.terminals.active() {
+                    terminal::draw_prompt_line(ui, text, session, theme::sidebar(), theme::text());
+                }
+            }
+            None => {
+                painter.text(
+                    text.left_center(),
+                    Align2_LEFT_CENTER,
+                    "No shell in this workspace - click to start one",
+                    FontId::proportional(11.5),
+                    theme::text_faint(),
+                );
+            }
+        }
+
+        if response.clicked() {
+            self.run_action(keys::Action::FocusTerminal);
+        }
+        response.on_hover_text(
+            "The shell, folded to its prompt. Click or Ctrl-` to open it; \
+             Shift-Esc gives the keyboard back to the panes and folds it again.",
+        );
+    }
+
+    /// Whether the shell is drawn as its one line.
+    ///
+    /// Only in focus mode, only with both halves on show - a window given to
+    /// the shell has not folded it - and only while the panes have the
+    /// keyboard: a shell being typed into is a shell being read, and gets
+    /// its drawer for as long as that lasts.
+    pub fn shell_is_a_line(&self) -> bool {
+        self.focus && self.half == Half::Both && self.show_terminal && !self.terminal_focused
+    }
+
+    /// Whether the right-hand column is drawn as its strip.
+    pub fn column_folded(&self) -> bool {
+        self.focus && !self.places_peek
+    }
+
+    /// Into focus mode, or out of it.
+    pub fn toggle_focus(&mut self) {
+        self.focus = !self.focus;
+        self.places_peek = false;
+        self.settings.focus_mode = Some(self.focus);
+        // Only an app wired to the reader's own files writes them - see
+        // `layout_into_settings` for what happened when a test did not ask.
+        if self.session_path.is_some() {
+            let _ = self.settings.save();
+        }
+        self.info(if self.focus {
+            "Focus: the panes have the window. Ctrl-Shift-F brings the rest back."
+        } else {
+            "Everything is back where it was."
+        });
     }
 
     // ---- a file pane -------------------------------------------------------
@@ -3257,6 +3544,7 @@ impl GuiApp {
             clicked_side |= self.pane_halves(&mut inner, side, focused);
             if clicked_side {
                 self.active = side;
+                self.panes_were_clicked();
             }
             return;
         }
@@ -3282,6 +3570,18 @@ impl GuiApp {
 
         if clicked_side {
             self.active = side;
+            self.panes_were_clicked();
+        }
+    }
+
+    /// A click in a pane, in focus mode, takes the keyboard for the panes.
+    ///
+    /// Which is what folds the shell back to its line. Opened with a click,
+    /// it has to be closable with one: otherwise the mouse could raise the
+    /// drawer and only `Shift-Esc` could lower it.
+    fn panes_were_clicked(&mut self) {
+        if self.focus && self.half == Half::Both {
+            self.terminal_focused = false;
         }
     }
 
@@ -4496,7 +4796,17 @@ impl GuiApp {
                     "Hiding hidden files"
                 });
             }
-            A::ToggleSidebar => self.show_sidebar = !self.show_sidebar,
+            // In focus mode the column is already folded, and the key that
+            // shows and hides it opens and folds it instead - the same
+            // question, asked of the arrangement that is on screen.
+            A::ToggleSidebar => {
+                if self.focus {
+                    self.places_peek = !self.places_peek;
+                } else {
+                    self.show_sidebar = !self.show_sidebar;
+                }
+            }
+            A::FocusMode => self.toggle_focus(),
             A::ToggleSecondPane => {
                 // Asking for the pane yourself makes it yours: the viewer no
                 // longer gets to fold it away when the preview closes.
@@ -8405,9 +8715,7 @@ impl GuiApp {
                     // one that does - the session file is shared, and a
                     // front-end that does not understand a field should
                     // hand it back unchanged rather than have an opinion.
-                    places_shut: kept
-                        .map(|w| w.places_shut.clone())
-                        .unwrap_or_default(),
+                    places_shut: kept.map(|w| w.places_shut.clone()).unwrap_or_default(),
                     show_right: kept.is_some_and(|w| w.show_right),
                     left_view: kept
                         .map_or(ViewMode::Details, |w| w.left_view)
@@ -10050,6 +10358,61 @@ fn sidebar_row_with(
         );
     }
     response.clicked()
+}
+
+/// One place on the folded column: its name on its side, reading downward.
+///
+/// `None` when there is no room left for the whole of it. `here` is the
+/// folder the active pane is standing in, lit the way a pressed button is;
+/// `saved` is a bookmark rather than one of the machine's own places, and
+/// is drawn a shade quieter, as the column draws it under its own heading.
+fn spine_tab(ui: &mut egui::Ui, name: &str, here: bool, saved: bool) -> Option<egui::Response> {
+    // A long name is cut, not shrunk: the strip is for recognising a place,
+    // and the first dozen letters do that.
+    let shown: String = if name.chars().count() > 14 {
+        name.chars()
+            .take(13)
+            .chain(std::iter::once('\u{2026}'))
+            .collect()
+    } else {
+        name.to_string()
+    };
+    let colour = if here {
+        theme::text()
+    } else if saved {
+        theme::text_faint()
+    } else {
+        theme::text_dim()
+    };
+    let galley = ui
+        .painter()
+        .layout_no_wrap(shown, FontId::proportional(11.5), colour);
+    // Whole points, and an even run: text turned a quarter of the way round
+    // lands between pixels otherwise, and reads as a smudge.
+    let run = ((galley.size().x + 14.0) * 0.5).ceil() * 2.0;
+    if ui.available_height() < run {
+        return None;
+    }
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(30.0, run), Sense::click());
+    let fill = if here {
+        theme::accent_dim()
+    } else if response.hovered() {
+        theme::hover()
+    } else {
+        theme::surface_hi()
+    };
+    ui.painter().rect_filled(rect, CornerRadius::same(6), fill);
+    // Turned a quarter clockwise about its own top-left corner, the text
+    // runs down from there and its height lies to the left of it.
+    let origin = egui::pos2(
+        (rect.center().x + galley.size().y * 0.5).round(),
+        (rect.center().y - galley.size().x * 0.5).round(),
+    );
+    ui.painter().add(
+        egui::epaint::TextShape::new(origin, galley, colour)
+            .with_angle(std::f32::consts::FRAC_PI_2),
+    );
+    Some(response)
 }
 
 /// A toolbar button whose symbol is painted, not typed. `on` gives it the
@@ -13044,11 +13407,149 @@ mod tests {
             top: true,
             bottom: true,
             places: true,
+            column_fold: 0.0,
             history: true,
             keys: true,
             column: 210.0,
             row: 280.0,
         }
+    }
+
+    #[test]
+    fn a_folded_column_is_a_strip_the_whole_height_with_nothing_to_drag() {
+        let open = sectors(window(), showing());
+        let cut = sectors(
+            window(),
+            Showing {
+                column_fold: 1.0,
+                ..showing()
+            },
+        );
+        let strip = cut.places.expect("the strip is the handle: it stays");
+        assert!((strip.width() - (SPINE - GUTTER * 0.5)).abs() < 0.01);
+        assert_eq!(strip.min.y, window().min.y);
+        assert_eq!(strip.max.y, window().max.y, "beside the shell as well");
+        assert!(cut.history.is_none(), "no room for it at that width");
+        assert!(cut.vertical.is_none(), "a strip has one width");
+        assert!(
+            cut.panes.unwrap().width() > open.panes.unwrap().width() + 150.0,
+            "what the column gave up went to the panes"
+        );
+        assert_eq!(
+            cut.shell.unwrap().max.x,
+            cut.panes.unwrap().max.x,
+            "and the shell is still exactly as wide as they are"
+        );
+    }
+
+    #[test]
+    fn a_column_part_way_folded_is_part_way_wide() {
+        let width = |fold: f32| {
+            sectors(
+                window(),
+                Showing {
+                    column_fold: fold,
+                    ..showing()
+                },
+            )
+            .panes
+            .unwrap()
+            .width()
+        };
+        assert!(width(0.0) < width(0.5) && width(0.5) < width(1.0));
+        // Out of range is the nearest end, not a column of negative width.
+        assert_eq!(width(7.0), width(1.0));
+    }
+
+    #[test]
+    fn a_folded_column_stays_beside_a_window_given_to_the_shell() {
+        let cut = sectors(
+            window(),
+            Showing {
+                top: false,
+                column_fold: 1.0,
+                ..showing()
+            },
+        );
+        assert!(cut.panes.is_none());
+        assert!(
+            cut.places.is_some(),
+            "the handle does not go with the panes"
+        );
+    }
+
+    #[test]
+    fn focus_mode_folds_the_shell_until_it_is_given_the_keyboard() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = GuiApp::detached(dir.path().to_path_buf(), dir.path().to_path_buf());
+        assert!(!app.shell_is_a_line() && !app.column_folded());
+
+        app.run_action(keys::Action::FocusMode);
+        assert!(app.focus);
+        assert!(app.shell_is_a_line(), "the panes have the keyboard");
+        assert!(app.column_folded());
+        assert_eq!(app.half, Half::Both, "folded, not taken off the screen");
+        assert!(
+            app.show_terminal && app.show_sidebar,
+            "and nothing forgotten"
+        );
+
+        // Typing at it is reading it: the drawer, for as long as that lasts.
+        app.terminal_focused = true;
+        assert!(!app.shell_is_a_line());
+        app.run_action(keys::Action::LeaveTerminal);
+        assert!(app.shell_is_a_line());
+
+        // A window given to the panes alone has no shell row to fold.
+        app.run_action(keys::Action::FilesOnly);
+        assert!(!app.shell_is_a_line());
+        app.run_action(keys::Action::FilesOnly);
+
+        app.run_action(keys::Action::FocusMode);
+        assert!(!app.focus && !app.shell_is_a_line() && !app.column_folded());
+        assert!(app.show_terminal && app.show_sidebar);
+    }
+
+    #[test]
+    fn in_focus_mode_the_places_key_opens_the_strip_and_folds_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = GuiApp::detached(dir.path().to_path_buf(), dir.path().to_path_buf());
+        app.show_sidebar = false;
+        app.run_action(keys::Action::FocusMode);
+        assert!(app.column_folded());
+
+        app.run_action(keys::Action::ToggleSidebar);
+        assert!(!app.column_folded(), "opened, for one visit");
+        assert!(
+            !app.show_sidebar,
+            "which is not the same as switching it on"
+        );
+        app.run_action(keys::Action::ToggleSidebar);
+        assert!(app.column_folded());
+
+        // Left open, it is folded by leaving: the next visit starts folded.
+        app.run_action(keys::Action::ToggleSidebar);
+        app.run_action(keys::Action::FocusMode);
+        app.run_action(keys::Action::FocusMode);
+        assert!(app.column_folded());
+        assert!(
+            !app.show_sidebar,
+            "and the reader's own choice is as it was"
+        );
+    }
+
+    #[test]
+    fn a_click_in_a_pane_folds_the_shell_only_in_focus_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = GuiApp::detached(dir.path().to_path_buf(), dir.path().to_path_buf());
+        app.terminal_focused = true;
+        app.panes_were_clicked();
+        assert!(app.terminal_focused, "outside it, a click moves nothing");
+
+        app.focus = true;
+        app.panes_were_clicked();
+        assert!(!app.terminal_focused);
+        assert!(app.shell_is_a_line());
     }
 
     #[test]

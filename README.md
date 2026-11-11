@@ -226,6 +226,15 @@ Either row can have the window to itself: `Ctrl-O` gives it to the shell and
 chooses whether the bottom is a shell that stays or a line that runs one
 command. All three are on the view menu.
 
+**Focus mode** is the middle way: `Ctrl-Shift-F`, or the button at the right
+end of the toolbar, gives the panes nearly all of the window without taking
+anything off it. The shell folds to its own prompt line - still live, so a
+command typed over the panes appears there and runs - and the places column
+folds to a strip with each place's name on its side, one click away. A click
+on the line or `` Ctrl-` `` opens the shell for as long as it has the keyboard;
+`F11` or the button at the top of the strip opens the column for one visit.
+The same key puts everything back, and the choice is remembered.
+
 While only one half is showing, the panes and the shell are **independent** —
 neither follows the other. They fall back into step when both return, and the
 half that had the window is the one that wins. Typing a command, walking the

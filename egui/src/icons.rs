@@ -217,6 +217,8 @@ pub enum Tool {
     Keys,
     /// What has been done: a clock, which is what every program means by it.
     History,
+    /// Focus mode: the panes with the window to themselves.
+    Focus,
 }
 
 pub fn draw_tool(painter: &Painter, rect: Rect, tool: Tool, colour: Color32) {
@@ -424,6 +426,24 @@ pub fn draw_tool(painter: &Painter, rect: Rect, tool: Tool, colour: Color32) {
                 Stroke::NONE,
             ));
             painter.circle_filled(p(0.68, 0.34), side * 0.07, colour);
+        }
+        // Four corners and what they frame: the thing in the middle is what
+        // the window is being given to.
+        Tool::Focus => {
+            for (x, y, dx, dy) in [
+                (0.10f32, 0.14f32, 1.0f32, 1.0f32),
+                (0.90, 0.14, -1.0, 1.0),
+                (0.10, 0.86, 1.0, -1.0),
+                (0.90, 0.86, -1.0, -1.0),
+            ] {
+                painter.line_segment([p(x, y), p(x + 0.22 * dx, y)], line);
+                painter.line_segment([p(x, y), p(x, y + 0.22 * dy)], line);
+            }
+            painter.rect_filled(
+                Rect::from_min_max(p(0.30, 0.34), p(0.70, 0.66)),
+                CornerRadius::same(1),
+                colour,
+            );
         }
         // Two panes side by side; the toggle that folds the second one away.
         Tool::TwoPanes => {
