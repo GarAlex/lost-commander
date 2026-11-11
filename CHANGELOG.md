@@ -7,6 +7,8 @@ Notable changes, newest first. Versions follow [semantic versioning]; until
 
 ## Unreleased
 
+## 0.1.3 — 2026-11-11
+
 ### Fixed
 
 - **A copy onto a file that is already there no longer waits for ever on the
@@ -23,6 +25,11 @@ Notable changes, newest first. Versions follow [semantic versioning]; until
   cursor row had vanished - after a delete, a move, a rename - sent the
   cursor to the top of the listing; it now rests on the row that took the
   place.
+
+- **Going up lands on the folder just left, in the graphical front-end
+  too.** `..` clicked or entered put the cursor on the first row; it now
+  rests on the directory that was just left, as Backspace and the terminal
+  front-end already did.
 
 - **Graphical front-end:** the toolbar's Trash button asks, as F8 does - it
   deleted on one click; the shell is no longer sent a `cd` on the end of a
