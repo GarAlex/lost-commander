@@ -1254,8 +1254,26 @@ impl GuiApp {
         }
     }
 
+    /// What an operation in this pane acts on.
+    ///
+    /// The panel's own answer - the marked rows, or the one under the
+    /// cursor - except under a tree, where the file half draws files only
+    /// and the answer is held to what it draws. Nothing acts on what the
+    /// reader cannot see: mark-all, invert and a pattern all mark the
+    /// directories the listing still holds, so Ctrl-A and F8 under a tree
+    /// offered every subfolder along with the files, named only if it
+    /// happened to be among the first few the dialog lists.
     fn selection(&self, side: Side) -> Vec<PathBuf> {
-        self.panel(side).action_targets()
+        let panel = self.panel(side);
+        if !panel.in_tree_mode() {
+            return panel.action_targets();
+        }
+        panel
+            .action_entries()
+            .into_iter()
+            .filter(|entry| !entry.is_dir())
+            .map(|entry| entry.path.clone())
+            .collect()
     }
 
     // ---- command line ------------------------------------------------------
@@ -1340,10 +1358,24 @@ impl GuiApp {
         if self.terminals.is_pinned(self.terminals.active) {
             return;
         }
+        // Not while a line is half typed. The `cd` is written to the pty
+        // followed by Enter, so it lands on the end of whatever is there and
+        // runs the lot: `rm -rf ` typed, Tab to the other pane to pick the
+        // name, and the shell was sent `rm -rf cd '/the/other/pane'`. The
+        // shell catches up as soon as the line is run or rubbed out.
+        if !self.pending_input.is_empty() {
+            return;
+        }
         let cwd = self.active_panel().cwd.clone();
         let Some(session) = self.terminals.active_mut() else {
             return;
         };
+        // Nor into a program. With ssh, a pager or a password prompt in
+        // front, the line would be typed at that instead - `run_in_terminal`
+        // has always checked, and this road had not.
+        if session.is_busy() {
+            return;
+        }
         // Where the shell says it is, or failing that where it was started -
         // an unhooked shell never says, and would otherwise be sent a `cd`
         // after every keystroke that moved a pane.
@@ -2038,8 +2070,14 @@ impl GuiApp {
 
         // The worker blocks on a collision until it is answered, so the
         // question has to be lifted onto the screen before anything else.
+        //
+        // Onto an empty screen, though, and not over whatever is on it. The
+        // copy runs in the background and the reader may be in the editor,
+        // halfway through a rename, looking at search results - replacing
+        // that dialog with this one threw it away, typed text and all. The
+        // worker is asleep and loses nothing by waiting for them to finish.
         if let Some(conflict) = job.asking() {
-            if !matches!(self.dialog, Some(Dialog::ConfirmOverwrite { .. })) {
+            if self.dialog.is_none() {
                 self.dialog = Some(Dialog::ConfirmOverwrite { conflict });
             }
             return;
@@ -2779,14 +2817,20 @@ impl GuiApp {
                     self.selection_menu(ui);
                 });
 
+            // Through `run_action`, like the keys they stand for. Called
+            // directly they were three second implementations: none of them
+            // got the archive's refusal or the snap to a visible row, and
+            // the third went straight to deleting - F8 asks, and one click
+            // on this button sent the whole marked set to the trash with no
+            // dialog naming it.
             if tool_button(ui, icons::Tool::Copy, "Copy to the other pane", false).clicked() {
-                self.copy_to_other();
+                self.run_action(keys::Action::Copy);
             }
             if tool_button(ui, icons::Tool::Move, "Move to the other pane", false).clicked() {
-                self.move_to_other();
+                self.run_action(keys::Action::Move);
             }
             if tool_button(ui, icons::Tool::Trash, "Move selection to the trash", false).clicked() {
-                self.delete_selection(true);
+                self.run_action(keys::Action::Delete);
             }
             if tool_button(ui, icons::Tool::Star, "Bookmark this directory", false).clicked() {
                 let location = Location::local(self.active_panel().cwd.clone());
@@ -4116,15 +4160,6 @@ impl GuiApp {
         self.ask_where(describe_targets(&sources), Pending::Move(sources));
     }
 
-    fn delete_selection(&mut self, to_trash: bool) {
-        let targets = self.selection(self.active);
-        if targets.is_empty() {
-            self.error("Nothing selected");
-            return;
-        }
-        self.start(Operation::Delete { targets, to_trash });
-    }
-
     // ---- the command line ----------------------------------------------------
     //
     // The original kept a command line at the bottom of the screen and sent
@@ -5307,6 +5342,8 @@ impl GuiApp {
         // single-key binding in the map.
         let typing = ctx.memory(|m| m.focused()).is_some();
         let mut pending: Vec<keys::Action> = Vec::new();
+        // Which of those came from an arrow key - see where they are used.
+        let mut from_arrows: Vec<usize> = Vec::new();
 
         // Anything printable belongs to the command line. Collected here and
         // acted on below, so the two cannot get out of order.
@@ -5344,6 +5381,9 @@ impl GuiApp {
                                 !typing || action == keys::Action::Cancel
                             };
                             if allowed {
+                                if matches!(key, egui::Key::ArrowLeft | egui::Key::ArrowRight) {
+                                    from_arrows.push(pending.len());
+                                }
                                 pending.push(action);
                             }
                         }
@@ -5376,11 +5416,28 @@ impl GuiApp {
         // Tab in any of its forms is ours, so its traversal has to be undone.
         self.drop_focus = pending.iter().copied().any(keys::traverses_focus);
 
-        for action in pending {
+        for (index, action) in pending.into_iter().enumerate() {
             if self.dialog.is_some() {
                 // A dialog swallows the rest: Escape closes it, and its own
                 // buttons do the confirming.
-                if action == keys::Action::Cancel {
+                //
+                // Four of them answer their own Escape, and must be left to:
+                // closing them from here ran before they were drawn, so
+                // what each meant to do about the key never happened. The
+                // editors threw away whatever had been typed; the colours
+                // kept the scheme being tried on instead of putting the old
+                // one back; and the overwrite question simply came back on
+                // the next frame, the copy behind it still waiting, so
+                // Escape looked like a key that did nothing.
+                if action == keys::Action::Cancel
+                    && !matches!(
+                        self.dialog,
+                        Some(Dialog::Text(_))
+                            | Some(Dialog::Bytes(_))
+                            | Some(Dialog::Theme { .. })
+                            | Some(Dialog::ConfirmOverwrite { .. })
+                    )
+                {
                     self.close_dialog();
                 }
                 continue;
@@ -5388,7 +5445,17 @@ impl GuiApp {
             // The keys that mean one thing to the panes and another to the
             // command line, told apart the way the original told them apart:
             // by whether the line has anything on it.
-            if keys::defers_to_command_line(action) && !self.command_line_empty() {
+            //
+            // By the key, though, not only by the action. Right shares
+            // "open" with Enter and Left shares "parent" with Backspace, and
+            // sharing the deferral as well meant Right *ran* a half-typed
+            // command and Left rubbed out its last character - `git push
+            // --force` and a stray arrow was all it took. An arrow is a
+            // pane's key whatever is on the line.
+            if keys::defers_to_command_line(action)
+                && !from_arrows.contains(&index)
+                && !self.command_line_empty()
+            {
                 match action {
                     keys::Action::Open => self.command_line_run(),
                     keys::Action::Parent => self.command_line_backspace(),
@@ -10490,6 +10557,53 @@ mod tests {
         // ignoring that would make the divider jump on the first drag.
         let shifted = Rect::from_min_size(egui::pos2(210.0, 0.0), Vec2::new(800.0, 600.0));
         assert!((split_from_pointer(shifted, 610.0) - 0.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn under_a_tree_an_operation_takes_files_only() {
+        // Mark-all marks what the panel holds, and under a tree the panel
+        // still holds the directories the file half does not draw.
+        let (_dir, mut app) = fixture();
+        app.left.current_mut().enter_tree_mode();
+        app.left.current_mut().mark_all();
+        let held = app.left.current().action_targets();
+        assert!(
+            held.iter().any(|path| path.is_dir()),
+            "the fixture should have a directory to leave out"
+        );
+        let acted_on = app.selection(Side::Left);
+        assert!(!acted_on.is_empty());
+        assert!(acted_on.iter().all(|path| !path.is_dir()), "{acted_on:?}");
+    }
+
+    #[test]
+    fn the_toolbars_trash_asks_like_the_key_it_stands_for() {
+        // What the button runs. It used to call the delete directly, and
+        // one click sent the marked set to the trash with nothing asked.
+        let (_dir, mut app) = fixture();
+        let file = index_of(&app, Side::Left, "a.txt");
+        app.left.current_mut().cursor_to(file);
+        app.run_action(keys::Action::Delete);
+        assert!(matches!(
+            app.dialog,
+            Some(Dialog::ConfirmDelete { to_trash: true, .. })
+        ));
+        assert!(app.job.is_none(), "nothing may start before the answer");
+    }
+
+    #[test]
+    fn the_shell_is_not_sent_after_the_pane_into_a_half_typed_line() {
+        // The `cd` is written with an Enter on the end, so on a line that
+        // already holds `rm -rf ` it runs the lot. With anything pending,
+        // following waits - and with nothing pending there is no shell in
+        // this fixture to follow with, so not panicking is the whole test
+        // of the other branch.
+        let (_dir, mut app) = fixture();
+        app.pending_input = "rm -rf ".into();
+        app.shell_follows_the_pane();
+        assert_eq!(app.pending_input, "rm -rf ");
+        app.pending_input.clear();
+        app.shell_follows_the_pane();
     }
 
     #[test]

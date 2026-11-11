@@ -51,6 +51,8 @@ pub struct Session {
     goto: String,
     /// Set for one frame to put the keyboard in the offset box.
     focus_goto: bool,
+    /// Closing was asked for with bytes changed and not written.
+    confirming_close: bool,
 }
 
 impl Session {
@@ -63,6 +65,7 @@ impl Session {
             follow: true,
             goto: String::new(),
             focus_goto: false,
+            confirming_close: false,
         }
     }
 
@@ -147,6 +150,13 @@ pub fn draw(ctx: &egui::Context, session: &mut Session) -> Outcome {
                     .color(theme::text_faint()),
             );
             goto_box(ui, session);
+            if session.confirming_close && !session.edits.is_empty() {
+                ui.label(
+                    RichText::new("not written - Escape or Close again throws it away")
+                        .size(11.0)
+                        .color(theme::danger()),
+                );
+            }
         });
         ui.add_space(6.0);
         grid(ui, session);
@@ -155,6 +165,11 @@ pub fn draw(ctx: &egui::Context, session: &mut Session) -> Outcome {
     });
 
     if escaped || closed {
+        // The same two-step as the text editor, for the same reason.
+        if !session.edits.is_empty() && !session.confirming_close {
+            session.confirming_close = true;
+            return Outcome::Nothing;
+        }
         return Outcome::Close;
     }
     outcome
@@ -166,8 +181,16 @@ fn keys(ctx: &egui::Context, session: &mut Session, closed: &mut bool) {
     let size = session.dump.size;
     let per_row = hex::PER_ROW as i64;
     let events = ctx.input(|input| input.events.clone());
+    // The offset box has the keyboard. Its digits are an address, and they
+    // used to be typed into the file as well: `1f400` and Enter moved the
+    // cursor and left two and a half changed bytes behind at the old place,
+    // waiting for the next Write.
+    let in_a_box = ctx.memory(|m| m.focused()).is_some();
 
     for event in events {
+        if in_a_box {
+            continue;
+        }
         match event {
             egui::Event::Key {
                 key,
@@ -228,6 +251,8 @@ fn keys(ctx: &egui::Context, session: &mut Session, closed: &mut bool) {
                 for character in text.chars() {
                     session.type_into(character);
                 }
+                // More work since the question, so it is asked again.
+                session.confirming_close = false;
             }
             _ => {}
         }

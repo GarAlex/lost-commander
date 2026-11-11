@@ -233,6 +233,67 @@ struct ProgressDto {
     finished: bool,
     cancelled: bool,
     failures: Vec<String>,
+    /// The collision the worker is asleep on, when it is asleep on one.
+    /// Present only for a job started with `"conflicts":"ask"`; the answer
+    /// goes to [`rcmd_job_answer`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    asking: Option<AskingDto>,
+}
+
+/// A file already where one is about to be written: both sides, with the
+/// two facts the answer usually turns on.
+#[derive(Serialize)]
+struct AskingDto {
+    source: String,
+    target: String,
+    source_size: u64,
+    target_size: u64,
+    /// Seconds since the epoch, where the filesystem would say.
+    source_modified: Option<i64>,
+    target_modified: Option<i64>,
+    /// Whether the file arriving is the newer one - the engine's reading,
+    /// tolerance and all, so no front-end compares the stamps itself.
+    source_is_newer: Option<bool>,
+}
+
+impl AskingDto {
+    fn from(conflict: &lost_commander_core::progress::Conflict) -> AskingDto {
+        fn seconds(at: Option<std::time::SystemTime>) -> Option<i64> {
+            let since = at?.duration_since(std::time::UNIX_EPOCH).ok()?;
+            Some(since.as_secs() as i64)
+        }
+        AskingDto {
+            source: conflict.source.display().to_string(),
+            target: conflict.target.display().to_string(),
+            source_size: conflict.source_size,
+            target_size: conflict.target_size,
+            source_modified: seconds(conflict.source_modified),
+            target_modified: seconds(conflict.target_modified),
+            source_is_newer: conflict.source_is_newer(),
+        }
+    }
+}
+
+/// What a job does when a file is already where it is about to write one.
+///
+/// Said by the front-end when it starts the job, because only it knows
+/// whether anybody is there to be asked. Unsaid means nobody is, and the
+/// answer is then the one that destroys nothing: skip, and count it.
+///
+/// It was not always sayable. The worker posted its question and slept, the
+/// two Rust front-ends answered it, and this boundary carried neither the
+/// question nor an answer - so on the native front-ends a copy onto a file
+/// that already existed sat at nothing until somebody pressed Stop.
+fn standing_answer(conflicts: Option<&str>) -> Option<lost_commander_core::progress::Answer> {
+    use lost_commander_core::progress::Answer;
+    match conflicts {
+        // Somebody is there: post the question, wait for rcmd_job_answer.
+        Some("ask") => None,
+        Some("overwrite") => Some(Answer::OverwriteAll),
+        Some("newer") => Some(Answer::OnlyNewer),
+        // "skip", nothing at all, and anything misspelt.
+        _ => Some(Answer::SkipAll),
+    }
 }
 
 /// A running job. The front-end only ever holds the pointer.
@@ -253,10 +314,15 @@ enum Requested {
     Copy {
         sources: Vec<String>,
         destination: String,
+        /// "ask", "overwrite", "newer" or "skip" - see [`standing_answer`].
+        #[serde(default)]
+        conflicts: Option<String>,
     },
     Move {
         sources: Vec<String>,
         destination: String,
+        #[serde(default)]
+        conflicts: Option<String>,
     },
     /// Copying out of an archive. A copy whose source happens to be inside a
     /// file, which is why it is a variant here and not a second job API.
@@ -272,6 +338,8 @@ enum Requested {
         destination: String,
         /// For this run only. Never journaled, never written down.
         password: Option<String>,
+        #[serde(default)]
+        conflicts: Option<String>,
     },
     Delete {
         targets: Vec<String>,
@@ -288,6 +356,17 @@ impl Requested {
     /// An empty list is refused rather than started. A job over no files
     /// finishes instantly and reports success, which reads as "it worked" when
     /// what happened is that nothing was selected.
+    /// How this request wants a collision answered: a standing answer, or
+    /// `None` for "ask me". A delete collides with nothing.
+    fn standing(&self) -> Option<lost_commander_core::progress::Answer> {
+        match self {
+            Requested::Copy { conflicts, .. }
+            | Requested::Move { conflicts, .. }
+            | Requested::Extract { conflicts, .. } => standing_answer(conflicts.as_deref()),
+            Requested::Delete { .. } => standing_answer(None),
+        }
+    }
+
     fn into_operation(self) -> Option<Operation> {
         fn paths(from: Vec<String>) -> Option<Vec<PathBuf>> {
             if from.is_empty() {
@@ -300,6 +379,7 @@ impl Requested {
             Requested::Copy {
                 sources,
                 destination,
+                ..
             } => Some(Operation::Copy {
                 sources: paths(sources)?,
                 destination: PathBuf::from(destination),
@@ -307,6 +387,7 @@ impl Requested {
             Requested::Move {
                 sources,
                 destination,
+                ..
             } => Some(Operation::Move {
                 sources: paths(sources)?,
                 destination: PathBuf::from(destination),
@@ -317,6 +398,7 @@ impl Requested {
                 from,
                 destination,
                 password,
+                ..
             } => Some(Operation::Extract {
                 archive: PathBuf::from(archive),
                 members: {
@@ -530,6 +612,13 @@ pub unsafe extern "C" fn rcmd_list(
 /// the same with `"move"`, or
 /// `{"kind":"delete","targets":[...],"to_trash":true}`.
 ///
+/// A copy, a move and an extract may also say `"conflicts"`: what to do when
+/// a file is already where one is about to be written. `"ask"` posts the
+/// question in the progress reply and waits for [`rcmd_job_answer`];
+/// `"overwrite"` and `"newer"` decide without asking; `"skip"`, which is also
+/// what saying nothing means, leaves the file there alone and counts it in
+/// `items_skipped`.
+///
 /// Returns null if the request cannot be read or names nothing to work on, in
 /// which case nothing was started.
 ///
@@ -541,17 +630,22 @@ pub unsafe extern "C" fn rcmd_job_start(request: *const c_char) -> *mut RcmdJob 
     let started = catch_unwind(AssertUnwindSafe(|| {
         let request = borrowed(request).ok()?;
         let requested: Requested = serde_json::from_str(&request).ok()?;
+        let standing = requested.standing();
         let operation = requested.into_operation()?;
         // Recorded, not merely run. The engine keeps an account of what was
         // done - what moved where, what failed, how long a run took - and a
         // front-end that used `Job::spawn` would do the work and write none of
         // it down, leaving the journal empty and saying nothing had happened.
         // Which is what it did, until a viewer was built and showed it.
-        Some(match account() {
-            Some(book) => Job::spawn_recorded(operation, book),
-            // Nowhere to write one: the work still goes ahead. An account is
-            // worth keeping, and not worth refusing to copy a file over.
-            None => Job::spawn(operation),
+        //
+        // Nowhere to write one, and the work still goes ahead: an account is
+        // worth keeping, and not worth refusing to copy a file over.
+        Some(match standing {
+            Some(answer) => Job::spawn_unattended(operation, account(), answer),
+            None => match account() {
+                Some(book) => Job::spawn_recorded(operation, book),
+                None => Job::spawn(operation),
+            },
         })
     }));
 
@@ -3886,7 +3980,47 @@ pub unsafe extern "C" fn rcmd_job_progress(job: *mut RcmdJob) -> *mut c_char {
             finished: snapshot.finished,
             cancelled: snapshot.cancelled,
             failures: snapshot.failures.clone(),
+            asking: job.job.asking().as_ref().map(AskingDto::from),
         })
+    })
+}
+
+/// Answer the collision a job is waiting on.
+///
+/// `answer` is one of `"overwrite"`, `"overwrite_all"`, `"skip"`,
+/// `"skip_all"`, `"only_newer"` or `"cancel"`. The ones that say "all", the
+/// rule, and cancel stand for the rest of the run; the other two answer the
+/// file in front of them and the next collision asks again.
+///
+/// Returns `{}` or `{"error":"..."}`. An answer that is not one of those is
+/// an error and answers nothing - the worker goes on waiting, which is the
+/// right thing to do about a typo and the wrong thing to do silently.
+///
+/// # Safety
+/// `job` must be a live handle from [`rcmd_job_start`]; `answer` must be a
+/// valid NUL-terminated UTF-8 string.
+#[no_mangle]
+pub unsafe extern "C" fn rcmd_job_answer(job: *mut RcmdJob, answer: *const c_char) -> *mut c_char {
+    guarded(|| {
+        use lost_commander_core::progress::Answer;
+        let Some(job) = job.as_ref() else {
+            return failed("no job");
+        };
+        let said = match borrowed(answer) {
+            Ok(said) => said,
+            Err(e) => return failed(e),
+        };
+        let answer = match said.as_str() {
+            "overwrite" => Answer::Overwrite,
+            "overwrite_all" => Answer::OverwriteAll,
+            "skip" => Answer::Skip,
+            "skip_all" => Answer::SkipAll,
+            "only_newer" => Answer::OnlyNewer,
+            "cancel" => Answer::Cancel,
+            other => return failed(format!("not an answer: {other}")),
+        };
+        job.job.answer(answer);
+        replied(&serde_json::json!({}))
     })
 }
 
@@ -6020,6 +6154,127 @@ mod tests {
         unsafe { rcmd_job_free(job) };
         assert!(to.join("a.txt").exists());
         assert!(to.join("b.txt").exists());
+    }
+
+
+    /// Two directories, with `a.txt` in both: "arriving" on its way to
+    /// "already there".
+    fn a_collision() -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let (from, to) = (dir.path().join("from"), dir.path().join("to"));
+        std::fs::create_dir_all(&from).unwrap();
+        std::fs::create_dir_all(&to).unwrap();
+        std::fs::write(from.join("a.txt"), "arriving").unwrap();
+        std::fs::write(to.join("a.txt"), "already there").unwrap();
+        (dir, from, to)
+    }
+
+    fn copy_request(from: &Path, to: &Path, conflicts: Option<&str>) -> String {
+        let mut request = serde_json::json!({
+            "kind": "copy",
+            "sources": [from.join("a.txt").display().to_string()],
+            "destination": to.display().to_string(),
+        });
+        if let Some(conflicts) = conflicts {
+            request["conflicts"] = conflicts.into();
+        }
+        request.to_string()
+    }
+
+    #[test]
+    fn a_copy_onto_a_file_finishes_when_nobody_can_be_asked() {
+        // What it did instead, for as long as this boundary carried neither
+        // the question nor an answer: sat at nothing until it was stopped.
+        // Saying nothing now means the safe answer - the file there stays,
+        // and is counted.
+        let (_dir, from, to) = a_collision();
+        let ended = run_to_end(&copy_request(&from, &to, None));
+        assert_eq!(ended["items_skipped"], 1, "{ended:?}");
+        assert_eq!(ended["failures"].as_array().map(|f| f.len()), Some(0));
+        assert!(ended.get("asking").is_none(), "{ended:?}");
+        assert_eq!(std::fs::read_to_string(to.join("a.txt")).unwrap(), "already there");
+    }
+
+    #[test]
+    fn a_copy_told_to_overwrite_does_without_asking() {
+        let (_dir, from, to) = a_collision();
+        let ended = run_to_end(&copy_request(&from, &to, Some("overwrite")));
+        assert_eq!(ended["items_skipped"], 0, "{ended:?}");
+        assert_eq!(std::fs::read_to_string(to.join("a.txt")).unwrap(), "arriving");
+    }
+
+    #[test]
+    fn only_the_newer_file_wins_under_that_rule() {
+        // The file arriving is the older of the two, so the rule keeps the
+        // one there - and then the other way round.
+        let (_dir, from, to) = a_collision();
+        let old = std::time::SystemTime::now() - Duration::from_secs(3600);
+        let arriving = std::fs::File::options().write(true).open(from.join("a.txt")).unwrap();
+        arriving.set_modified(old).unwrap();
+        let ended = run_to_end(&copy_request(&from, &to, Some("newer")));
+        assert_eq!(ended["items_skipped"], 1, "{ended:?}");
+        assert_eq!(std::fs::read_to_string(to.join("a.txt")).unwrap(), "already there");
+
+        let there = std::fs::File::options().write(true).open(to.join("a.txt")).unwrap();
+        there.set_modified(old - Duration::from_secs(3600)).unwrap();
+        let ended = run_to_end(&copy_request(&from, &to, Some("newer")));
+        assert_eq!(ended["items_skipped"], 0, "{ended:?}");
+        assert_eq!(std::fs::read_to_string(to.join("a.txt")).unwrap(), "arriving");
+    }
+
+    #[test]
+    fn a_question_crosses_the_boundary_and_so_does_its_answer() {
+        let (_dir, from, to) = a_collision();
+        journal_somewhere_harmless();
+        let request = c(&copy_request(&from, &to, Some("ask")));
+        let job = unsafe { rcmd_job_start(request.as_ptr()) };
+        assert!(!job.is_null());
+
+        // The question arrives in the progress reply, both sides described.
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let mut last = Value::Null;
+        while Instant::now() < deadline {
+            last = reply_of(unsafe { rcmd_job_progress(job) });
+            if last.get("asking").is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let asking = &last["asking"];
+        assert!(asking.is_object(), "it never asked: {last:?}");
+        assert_eq!(last["finished"], false);
+        assert_eq!(asking["source"], from.join("a.txt").display().to_string());
+        assert_eq!(asking["target"], to.join("a.txt").display().to_string());
+        assert_eq!(asking["source_size"], 8);
+        assert_eq!(asking["target_size"], 13);
+        assert!(asking["target_modified"].is_i64(), "{asking:?}");
+
+        // A word that is not an answer is refused, and answers nothing.
+        let nonsense = c("perhaps");
+        let refused = reply_of(unsafe { rcmd_job_answer(job, nonsense.as_ptr()) });
+        assert!(refused["error"].is_string(), "{refused:?}");
+        assert!(reply_of(unsafe { rcmd_job_progress(job) }).get("asking").is_some());
+
+        // A real one is taken, and the question is gone by the next poll.
+        let overwrite = c("overwrite");
+        let taken = reply_of(unsafe { rcmd_job_answer(job, overwrite.as_ptr()) });
+        assert!(taken.get("error").is_none(), "{taken:?}");
+        assert!(reply_of(unsafe { rcmd_job_progress(job) }).get("asking").is_none());
+
+        while Instant::now() < deadline {
+            last = reply_of(unsafe { rcmd_job_progress(job) });
+            if last["finished"] == true {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        unsafe { rcmd_job_free(job) };
+        assert_eq!(last["finished"], true, "{last:?}");
+        assert_eq!(std::fs::read_to_string(to.join("a.txt")).unwrap(), "arriving");
+
+        // And with no job at all, an answer is an error rather than a crash.
+        let nobody = reply_of(unsafe { rcmd_job_answer(std::ptr::null_mut(), overwrite.as_ptr()) });
+        assert!(nobody["error"].is_string());
     }
 
     /// Point the account at a temporary directory, once for the whole binary.

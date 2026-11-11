@@ -44,6 +44,9 @@ pub struct Session {
     confirming_reread: Option<Encoding>,
     /// What the last save could not represent, said until something changes.
     pub lost: Vec<char>,
+    /// Closing was asked for with work unsaved. Asked about once; asking
+    /// again is the answer.
+    confirming_close: bool,
 }
 
 impl Session {
@@ -54,6 +57,7 @@ impl Session {
             confirming: false,
             confirming_reread: None,
             lost: Vec::new(),
+            confirming_close: false,
         }
     }
 }
@@ -81,6 +85,13 @@ pub fn draw(ctx: &egui::Context, session: &mut Session) -> Outcome {
                         .italics(),
                 );
             }
+            if edited && session.confirming_close {
+                ui.label(
+                    RichText::new("not saved - Escape or Close again throws it away")
+                        .size(11.0)
+                        .color(theme::danger()),
+                );
+            }
         });
 
         ui.add_space(6.0);
@@ -92,7 +103,17 @@ pub fn draw(ctx: &egui::Context, session: &mut Session) -> Outcome {
     });
 
     if escaped || closed {
+        // With nothing typed, at once. With something typed, the first ask
+        // only says so: Escape is the key for leaving everything here, and
+        // it used to leave with an afternoon's edits and no question.
+        if edited && !session.confirming_close {
+            session.confirming_close = true;
+            return Outcome::Nothing;
+        }
         return Outcome::Close;
+    }
+    if !matches!(outcome, Outcome::Nothing) {
+        session.confirming_close = false;
     }
     outcome
 }

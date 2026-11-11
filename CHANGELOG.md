@@ -7,6 +7,33 @@ Notable changes, newest first. Versions follow [semantic versioning]; until
 
 ## Unreleased
 
+### Fixed
+
+- **A copy onto a file that is already there no longer waits for ever on the
+  native front-ends.** The worker stops at a collision and asks; the two Rust
+  front-ends answered, and the C ABI carried neither the question nor an
+  answer - so through it a copy or move onto an existing name sat at nothing
+  until it was stopped. A job request may now say `"conflicts"`: `"ask"`
+  (the question arrives in the progress reply as `asking`, and
+  `rcmd_job_answer` takes the answer), `"overwrite"`, `"newer"`, or `"skip"`.
+  Saying nothing means skip - the answer that destroys nothing - and the
+  skipped are counted.
+
+- **The cursor stays where it was when its file goes.** A reload whose
+  cursor row had vanished - after a delete, a move, a rename - sent the
+  cursor to the top of the listing; it now rests on the row that took the
+  place.
+
+- **Graphical front-end:** the toolbar's Trash button asks, as F8 does - it
+  deleted on one click; the shell is no longer sent a `cd` on the end of a
+  half-typed line or into a running program; Left and Right no longer run or
+  rub out what is typed at the prompt; Escape in the text and hex editors
+  asks before throwing away unsaved work, and a background copy's overwrite
+  question no longer replaces an open editor; Escape on the overwrite
+  question stops the copy instead of doing nothing; digits typed into the
+  hex editor's offset box are no longer also typed into the file; and under
+  a tree an operation takes only the files the pane draws.
+
 ## 0.1.2 — 2026-08-18
 
 ### Added

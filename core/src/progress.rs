@@ -1146,6 +1146,10 @@ struct SharedSink {
     progress: Arc<Mutex<Progress>>,
     cancel: Arc<AtomicBool>,
     pending: Arc<(Mutex<Pending>, Condvar)>,
+    /// The answer to every collision, decided before the run began - for a
+    /// caller with nobody to ask. `None` means there is somebody: post the
+    /// question and wait.
+    unattended: Option<Answer>,
     /// Where the account of this run goes, if one is being kept.
     journal: Option<journal::Journal>,
     /// The run these events belong to, so a copy of four hundred files is one
@@ -1197,6 +1201,13 @@ impl Sink for SharedSink {
     /// a question on screen leaves a worker that notices the cancel flag
     /// rather than one parked forever on a condvar nobody will signal.
     fn conflict(&mut self, conflict: &Conflict) -> Answer {
+        // Answered before it was asked. A question posted to a caller that
+        // cannot see it is a worker asleep for good, which is what a copy
+        // onto an existing file was through the C ABI: the bar sat at
+        // nothing and the only thing left to press was Stop.
+        if let Some(answer) = self.unattended {
+            return answer;
+        }
         let (lock_, signal) = &*self.pending;
         {
             let mut guard = lock(lock_);
@@ -1242,6 +1253,27 @@ impl Job {
         Self::spawn_with_cancel(operation, Arc::new(AtomicBool::new(false)), Some(journal))
     }
 
+    /// Start with every collision answered in advance.
+    ///
+    /// For a caller that cannot be asked - or one that has already asked,
+    /// like a synchronise whose dialog showed every pair before anything
+    /// ran. The answer should be one that stands ([`Answer::SkipAll`],
+    /// [`Answer::OverwriteAll`], [`Answer::OnlyNewer`]); it is given to each
+    /// collision as it arrives, so one that does not stand is simply given
+    /// again.
+    pub fn spawn_unattended(
+        operation: Operation,
+        journal: Option<journal::Journal>,
+        answer: Answer,
+    ) -> Job {
+        Self::spawn_inner(
+            operation,
+            Arc::new(AtomicBool::new(false)),
+            journal,
+            Some(answer),
+        )
+    }
+
     /// Start with a caller-owned cancel flag.
     ///
     /// Handing the flag in lets a test set it *before* the worker starts, so
@@ -1251,6 +1283,15 @@ impl Job {
         operation: Operation,
         cancel: Arc<AtomicBool>,
         journal: Option<journal::Journal>,
+    ) -> Job {
+        Self::spawn_inner(operation, cancel, journal, None)
+    }
+
+    fn spawn_inner(
+        operation: Operation,
+        cancel: Arc<AtomicBool>,
+        journal: Option<journal::Journal>,
+        unattended: Option<Answer>,
     ) -> Job {
         let progress = Arc::new(Mutex::new(Progress::new(operation.verb())));
 
@@ -1285,6 +1326,7 @@ impl Job {
                 progress: Arc::clone(&worker_progress),
                 cancel: Arc::clone(&worker_cancel),
                 pending: Arc::clone(&worker_pending),
+                unattended,
                 journal: journal.clone(),
                 group,
                 recorded: 0,
@@ -2460,6 +2502,40 @@ mod tests {
             job.asking().is_none(),
             "answered, and still on the record for the next poll to find"
         );
+    }
+
+    #[test]
+    fn an_unattended_job_never_waits_on_a_question() {
+        // Through the C ABI nobody could answer, so a copy onto a file that
+        // was already there slept until it was stopped. Answered in advance,
+        // it finishes - and with the safe answer the file there is kept.
+        let dir = tempfile::tempdir().unwrap();
+        let (from, to) = (dir.path().join("from"), dir.path().join("to"));
+        std::fs::create_dir_all(&from).unwrap();
+        std::fs::create_dir_all(&to).unwrap();
+        std::fs::write(from.join("a.txt"), "arriving").unwrap();
+        std::fs::write(from.join("b.txt"), "new here").unwrap();
+        std::fs::write(to.join("a.txt"), "already there").unwrap();
+
+        let operation = Operation::Copy {
+            sources: vec![from.join("a.txt"), from.join("b.txt")],
+            destination: to.clone(),
+        };
+        let mut job = Job::spawn_unattended(operation.clone(), None, Answer::SkipAll);
+        job.join();
+        let ended = job.snapshot();
+        assert!(ended.finished);
+        assert!(job.asking().is_none(), "it asked anyway");
+        assert_eq!(ended.items_skipped, 1);
+        assert!(ended.failures.is_empty(), "{:?}", ended.failures);
+        assert_eq!(std::fs::read_to_string(to.join("a.txt")).unwrap(), "already there");
+        assert_eq!(std::fs::read_to_string(to.join("b.txt")).unwrap(), "new here");
+
+        // And told to overwrite, it does.
+        let mut job = Job::spawn_unattended(operation, None, Answer::OverwriteAll);
+        job.join();
+        assert!(job.snapshot().finished);
+        assert_eq!(std::fs::read_to_string(to.join("a.txt")).unwrap(), "arriving");
     }
 
     #[test]

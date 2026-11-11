@@ -540,6 +540,7 @@ impl Panel {
             return;
         }
         let previous = self.selected().map(|e| e.name.clone());
+        let was = self.cursor;
         let mut marked: Vec<String> = self
             .entries
             .iter()
@@ -583,9 +584,17 @@ impl Panel {
             self.restore_marks();
         }
 
+        // On the same file where it is still here - and where it is not,
+        // on the row that has taken its place rather than at the top. The
+        // file under the cursor being gone is what a delete, a move and a
+        // rename all look like from here, and sending the cursor to `..`
+        // each time meant deleting the three-hundredth of five hundred
+        // files and walking back down to find where you had been.
+        // (Arriving somewhere new is not this: `chdir` zeroes the cursor
+        // before it reads.)
         self.cursor = previous
             .and_then(|name| self.entries.iter().position(|e| e.name == name))
-            .unwrap_or(0);
+            .unwrap_or(was);
         self.clamp_cursor();
         // Taken after the read, so a change that lands during it is noticed on
         // the next look rather than being recorded as already seen.
@@ -1280,6 +1289,33 @@ mod tests {
         assert!(panel.enter());
         assert_eq!(panel.cwd, dir.path());
         assert_eq!(panel.selected().unwrap().name, "zeta_dir");
+    }
+
+    #[test]
+    fn the_cursor_stays_put_when_its_file_goes() {
+        let dir = fixture();
+        let mut panel = Panel::new(dir.path().to_path_buf());
+        // On a file with another row below it.
+        let at = panel
+            .entries
+            .iter()
+            .position(|e| !e.is_dir() && !e.is_parent())
+            .unwrap();
+        assert!(at > 0 && at + 1 < panel.entries.len(), "the fixture is too small for this");
+        panel.cursor_to(at);
+        let gone = panel.selected().unwrap().path.clone();
+        let next = panel.entries[at + 1].name.clone();
+
+        std::fs::remove_file(&gone).unwrap();
+        panel.reload();
+
+        // The row that slid up into its place, not the top of the list.
+        assert_eq!(panel.cursor, at);
+        assert_eq!(panel.selected().unwrap().name, next);
+
+        // And walking somewhere new still starts at the top.
+        panel.chdir(dir.path().join("zeta_dir"));
+        assert_eq!(panel.cursor, 0);
     }
 
     #[test]
