@@ -7,6 +7,8 @@ Notable changes, newest first. Versions follow [semantic versioning]; until
 
 ## Unreleased
 
+## 0.1.4 — 2026-11-11
+
 ### Added
 
 - **Focus mode, in the graphical front-end.** `Ctrl-Shift-F`, the button at
